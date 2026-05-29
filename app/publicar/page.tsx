@@ -1,0 +1,339 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import { supabase } from "../lib/supabase";
+import { useProtegerRuta } from "../hooks/useProtegerRuta";
+
+const vehiculos = [
+  { nombre: "Flete chico", litrosKm: 0.8, minimo: 25000 },
+  { nombre: "Camión mediano furgón", litrosKm: 1.5, minimo: 85000 },
+  { nombre: "Camión grande / semi", litrosKm: 3, minimo: 500000 },
+];
+
+const tiposCarga = [
+  { nombre: "Carga común", extraLitros: 0 },
+  { nombre: "Carga frágil", extraLitros: 0.5 },
+  { nombre: "Carga cara", extraLitros: 0.5 },
+  { nombre: "Carga peligrosa", extraLitros: 1 },
+  { nombre: "Carga refrigerada", extraLitros: 1 },
+];
+
+const calcularKmAutomatico = (origen: string, destino: string) => {
+  const o = origen.toLowerCase();
+  const d = destino.toLowerCase();
+
+  if (o.includes("rosario") && d.includes("cordoba")) return 400;
+  if (o.includes("cordoba") && d.includes("rosario")) return 400;
+  if (o.includes("buenos aires") && d.includes("santa fe")) return 475;
+  if (o.includes("santa fe") && d.includes("buenos aires")) return 475;
+  if (o.includes("pilar") && d.includes("corrientes")) return 900;
+  if (o.includes("corrientes") && d.includes("pilar")) return 900;
+  if (o.includes("san isidro") && d.includes("mar azul")) return 420;
+  if (o.includes("mar azul") && d.includes("san isidro")) return 420;
+
+  return 0;
+};
+
+export default function PublicarPage() {
+  const { autorizado } = useProtegerRuta("cliente");
+
+  const router = useRouter();
+
+  const [origen, setOrigen] = useState("");
+  const [destino, setDestino] = useState("");
+  const [vehiculo, setVehiculo] = useState("");
+  const [peso, setPeso] = useState("");
+  const [tipoCarga, setTipoCarga] = useState("");
+  const [presentacion, setPresentacion] = useState("");
+  const [km, setKm] = useState("");
+
+  const [precioBase, setPrecioBase] = useState(0);
+  const [precioCliente, setPrecioCliente] = useState(0);
+  const [pagoChofer, setPagoChofer] = useState(0);
+  const [comisionPlataforma, setComisionPlataforma] = useState(0);
+  const [publicando, setPublicando] = useState(false);
+
+  const precioCombustible = 2500;
+
+  const calcularValores = (
+    kilometros: number,
+    litrosPorKm: number,
+    minimo: number
+  ) => {
+    const baseCalculada = kilometros * litrosPorKm * precioCombustible;
+    const base = Math.max(Math.round(baseCalculada), minimo);
+
+    const cliente = Math.round(base * 1.075);
+    const chofer = Math.round(base * 0.925);
+    const comision = Math.round(cliente - chofer);
+
+    return { base, cliente, chofer, comision };
+  };
+
+  useEffect(() => {
+    const calcularDistancia = async () => {
+      if (!origen || !destino) return;
+
+      try {
+        const response = await fetch(
+          `/api/distancia?origen=${encodeURIComponent(
+            origen
+          )}&destino=${encodeURIComponent(destino)}`
+        );
+
+        const data = await response.json();
+
+        if (data.km) {
+          setKm(String(data.km));
+          return;
+        }
+
+        setKm(String(calcularKmAutomatico(origen, destino)));
+      } catch (error) {
+        console.log(error);
+        setKm(String(calcularKmAutomatico(origen, destino)));
+      }
+    };
+
+    calcularDistancia();
+  }, [origen, destino]);
+
+  useEffect(() => {
+    calcularTarifa();
+  }, [vehiculo, tipoCarga, km]);
+
+  const calcularTarifa = () => {
+    if (!vehiculo || !tipoCarga || !km) {
+      setPrecioBase(0);
+      setPrecioCliente(0);
+      setPagoChofer(0);
+      setComisionPlataforma(0);
+      return;
+    }
+
+    const kilometros = Number(km);
+
+    if (!kilometros || kilometros <= 0) {
+      setPrecioBase(0);
+      setPrecioCliente(0);
+      setPagoChofer(0);
+      setComisionPlataforma(0);
+      return;
+    }
+
+    const vehiculoSeleccionado = vehiculos.find((v) => v.nombre === vehiculo);
+    const cargaSeleccionada = tiposCarga.find((c) => c.nombre === tipoCarga);
+
+    if (!vehiculoSeleccionado || !cargaSeleccionada) return;
+
+    const litrosPorKm =
+      vehiculoSeleccionado.litrosKm + cargaSeleccionada.extraLitros;
+
+    const valores = calcularValores(
+      kilometros,
+      litrosPorKm,
+      vehiculoSeleccionado.minimo
+    );
+
+    setPrecioBase(valores.base);
+    setPrecioCliente(valores.cliente);
+    setPagoChofer(valores.chofer);
+    setComisionPlataforma(valores.comision);
+  };
+
+  const publicarCarga = async () => {
+    if (publicando) return;
+
+    if (!origen || !destino || !vehiculo || !peso || !tipoCarga) {
+      alert("Completá todos los campos");
+      return;
+    }
+
+    const usuarioGuardado = localStorage.getItem("usuario");
+
+    if (!usuarioGuardado) {
+      alert("Sesión no encontrada. Volvé a iniciar sesión.");
+      router.push("/login");
+      return;
+    }
+
+    const usuario = JSON.parse(usuarioGuardado);
+
+    const vehiculoSeleccionado = vehiculos.find((v) => v.nombre === vehiculo);
+    const cargaSeleccionada = tiposCarga.find((c) => c.nombre === tipoCarga);
+
+    if (!vehiculoSeleccionado || !cargaSeleccionada) {
+      alert("Seleccioná vehículo y tipo de carga válidos");
+      return;
+    }
+
+    const litrosPorKm =
+      vehiculoSeleccionado.litrosKm + cargaSeleccionada.extraLitros;
+
+    const kilometros = Number(km || calcularKmAutomatico(origen, destino));
+
+    if (!kilometros || kilometros <= 0) {
+      alert("No se pudo calcular la distancia del viaje");
+      return;
+    }
+
+    setPublicando(true);
+
+    const valoresFinales = calcularValores(
+      kilometros,
+      litrosPorKm,
+      vehiculoSeleccionado.minimo
+    );
+
+    const { data, error } = await supabase
+      .from("cargas")
+      .insert([
+        {
+          cliente_id: usuario.id,
+          origen,
+          destino,
+          vehiculo,
+          peso,
+          tipo_carga: tipoCarga,
+          detalles: presentacion,
+          km_estimados: kilometros,
+          litros_por_km: litrosPorKm,
+          precio_base: valoresFinales.base,
+          precio_cliente: valoresFinales.cliente,
+          pago_chofer: valoresFinales.chofer,
+          comision_plataforma: valoresFinales.comision,
+          estado: "pendiente",
+          tracking: false,
+        },
+      ])
+      .select()
+      .single();
+
+    setPublicando(false);
+
+    if (error) {
+      console.log(error);
+      alert(error.message);
+      return;
+    }
+
+    localStorage.setItem("viajeActivoId", data.id);
+    router.push("/panel-cliente");
+  };
+
+  if (!autorizado) return null;
+
+  return (
+    <main className="min-h-screen bg-black text-white p-6 md:p-10">
+     <div className="flex items-center justify-between gap-4 flex-wrap mb-8">
+
+<h1 className="text-4xl md:text-5xl font-bold text-yellow-400">
+  Publicar carga
+</h1>
+
+<button
+  onClick={() => {
+    localStorage.clear();
+    window.location.href = "/login";
+  }}
+  className="bg-red-700 hover:bg-red-600 border border-red-500 hover:border-red-400 text-white font-black text-sm px-5 py-3 rounded-2xl shadow-xl transition-all duration-200"
+>
+  ⛔ CERRAR SESIÓN
+</button>
+
+</div>
+
+      <div className="grid gap-6 max-w-3xl">
+        <input
+          type="text"
+          placeholder="Origen"
+          value={origen}
+          onChange={(e) => setOrigen(e.target.value)}
+          className="bg-zinc-900 p-4 rounded-xl"
+        />
+
+        <input
+          type="text"
+          placeholder="Destino"
+          value={destino}
+          onChange={(e) => setDestino(e.target.value)}
+          className="bg-zinc-900 p-4 rounded-xl"
+        />
+
+        <select
+          value={vehiculo}
+          onChange={(e) => setVehiculo(e.target.value)}
+          className="bg-zinc-900 p-4 rounded-xl"
+        >
+          <option value="">Seleccionar tipo de vehículo</option>
+          {vehiculos.map((v) => (
+            <option key={v.nombre} value={v.nombre}>
+              {v.nombre}
+            </option>
+          ))}
+        </select>
+
+        <input
+          type="text"
+          placeholder="Peso"
+          value={peso}
+          onChange={(e) => setPeso(e.target.value)}
+          className="bg-zinc-900 p-4 rounded-xl"
+        />
+
+        <select
+          value={tipoCarga}
+          onChange={(e) => setTipoCarga(e.target.value)}
+          className="bg-zinc-900 p-4 rounded-xl"
+        >
+          <option value="">Seleccionar tipo de carga</option>
+          {tiposCarga.map((c) => (
+            <option key={c.nombre} value={c.nombre}>
+              {c.nombre}
+            </option>
+          ))}
+        </select>
+
+        <input
+          type="text"
+          placeholder="Presentación / detalles"
+          value={presentacion}
+          onChange={(e) => setPresentacion(e.target.value)}
+          className="bg-zinc-900 p-4 rounded-xl"
+        />
+
+        <div className="bg-zinc-900 border border-yellow-400 rounded-3xl p-6">
+          <h2 className="text-3xl font-black text-yellow-400 mb-4">
+            Tarifa automática
+          </h2>
+
+          <div className="space-y-3 text-xl">
+            <p>
+              💰 <strong>Precio final cliente:</strong>{" "}
+              ${precioCliente.toLocaleString()}
+            </p>
+
+            <p className="text-zinc-400">
+              📍 Distancia calculada automáticamente:{" "}
+              {km || "Calculando..."} km
+            </p>
+          </div>
+        </div>
+
+        <button
+          type="button"
+          onClick={publicarCarga}
+          disabled={publicando}
+          className={`p-4 rounded-xl font-bold text-xl ${
+            publicando
+              ? "bg-zinc-700 text-zinc-400 cursor-not-allowed"
+              : "bg-yellow-400 hover:bg-yellow-500 text-black"
+          }`}
+        >
+          {publicando ? "Publicando..." : "Publicar carga"}
+        </button>
+      </div>
+    </main>
+  );
+}
