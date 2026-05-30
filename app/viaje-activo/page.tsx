@@ -134,7 +134,7 @@ export default function ViajeActivoPage() {
     console.log("viaje_id:", viajeId);
     console.log("pago_chofer:", montoGanancia);
 
-    // Validar chofer_id
+    // Validar chofer_id como UUID
     if (!choferId) {
       alert("Error billetera: falta chofer_id");
       return;
@@ -145,14 +145,9 @@ export default function ViajeActivoPage() {
       return;
     }
 
-    // Validar viaje_id
+    // Validar viaje_id — solo verificar que exista (puede ser número o UUID)
     if (!viajeId) {
       alert("Error billetera: falta viaje_id");
-      return;
-    }
-
-    if (!esUuidValido(viajeId)) {
-      alert("Error billetera: viaje_id inválido → " + viajeId);
       return;
     }
 
@@ -166,7 +161,7 @@ export default function ViajeActivoPage() {
     const { data: yaExiste, error: errorCheck } = await supabase
       .from("billetera_chofer")
       .select("id")
-      .eq("viaje_id", viajeId)
+      .eq("viaje_id", String(viajeId))
       .maybeSingle();
 
     if (errorCheck) {
@@ -186,7 +181,7 @@ export default function ViajeActivoPage() {
       .insert([
         {
           chofer_id: choferId,
-          viaje_id: viajeId,
+          viaje_id: String(viajeId),
           monto: montoGanancia,
         },
       ]);
