@@ -37,6 +37,7 @@ interface MapaTILAProps {
   origen: string;
   destino: string;
   paradaActivaDireccion?: string | null;
+  soloLectura?: boolean;
 }
 
 export default function MapaTILA({
@@ -45,6 +46,7 @@ export default function MapaTILA({
   origen,
   destino,
   paradaActivaDireccion,
+  soloLectura = false,
 }: MapaTILAProps) {
   const { isLoaded, loadError } = useJsApiLoader({
     googleMapsApiKey: process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || "",
@@ -81,9 +83,10 @@ export default function MapaTILA({
     geocodificar(destino, setDestinoCoords);
   }, [isLoaded, origen, destino]);
 
-  // Calcular ruta cuando cambia la parada activa o la posición del chofer
+  // Calcular ruta solo en modo chofer — no necesario para el cliente
   useEffect(() => {
     if (!isLoaded || !paradaActivaDireccion || !lat || !lng) return;
+    if (soloLectura) return;
 
     if (!directionsServiceRef.current) {
       directionsServiceRef.current = new google.maps.DirectionsService();

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { supabase } from "../lib/supabase";
 import { useProtegerRuta } from "../hooks/useProtegerRuta";
+import MapaTILA from "../components/MapaTILA";
 
 const estadosTracking = [
   { nombre: "Chofer asignado", color: "bg-green-700 text-white border-green-400" },
@@ -65,7 +66,6 @@ export default function PanelClientePage() {
 
     if (error) {
       console.log(error);
-      // Si el viaje no existe en Supabase, limpiar localStorage y mostrar mensaje
       localStorage.removeItem("viajeActivoId");
       localStorage.removeItem("viajeActivo");
       setViajeEliminado(true);
@@ -79,7 +79,6 @@ export default function PanelClientePage() {
     localStorage.removeItem("viajeActivoId");
     localStorage.removeItem("viajeActivo");
 
-    // Verificar que la sesión activa sea de cliente antes de ir a publicar
     const usuarioGuardado = localStorage.getItem("usuario");
     const usuario = usuarioGuardado ? JSON.parse(usuarioGuardado) : null;
 
@@ -92,14 +91,12 @@ export default function PanelClientePage() {
   };
 
   useEffect(() => {
-    // Capturar viajeId una sola vez al montar — no depende de localStorage en polling ni realtime
     const viajeId = localStorage.getItem("viajeActivoId");
 
     if (!viajeId) return;
 
     cargarViaje(viajeId);
 
-    // Canal filtrado por el viaje del cliente — no dispara con viajes de otros clientes
     const canal = supabase
       .channel("tracking-cliente")
       .on(
@@ -116,7 +113,6 @@ export default function PanelClientePage() {
       )
       .subscribe();
 
-    // Polling de respaldo cada 5 segundos por si el canal realtime falla
     const intervalo = setInterval(() => {
       cargarViaje(viajeId);
     }, 5000);
@@ -126,11 +122,6 @@ export default function PanelClientePage() {
       clearInterval(intervalo);
     };
   }, []);
-
-  // Key del mapa basada en lat/lng — fuerza re-mount del iframe cuando cambia la posición GPS
-  const mapaKey = viaje?.lat && viaje?.lng
-    ? `${viaje.lat}-${viaje.lng}`
-    : "sin-gps";
 
   if (!autorizado) return null;
 
@@ -149,33 +140,17 @@ export default function PanelClientePage() {
         </div>
       )}
 
-<div className="flex items-center justify-between mb-8 gap-4 flex-wrap">
+      <div className="flex items-center justify-between mb-8">
+        <Link href="/" className="text-zinc-400 hover:text-white">
+          ← Volver
+        </Link>
 
-<Link href="/" className="text-zinc-400 hover:text-white">
-  ← Volver
-</Link>
-
-<div className="flex items-center gap-3 flex-wrap">
-
-  <div className="bg-zinc-900 border border-zinc-800 rounded-2xl px-5 py-3">
-    <span className="text-green-400 font-bold animate-pulse">
-      Cliente conectado
-    </span>
-  </div>
-
-  <button
-    onClick={() => {
-      localStorage.clear();
-      window.location.href = "/login";
-    }}
-    className="bg-red-700 hover:bg-red-600 border border-red-500 hover:border-red-400 text-white font-black text-sm px-5 py-3 rounded-2xl shadow-xl transition-all duration-200"
-  >
-    ⛔ CERRAR SESIÓN
-  </button>
-
-</div>
-
-</div>
+        <div className="bg-zinc-900 border border-zinc-800 rounded-2xl px-5 py-3">
+          <span className="text-green-400 font-bold animate-pulse">
+            Cliente conectado
+          </span>
+        </div>
+      </div>
 
       <h1 className="text-5xl font-black text-yellow-400 mb-2">
         Panel Cliente
@@ -185,7 +160,6 @@ export default function PanelClientePage() {
         Seguimiento de tu carga en tiempo real.
       </p>
 
-      {/* Viaje eliminado desde el admin */}
       {viajeEliminado ? (
         <div className="bg-zinc-900 border border-red-600 rounded-3xl p-10 text-center">
           <h2 className="text-3xl font-black text-red-400 mb-3">
@@ -297,21 +271,14 @@ export default function PanelClientePage() {
               Tracking de carga
             </h3>
 
+            {/* Mapa interno TILA — sin iframe, sin parpadeo */}
             <div className="rounded-2xl overflow-hidden border-2 border-yellow-400">
-              {/* key basada en lat/lng fuerza re-mount del iframe cuando cambia el GPS */}
-              <iframe
-                key={mapaKey}
-                title="Mapa de seguimiento de carga"
-                src={
-                  viaje?.lat && viaje?.lng
-                    ? `https://www.google.com/maps?q=${viaje.lat},${viaje.lng}&z=15&output=embed`
-                    : `https://www.google.com/maps?q=${encodeURIComponent(
-                        (viaje.origen || "Argentina") + " Argentina"
-                      )}&output=embed`
-                }
-                width="100%"
-                height="360"
-                loading="lazy"
+              <MapaTILA
+                lat={viaje?.lat}
+                lng={viaje?.lng}
+                origen={viaje.origen}
+                destino={viaje.destino}
+                soloLectura={true}
               />
             </div>
 
