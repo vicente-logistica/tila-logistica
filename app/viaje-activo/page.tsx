@@ -362,7 +362,13 @@ export default function ViajeActivoPage() {
         </div>
 
         <div className="rounded-3xl overflow-hidden border-2 border-yellow-400 mb-6">
-          <MapaTILA lat={viaje?.lat} lng={viaje?.lng} />
+          <MapaTILA
+            lat={viaje?.lat}
+            lng={viaje?.lng}
+            origen={viaje.origen}
+            destino={viaje.destino}
+            paradaActivaDireccion={paradaActiva?.direccion}
+          />
         </div>
 
         <button
