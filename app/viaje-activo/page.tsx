@@ -49,7 +49,6 @@ export default function ViajeActivoPage() {
 
     const watchId = navigator.geolocation.watchPosition(
       async (position) => {
-        // Si el viaje ya terminó, no seguir escribiendo GPS en Supabase
         if (viajeTerminado.current) return;
 
         const lat = position.coords.latitude;
@@ -128,37 +127,75 @@ export default function ViajeActivoPage() {
   const acreditarBilletera = async (data: any) => {
     const choferId = data?.chofer_id;
     const viajeId = data?.id;
-    const montoGanancia = Number(data?.pago_chofer || viaje?.pago_chofer || 0);
+    const montoGanancia = Number(data?.pago_chofer || 0);
+
+    console.log("=== ACREDITAR BILLETERA ===");
+    console.log("chofer_id:", choferId);
+    console.log("viaje_id:", viajeId);
+    console.log("pago_chofer:", montoGanancia);
+
+    // Validar chofer_id
+    if (!choferId) {
+      alert("Error billetera: falta chofer_id");
+      return;
+    }
 
     if (!esUuidValido(choferId)) {
-      console.log("Billetera no acreditada: chofer_id inválido", choferId);
+      alert("Error billetera: chofer_id inválido → " + choferId);
+      return;
+    }
+
+    // Validar viaje_id
+    if (!viajeId) {
+      alert("Error billetera: falta viaje_id");
       return;
     }
 
     if (!esUuidValido(viajeId)) {
-      console.log("Billetera no acreditada: viaje_id inválido", viajeId);
+      alert("Error billetera: viaje_id inválido → " + viajeId);
       return;
     }
 
-    const { data: yaExiste } = await supabase
+    // Validar monto
+    if (!montoGanancia || montoGanancia <= 0) {
+      alert("Error billetera: pago_chofer es 0 o no existe. Revisá el precio del viaje.");
+      return;
+    }
+
+    // Verificar si ya existe para evitar duplicados
+    const { data: yaExiste, error: errorCheck } = await supabase
       .from("billetera_chofer")
       .select("id")
       .eq("viaje_id", viajeId)
       .maybeSingle();
 
-    if (yaExiste) return;
+    if (errorCheck) {
+      console.log("Error verificando billetera:", errorCheck);
+    }
 
-    const { error } = await supabase.from("billetera_chofer").insert([
-      {
-        chofer_id: choferId,
-        viaje_id: viajeId,
-        monto: montoGanancia,
-      },
-    ]);
+    if (yaExiste) {
+      console.log("Movimiento ya acreditado — viaje_id:", viajeId);
+      return;
+    }
 
-    if (error) {
-      console.log("Error billetera:", error);
-      alert("Error billetera: " + error.message);
+    // Insertar movimiento
+    console.log("Insertando en billetera_chofer...");
+
+    const { error: errorInsert } = await supabase
+      .from("billetera_chofer")
+      .insert([
+        {
+          chofer_id: choferId,
+          viaje_id: viajeId,
+          monto: montoGanancia,
+        },
+      ]);
+
+    if (errorInsert) {
+      console.log("Error insert billetera:", errorInsert);
+      alert("Error al acreditar billetera: " + errorInsert.message);
+    } else {
+      console.log("✅ Billetera acreditada — monto:", montoGanancia);
     }
   };
 
@@ -171,7 +208,6 @@ export default function ViajeActivoPage() {
 
     const updateData: any = { estado: nuevoEstado };
 
-    // Al finalizar: apagar tracking y detener escritura GPS
     if (nuevoEstado === "Viaje finalizado") {
       updateData.tracking = false;
       viajeTerminado.current = true;
@@ -187,7 +223,6 @@ export default function ViajeActivoPage() {
     if (error) {
       console.log(error);
       alert("Error al actualizar estado");
-      // Si falló, revertir el flag para no bloquear GPS en caso de reintento
       if (nuevoEstado === "Viaje finalizado") {
         viajeTerminado.current = false;
       }
@@ -197,14 +232,14 @@ export default function ViajeActivoPage() {
     setViaje(data);
 
     if (nuevoEstado === "Viaje finalizado") {
+      // Acreditar billetera ANTES de limpiar localStorage
       await acreditarBilletera(data);
 
-      // Borrar solo el ID del viaje — nunca tocar localStorage["usuario"]
+      // Limpiar viaje del localStorage después de acreditar
       localStorage.removeItem("viajeActivoId");
 
       setFestejo(true);
 
-      // router.push mantiene la sesión sin recarga completa del browser
       setTimeout(() => {
         router.push("/panel-chofer");
       }, 5000);
@@ -214,13 +249,15 @@ export default function ViajeActivoPage() {
   const abrirMapa = () => {
     if (!viaje) return;
 
-    const query =
-      viaje.lat && viaje.lng
-        ? `${viaje.lat},${viaje.lng}`
-        : `${viaje.origen} Argentina`;
+    // Navegar a origen si todavía no retiró la carga
+    // Navegar a destino si ya retiró y va al punto de entrega
+    const estadosHaciaOrigen = ["Chofer asignado", "En camino"];
+    const destino = estadosHaciaOrigen.includes(viaje.estado)
+      ? `${viaje.origen} Argentina`
+      : `${viaje.destino} Argentina`;
 
     window.open(
-      `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`,
+      `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(destino)}`,
       "_blank"
     );
   };
@@ -268,18 +305,6 @@ export default function ViajeActivoPage() {
   return (
     <main className="min-h-screen bg-black text-white p-4 md:p-6">
       <section className="max-w-5xl mx-auto bg-zinc-900 border-4 border-yellow-400 rounded-3xl p-5 md:p-8 shadow-2xl">
-
-<div className="flex justify-end mb-5">
-  <button
-    onClick={() => {
-      localStorage.clear();
-      window.location.href = "/login";
-    }}
-    className="bg-red-700 hover:bg-red-600 border border-red-500 hover:border-red-400 text-white font-black text-sm px-5 py-3 rounded-2xl shadow-xl transition-all duration-200"
-  >
-    ⛔ CERRAR SESIÓN
-  </button>
-</div>
         <p className="text-green-400 font-black text-xl md:text-2xl mb-3 animate-pulse">
           🚛 VIAJE ACTIVO 🚛
         </p>
