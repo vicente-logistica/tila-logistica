@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "../lib/supabase";
 import { useProtegerRuta } from "../hooks/useProtegerRuta";
+import MapaTILA from "../components/MapaTILA";
 
 const estados = [
   { nombre: "En camino", color: "bg-yellow-400 text-black" },
@@ -32,8 +33,24 @@ export default function ViajeActivoPage() {
 
   // Flag para detener escritura GPS cuando el viaje ya finalizó
   const viajeTerminado = useRef(false);
-  // Coordenadas fijas para el iframe — se setean al montar y no cambian para evitar parpadeo
-  const mapaSrcRef = useRef<string | null>(null);
+
+  // Parada activa calculada desde el estado del viaje
+  const paradaActiva = useMemo(() => {
+    if (!viaje) return null;
+
+    const estadosRetiro = ["Chofer asignado", "En camino"];
+    const estadosEntrega = ["Carga retirada", "En ruta"];
+
+    if (estadosRetiro.includes(viaje.estado)) {
+      return { tipo: "RETIRO", direccion: viaje.origen };
+    }
+
+    if (estadosEntrega.includes(viaje.estado)) {
+      return { tipo: "ENTREGA", direccion: viaje.destino };
+    }
+
+    return null; // Descarga completada / Viaje finalizado
+  }, [viaje?.estado, viaje?.origen, viaje?.destino]);
 
   useEffect(() => {
     cargarViajeActivo();
@@ -115,11 +132,6 @@ export default function ViajeActivoPage() {
 
     setViaje(data);
     setCargando(false);
-
-    // Fijar src del mapa al cargar el viaje — no cambia con actualizaciones GPS
-    mapaSrcRef.current = data.lat && data.lng
-      ? `https://www.google.com/maps?q=${data.lat},${data.lng}&z=15&output=embed`
-      : `https://www.google.com/maps?q=${encodeURIComponent(`${data.origen} Argentina`)}&output=embed`;
   };
 
   const reproducirFestejo = () => {
@@ -141,7 +153,6 @@ export default function ViajeActivoPage() {
     console.log("viaje_id:", viajeId);
     console.log("pago_chofer:", montoGanancia);
 
-    // Validar chofer_id como UUID
     if (!choferId) {
       alert("Error billetera: falta chofer_id");
       return;
@@ -152,19 +163,16 @@ export default function ViajeActivoPage() {
       return;
     }
 
-    // Validar viaje_id — solo verificar que exista (puede ser número o UUID)
     if (!viajeId) {
       alert("Error billetera: falta viaje_id");
       return;
     }
 
-    // Validar monto
     if (!montoGanancia || montoGanancia <= 0) {
       alert("Error billetera: pago_chofer es 0 o no existe. Revisá el precio del viaje.");
       return;
     }
 
-    // Verificar si ya existe para evitar duplicados
     const { data: yaExiste, error: errorCheck } = await supabase
       .from("billetera_chofer")
       .select("id")
@@ -180,7 +188,6 @@ export default function ViajeActivoPage() {
       return;
     }
 
-    // Insertar movimiento
     console.log("Insertando en billetera_chofer...");
 
     const { error: errorInsert } = await supabase
@@ -234,14 +241,9 @@ export default function ViajeActivoPage() {
     setViaje(data);
 
     if (nuevoEstado === "Viaje finalizado") {
-      // Acreditar billetera ANTES de limpiar localStorage
       await acreditarBilletera(data);
-
-      // Limpiar viaje del localStorage después de acreditar
       localStorage.removeItem("viajeActivoId");
-
       setFestejo(true);
-
       setTimeout(() => {
         router.push("/panel-chofer");
       }, 5000);
@@ -249,19 +251,18 @@ export default function ViajeActivoPage() {
   };
 
   const abrirMapa = () => {
-    if (!viaje) return;
+    if (!viaje || !paradaActiva) return;
 
-    // Navegar a origen si todavía no retiró la carga
-    // Navegar a destino si ya retiró y va al punto de entrega
-    const estadosHaciaOrigen = ["Chofer asignado", "En camino"];
-    const destino = estadosHaciaOrigen.includes(viaje.estado)
-      ? `${viaje.origen} Argentina`
-      : `${viaje.destino} Argentina`;
+    const destination = `${paradaActiva.direccion}, Argentina`;
+    const origin = viaje.lat && viaje.lng
+      ? `${viaje.lat},${viaje.lng}`
+      : "";
 
-    window.open(
-      `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(destino)}`,
-      "_blank"
-    );
+    const url = origin
+      ? `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(origin)}&destination=${encodeURIComponent(destination)}&travelmode=driving`
+      : `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(destination)}&travelmode=driving`;
+
+    window.open(url, "_blank");
   };
 
   if (!autorizado) return null;
@@ -315,12 +316,31 @@ export default function ViajeActivoPage() {
           {viaje.origen} → {viaje.destino}
         </h1>
 
-        <p className="text-xl md:text-2xl mb-6">
+        <p className="text-xl md:text-2xl mb-4">
           Estado actual:{" "}
           <span className="text-green-400 font-black">
             {viaje.estado || "Chofer asignado"}
           </span>
         </p>
+
+        {/* Parada activa */}
+        {paradaActiva && (
+          <div className="bg-black border-2 border-yellow-400 rounded-2xl p-4 mb-6">
+            <p className="text-zinc-400 text-sm mb-2">Próxima parada</p>
+            <span
+              className={`text-xs font-black px-3 py-1 rounded-lg ${
+                paradaActiva.tipo === "RETIRO"
+                  ? "bg-blue-600 text-white"
+                  : "bg-green-600 text-white"
+              }`}
+            >
+              {paradaActiva.tipo}
+            </span>
+            <p className="text-white font-black text-lg mt-2">
+              📍 {paradaActiva.direccion}
+            </p>
+          </div>
+        )}
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
           <div className="bg-black border border-green-500 rounded-2xl p-4 text-center">
@@ -342,23 +362,14 @@ export default function ViajeActivoPage() {
         </div>
 
         <div className="rounded-3xl overflow-hidden border-2 border-yellow-400 mb-6">
-          <iframe
-            title="Mapa de ubicación del viaje activo"
-            src={
-              mapaSrcRef.current ||
-              `https://www.google.com/maps?q=${encodeURIComponent(`${viaje.origen} Argentina`)}&output=embed`
-            }
-            width="100%"
-            height="360"
-            loading="lazy"
-          />
+          <MapaTILA lat={viaje?.lat} lng={viaje?.lng} />
         </div>
 
         <button
           onClick={abrirMapa}
           className="w-full bg-green-600 hover:bg-green-500 text-black font-black text-xl md:text-2xl py-5 rounded-3xl mb-6"
         >
-          INICIAR NAVEGACIÓN / ABRIR GPS
+          Abrir en Google Maps
         </button>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
