@@ -32,6 +32,8 @@ export default function ViajeActivoPage() {
 
   // Flag para detener escritura GPS cuando el viaje ya finalizó
   const viajeTerminado = useRef(false);
+  // Coordenadas fijas para el iframe — se setean al montar y no cambian para evitar parpadeo
+  const mapaSrcRef = useRef<string | null>(null);
 
   useEffect(() => {
     cargarViajeActivo();
@@ -113,6 +115,11 @@ export default function ViajeActivoPage() {
 
     setViaje(data);
     setCargando(false);
+
+    // Fijar src del mapa al cargar el viaje — no cambia con actualizaciones GPS
+    mapaSrcRef.current = data.lat && data.lng
+      ? `https://www.google.com/maps?q=${data.lat},${data.lng}&z=15&output=embed`
+      : `https://www.google.com/maps?q=${encodeURIComponent(`${data.origen} Argentina`)}&output=embed`;
   };
 
   const reproducirFestejo = () => {
@@ -338,11 +345,8 @@ export default function ViajeActivoPage() {
           <iframe
             title="Mapa de ubicación del viaje activo"
             src={
-              viaje?.lat && viaje?.lng
-                ? `https://www.google.com/maps?q=${viaje.lat},${viaje.lng}&z=15&output=embed`
-                : `https://www.google.com/maps?q=${encodeURIComponent(
-                    `${viaje.origen} Argentina`
-                  )}&output=embed`
+              mapaSrcRef.current ||
+              `https://www.google.com/maps?q=${encodeURIComponent(`${viaje.origen} Argentina`)}&output=embed`
             }
             width="100%"
             height="360"
