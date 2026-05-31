@@ -35,13 +35,15 @@ const calcularKmAutomatico = (origen: string, destino: string) => {
   return 0;
 };
 
+const MAX_PARADAS = 4;
+
 export default function PublicarPage() {
   const { autorizado } = useProtegerRuta("cliente");
-
   const router = useRouter();
 
   const [origen, setOrigen] = useState("");
   const [destino, setDestino] = useState("");
+  const [paradasIntermedias, setParadasIntermedias] = useState<string[]>([]);
   const [vehiculo, setVehiculo] = useState("");
   const [peso, setPeso] = useState("");
   const [tipoCarga, setTipoCarga] = useState("");
@@ -63,11 +65,9 @@ export default function PublicarPage() {
   ) => {
     const baseCalculada = kilometros * litrosPorKm * precioCombustible;
     const base = Math.max(Math.round(baseCalculada), minimo);
-
     const cliente = Math.round(base * 1.075);
     const chofer = Math.round(base * 0.925);
     const comision = Math.round(cliente - chofer);
-
     return { base, cliente, chofer, comision };
   };
 
@@ -77,11 +77,8 @@ export default function PublicarPage() {
 
       try {
         const response = await fetch(
-          `/api/distancia?origen=${encodeURIComponent(
-            origen
-          )}&destino=${encodeURIComponent(destino)}`
+          `/api/distancia?origen=${encodeURIComponent(origen)}&destino=${encodeURIComponent(destino)}`
         );
-
         const data = await response.json();
 
         if (data.km) {
@@ -142,6 +139,22 @@ export default function PublicarPage() {
     setComisionPlataforma(valores.comision);
   };
 
+  // Paradas intermedias — handlers
+  const agregarParada = () => {
+    if (paradasIntermedias.length >= MAX_PARADAS) return;
+    setParadasIntermedias([...paradasIntermedias, ""]);
+  };
+
+  const actualizarParada = (index: number, valor: string) => {
+    const nuevas = [...paradasIntermedias];
+    nuevas[index] = valor;
+    setParadasIntermedias(nuevas);
+  };
+
+  const eliminarParada = (index: number) => {
+    setParadasIntermedias(paradasIntermedias.filter((_, i) => i !== index));
+  };
+
   const publicarCarga = async () => {
     if (publicando) return;
 
@@ -186,6 +199,7 @@ export default function PublicarPage() {
       vehiculoSeleccionado.minimo
     );
 
+    // Insert principal en cargas
     const { data, error } = await supabase
       .from("cargas")
       .insert([
@@ -210,14 +224,55 @@ export default function PublicarPage() {
       .select()
       .single();
 
-    setPublicando(false);
-
     if (error) {
       console.log(error);
       alert(error.message);
+      setPublicando(false);
       return;
     }
 
+    // Insert en paradas_viaje solo si hay paradas intermedias válidas
+    const paradasValidas = paradasIntermedias.filter((p) => p.trim() !== "");
+
+    if (paradasValidas.length > 0) {
+      const filas = [
+        // Parada 0 — retiro (origen)
+        {
+          carga_id: data.id,
+          orden: 0,
+          tipo: "retiro",
+          direccion: origen,
+          estado: "pendiente",
+        },
+        // Paradas intermedias
+        ...paradasValidas.map((direccion, index) => ({
+          carga_id: data.id,
+          orden: index + 1,
+          tipo: "entrega",
+          direccion: direccion.trim(),
+          estado: "pendiente",
+        })),
+        // Parada final — destino
+        {
+          carga_id: data.id,
+          orden: paradasValidas.length + 1,
+          tipo: "entrega",
+          direccion: destino,
+          estado: "pendiente",
+        },
+      ];
+
+      const { error: errorParadas } = await supabase
+        .from("paradas_viaje")
+        .insert(filas);
+
+      if (errorParadas) {
+        // No bloqueante — el viaje se publicó igual
+        console.error("Error insertando paradas_viaje:", errorParadas);
+      }
+    }
+
+    setPublicando(false);
     localStorage.setItem("viajeActivoId", data.id);
     router.push("/panel-cliente");
   };
@@ -226,36 +281,52 @@ export default function PublicarPage() {
 
   return (
     <main className="min-h-screen bg-black text-white p-6 md:p-10">
-     <div className="flex items-center justify-between gap-4 flex-wrap mb-8">
-
-<h1 className="text-4xl md:text-5xl font-bold text-yellow-400">
-  Publicar carga
-</h1>
-
-<button
-  onClick={() => {
-    localStorage.clear();
-    window.location.href = "/login";
-  }}
-  className="bg-red-700 hover:bg-red-600 border border-red-500 hover:border-red-400 text-white font-black text-sm px-5 py-3 rounded-2xl shadow-xl transition-all duration-200"
->
-  ⛔ CERRAR SESIÓN
-</button>
-
-</div>
+      <h1 className="text-4xl md:text-5xl font-bold text-yellow-400 mb-8">
+        Publicar carga
+      </h1>
 
       <div className="grid gap-6 max-w-3xl">
+
         <input
           type="text"
-          placeholder="Origen"
+          placeholder="Origen (punto de retiro)"
           value={origen}
           onChange={(e) => setOrigen(e.target.value)}
           className="bg-zinc-900 p-4 rounded-xl"
         />
 
+        {/* Paradas intermedias */}
+        {paradasIntermedias.map((parada, index) => (
+          <div key={index} className="flex gap-3 items-center">
+            <input
+              type="text"
+              placeholder={`Parada ${index + 1} — dirección de entrega`}
+              value={parada}
+              onChange={(e) => actualizarParada(index, e.target.value)}
+              className="bg-zinc-900 p-4 rounded-xl flex-1"
+            />
+            <button
+              onClick={() => eliminarParada(index)}
+              className="bg-red-800 hover:bg-red-700 text-white font-black px-4 py-4 rounded-xl"
+            >
+              ✕
+            </button>
+          </div>
+        ))}
+
+        {/* Botón agregar parada */}
+        {paradasIntermedias.length < MAX_PARADAS && (
+          <button
+            onClick={agregarParada}
+            className="bg-zinc-800 hover:bg-zinc-700 border border-dashed border-yellow-400 text-yellow-400 font-black py-4 rounded-xl"
+          >
+            + Agregar parada intermedia ({paradasIntermedias.length}/{MAX_PARADAS})
+          </button>
+        )}
+
         <input
           type="text"
-          placeholder="Destino"
+          placeholder="Destino final"
           value={destino}
           onChange={(e) => setDestino(e.target.value)}
           className="bg-zinc-900 p-4 rounded-xl"
@@ -318,6 +389,13 @@ export default function PublicarPage() {
               📍 Distancia calculada automáticamente:{" "}
               {km || "Calculando..."} km
             </p>
+
+            {paradasIntermedias.filter((p) => p.trim()).length > 0 && (
+              <p className="text-zinc-500 text-sm">
+                * Tarifa calculada solo entre origen y destino final.
+                Las paradas intermedias no afectan el precio en esta versión.
+              </p>
+            )}
           </div>
         </div>
 
@@ -333,6 +411,7 @@ export default function PublicarPage() {
         >
           {publicando ? "Publicando..." : "Publicar carga"}
         </button>
+
       </div>
     </main>
   );
