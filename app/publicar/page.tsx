@@ -75,26 +75,59 @@ export default function PublicarPage() {
     const calcularDistancia = async () => {
       if (!origen || !destino) return;
 
-      try {
-        const response = await fetch(
-          `/api/distancia?origen=${encodeURIComponent(origen)}&destino=${encodeURIComponent(destino)}`
-        );
-        const data = await response.json();
+      // Construir array de puntos: origen + paradas válidas + destino
+      const paradasValidas = paradasIntermedias.filter((p) => p.trim() !== "");
+      const puntos = [origen, ...paradasValidas, destino];
 
-        if (data.km) {
-          setKm(String(data.km));
-          return;
+      // Si solo hay origen y destino, calcular directo como antes
+      if (puntos.length === 2) {
+        try {
+          const response = await fetch(
+            `/api/distancia?origen=${encodeURIComponent(origen)}&destino=${encodeURIComponent(destino)}`
+          );
+          const data = await response.json();
+          setKm(String(data.km || calcularKmAutomatico(origen, destino)));
+        } catch (error) {
+          console.log(error);
+          setKm(String(calcularKmAutomatico(origen, destino)));
         }
-
-        setKm(String(calcularKmAutomatico(origen, destino)));
-      } catch (error) {
-        console.log(error);
-        setKm(String(calcularKmAutomatico(origen, destino)));
+        return;
       }
+
+      // Multietapa: calcular cada tramo en paralelo
+      const tramos = puntos.slice(0, -1).map((punto, i) => ({
+        desde: punto,
+        hasta: puntos[i + 1],
+      }));
+
+      const resultados = await Promise.all(
+        tramos.map(async ({ desde, hasta }) => {
+          try {
+            const response = await fetch(
+              `/api/distancia?origen=${encodeURIComponent(desde)}&destino=${encodeURIComponent(hasta)}`
+            );
+            const data = await response.json();
+
+            if (data.km && data.km > 0) return data.km;
+
+            const fallback = calcularKmAutomatico(desde, hasta);
+            if (fallback > 0) return fallback;
+
+            console.warn(`Sin distancia para tramo: ${desde} → ${hasta}`);
+            return 0;
+          } catch (error) {
+            console.warn(`Error calculando tramo ${desde} → ${hasta}:`, error);
+            return calcularKmAutomatico(desde, hasta);
+          }
+        })
+      );
+
+      const totalKm = resultados.reduce((acc, km) => acc + km, 0);
+      setKm(String(totalKm > 0 ? totalKm : 0));
     };
 
     calcularDistancia();
-  }, [origen, destino]);
+  }, [origen, destino, paradasIntermedias]);
 
   useEffect(() => {
     calcularTarifa();
@@ -386,8 +419,10 @@ export default function PublicarPage() {
             </p>
 
             <p className="text-zinc-400">
-              📍 Distancia calculada automáticamente:{" "}
-              {km || "Calculando..."} km
+              📍{" "}
+              {paradasIntermedias.filter((p) => p.trim()).length > 0
+                ? `Distancia total por ruta multietapa: ${km || "Calculando..."} km`
+                : `Distancia calculada automáticamente: ${km || "Calculando..."} km`}
             </p>
 
             {paradasIntermedias.filter((p) => p.trim()).length > 0 && (
