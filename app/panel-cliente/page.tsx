@@ -21,6 +21,7 @@ export default function PanelClientePage() {
   const [viaje, setViaje] = useState<any>(null);
   const [alerta, setAlerta] = useState<string | null>(null);
   const [viajeEliminado, setViajeEliminado] = useState(false);
+  const [mapaAmpliado, setMapaAmpliado] = useState(false);
   const ultimoEstadoRef = useRef<string | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
@@ -129,6 +130,7 @@ export default function PanelClientePage() {
     <main className="min-h-screen bg-black text-white p-6">
       <audio ref={audioRef} src="/sounds/alerta-viaje.mp3" preload="auto" />
 
+      {/* Alerta de cambio de estado */}
       {alerta && (
         <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-6">
           <div className="bg-yellow-400 text-black rounded-3xl p-10 text-center border-4 border-white animate-pulse shadow-2xl max-w-xl">
@@ -136,6 +138,33 @@ export default function PanelClientePage() {
               🚨 ACTUALIZACIÓN DEL VIAJE 🚨
             </p>
             <h2 className="text-5xl font-black">{alerta}</h2>
+          </div>
+        </div>
+      )}
+
+      {/* Mapa ampliado — modal pantalla completa */}
+      {mapaAmpliado && viaje && (
+        <div className="fixed inset-0 z-40 bg-black flex flex-col">
+          <div className="flex items-center justify-between p-4 border-b border-zinc-800">
+            <p className="text-yellow-400 font-black text-lg">
+              🗺️ {viaje.origen} → {viaje.destino}
+            </p>
+            <button
+              onClick={() => setMapaAmpliado(false)}
+              className="bg-red-700 hover:bg-red-600 text-white font-black px-5 py-2 rounded-xl"
+            >
+              ✕ Cerrar mapa
+            </button>
+          </div>
+          <div className="flex-1">
+            <MapaTILA
+              lat={viaje?.lat}
+              lng={viaje?.lng}
+              origen={viaje.origen}
+              destino={viaje.destino}
+              soloLectura={true}
+              altura="100%"
+            />
           </div>
         </div>
       )}
@@ -165,11 +194,9 @@ export default function PanelClientePage() {
           <h2 className="text-3xl font-black text-red-400 mb-3">
             Este viaje ya no está disponible
           </h2>
-
           <p className="text-zinc-500 mb-6">
             El viaje fue cancelado o eliminado. Podés publicar uno nuevo.
           </p>
-
           <Link
             href="/publicar"
             className="inline-block bg-yellow-400 hover:bg-yellow-500 text-black font-black px-8 py-4 rounded-2xl"
@@ -182,11 +209,9 @@ export default function PanelClientePage() {
           <h2 className="text-3xl font-black mb-3">
             No hay viaje activo cargado
           </h2>
-
           <p className="text-zinc-500 mb-6">
             Primero el chofer debe aceptar una carga.
           </p>
-
           <Link
             href="/publicar"
             className="inline-block bg-yellow-400 hover:bg-yellow-500 text-black font-black px-8 py-4 rounded-2xl"
@@ -199,15 +224,12 @@ export default function PanelClientePage() {
           <h2 className="text-6xl font-black text-green-400 mb-4">
             ✅ Viaje finalizado
           </h2>
-
           <p className="text-zinc-300 text-2xl mb-3">
             Tu carga fue entregada correctamente.
           </p>
-
           <h3 className="text-4xl font-black text-yellow-400 mb-8">
             {viaje.origen} → {viaje.destino}
           </h3>
-
           <div className="grid gap-4 max-w-md mx-auto">
             <button
               onClick={publicarOtroViaje}
@@ -215,7 +237,6 @@ export default function PanelClientePage() {
             >
               Publicar otro viaje
             </button>
-
             <Link
               href="/"
               className="bg-zinc-800 hover:bg-zinc-700 text-white font-black px-8 py-4 rounded-2xl"
@@ -230,11 +251,9 @@ export default function PanelClientePage() {
             <p className="text-pink-500 font-black text-xl mb-3">
               🚨 VIAJE EN SEGUIMIENTO 🚨
             </p>
-
             <h2 className="text-4xl font-black text-yellow-400">
               {viaje.origen} → {viaje.destino}
             </h2>
-
             <p className="text-zinc-400 mt-3">
               Estado actual:{" "}
               <span className="text-green-400 font-black">
@@ -247,14 +266,11 @@ export default function PanelClientePage() {
             <h3 className="text-3xl font-black text-yellow-400 mb-4">
               Datos del viaje
             </h3>
-
             <div className="space-y-3 text-xl">
               <p>🚚 <strong>Vehículo:</strong> {viaje.vehiculo || "Pendiente"}</p>
               <p>
                 📍 <strong>Distancia:</strong>{" "}
-                {viaje.km_estimados
-                  ? `${viaje.km_estimados} km`
-                  : "Sin calcular"}
+                {viaje.km_estimados ? `${viaje.km_estimados} km` : "Sin calcular"}
               </p>
               <p>⚖️ <strong>Peso:</strong> {viaje.peso || "Pendiente"}</p>
               <p>📦 <strong>Tipo:</strong> {viaje.tipo_carga || "Pendiente"}</p>
@@ -271,21 +287,52 @@ export default function PanelClientePage() {
               Tracking de carga
             </h3>
 
-            {/* Mapa interno TILA — sin iframe, sin parpadeo */}
-            <div className="rounded-2xl overflow-hidden border-2 border-yellow-400">
+            {/* Mensaje si no hay GPS todavía */}
+            {!viaje?.lat || !viaje?.lng ? (
+              <div className="bg-zinc-800 rounded-2xl p-5 text-center mb-4">
+                <p className="text-zinc-400 text-lg">
+                  📡 Esperando ubicación del chofer...
+                </p>
+              </div>
+            ) : null}
+
+            {/* Mapa interno */}
+            <div className="rounded-2xl overflow-hidden border-2 border-yellow-400 mb-4">
               <MapaTILA
                 lat={viaje?.lat}
                 lng={viaje?.lng}
                 origen={viaje.origen}
                 destino={viaje.destino}
                 soloLectura={true}
+                altura="360px"
               />
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-4 mt-6">
+            {/* Botones de mapa */}
+            <div className="grid grid-cols-2 gap-3 mb-6">
+              <button
+                onClick={() => setMapaAmpliado(true)}
+                className="bg-zinc-800 hover:bg-zinc-700 border border-yellow-400 text-yellow-400 font-black py-3 rounded-2xl"
+              >
+                🔍 Ampliar mapa
+              </button>
+              <button
+                onClick={() => {
+                  // "Seguir chofer" — fuerza re-render pasando coords actuales
+                  // El pan lo maneja MapaTILA internamente cuando cambia lat/lng
+                  if (viaje?.lat && viaje?.lng) {
+                    setViaje({ ...viaje });
+                  }
+                }}
+                className="bg-zinc-800 hover:bg-zinc-700 border border-green-400 text-green-400 font-black py-3 rounded-2xl"
+              >
+                🚛 Seguir chofer
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-4">
               {estadosTracking.map((estado) => {
                 const activo = viaje.estado === estado.nombre;
-
                 return (
                   <div
                     key={estado.nombre}

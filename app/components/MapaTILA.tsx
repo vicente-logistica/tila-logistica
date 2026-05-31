@@ -6,7 +6,7 @@ import {
   Marker,
   DirectionsRenderer,
 } from "@react-google-maps/api";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 const LIBRARIES: ("places" | "geometry" | "drawing")[] = [];
 
@@ -23,12 +23,6 @@ const estiloMapa = [
   { featureType: "transit", stylers: [{ visibility: "off" }] },
 ];
 
-const contenedorEstilo = {
-  width: "100%",
-  height: "420px",
-  borderRadius: "1rem",
-};
-
 const centroArgentina = { lat: -34.6037, lng: -58.3816 };
 
 interface MapaTILAProps {
@@ -38,6 +32,7 @@ interface MapaTILAProps {
   destino: string;
   paradaActivaDireccion?: string | null;
   soloLectura?: boolean;
+  altura?: string;
 }
 
 export default function MapaTILA({
@@ -47,6 +42,7 @@ export default function MapaTILA({
   destino,
   paradaActivaDireccion,
   soloLectura = false,
+  altura = "420px",
 }: MapaTILAProps) {
   const { isLoaded, loadError } = useJsApiLoader({
     googleMapsApiKey: process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || "",
@@ -55,19 +51,29 @@ export default function MapaTILA({
 
   const mapRef = useRef<google.maps.Map | null>(null);
   const choferMarkerRef = useRef<google.maps.Marker | null>(null);
-  const [origenCoords, setOrigenCoords] = useState<google.maps.LatLngLiteral | null>(null);
-  const [destinoCoords, setDestinoCoords] = useState<google.maps.LatLngLiteral | null>(null);
-  const [directions, setDirections] = useState<google.maps.DirectionsResult | null>(null);
   const geocoderRef = useRef<google.maps.Geocoder | null>(null);
   const directionsServiceRef = useRef<google.maps.DirectionsService | null>(null);
 
-  // Geocodificar origen y destino una sola vez al cargar
+  const [origenCoords, setOrigenCoords] = useState<google.maps.LatLngLiteral | null>(null);
+  const [destinoCoords, setDestinoCoords] = useState<google.maps.LatLngLiteral | null>(null);
+  const [directions, setDirections] = useState<google.maps.DirectionsResult | null>(null);
+
+  const contenedorEstilo = {
+    width: "100%",
+    height: altura,
+    borderRadius: "1rem",
+  };
+
+  // Geocodificar origen y destino una sola vez
   useEffect(() => {
     if (!isLoaded || !origen || !destino) return;
 
     geocoderRef.current = new google.maps.Geocoder();
 
-    const geocodificar = (direccion: string, callback: (coords: google.maps.LatLngLiteral) => void) => {
+    const geocodificar = (
+      direccion: string,
+      callback: (coords: google.maps.LatLngLiteral) => void
+    ) => {
       geocoderRef.current!.geocode(
         { address: `${direccion}, Argentina` },
         (results, status) => {
@@ -83,7 +89,7 @@ export default function MapaTILA({
     geocodificar(destino, setDestinoCoords);
   }, [isLoaded, origen, destino]);
 
-  // Calcular ruta solo en modo chofer — no necesario para el cliente
+  // Calcular ruta solo en modo chofer
   useEffect(() => {
     if (!isLoaded || !paradaActivaDireccion || !lat || !lng) return;
     if (soloLectura) return;
@@ -104,38 +110,62 @@ export default function MapaTILA({
         }
       }
     );
-  }, [isLoaded, paradaActivaDireccion, lat, lng]);
+  }, [isLoaded, paradaActivaDireccion, lat, lng, soloLectura]);
 
   // Actualizar marcador del chofer sin recargar el mapa
+  // Usa useCallback para poder llamarlo tanto desde useEffect como desde onLoad
+  const actualizarMarcadorChofer = useCallback(
+    (mapa: google.maps.Map) => {
+      if (!lat || !lng) return;
+
+      if (!choferMarkerRef.current) {
+        choferMarkerRef.current = new google.maps.Marker({
+          map: mapa,
+          icon: {
+            path: google.maps.SymbolPath.FORWARD_CLOSED_ARROW,
+            scale: 7,
+            fillColor: "#facc15",
+            fillOpacity: 1,
+            strokeColor: "#000000",
+            strokeWeight: 2,
+          },
+          title: "Chofer",
+          zIndex: 10,
+        });
+      }
+
+      choferMarkerRef.current.setPosition({ lat, lng });
+    },
+    [lat, lng]
+  );
+
+  // Cuando el mapa carga, crear marcador inmediatamente si ya hay coords
+  const onMapLoad = useCallback(
+    (mapa: google.maps.Map) => {
+      mapRef.current = mapa;
+      actualizarMarcadorChofer(mapa);
+    },
+    [actualizarMarcadorChofer]
+  );
+
+  // Cuando cambian lat/lng después de que el mapa ya cargó
   useEffect(() => {
-    if (!isLoaded || !lat || !lng || !mapRef.current) return;
+    if (!mapRef.current || !lat || !lng) return;
+    actualizarMarcadorChofer(mapRef.current);
+  }, [lat, lng, actualizarMarcadorChofer]);
 
-    if (!choferMarkerRef.current) {
-      choferMarkerRef.current = new google.maps.Marker({
-        map: mapRef.current,
-        icon: {
-          path: google.maps.SymbolPath.FORWARD_CLOSED_ARROW,
-          scale: 7,
-          fillColor: "#facc15",
-          fillOpacity: 1,
-          strokeColor: "#000000",
-          strokeWeight: 2,
-        },
-        title: "Chofer",
-        zIndex: 10,
-      });
-    }
-
-    choferMarkerRef.current.setPosition({ lat, lng });
-  }, [isLoaded, lat, lng]);
-
-  const onMapLoad = (map: google.maps.Map) => {
-    mapRef.current = map;
-  };
+  // Centrar el mapa en el chofer cuando cambia posición (solo si hay coords)
+  useEffect(() => {
+    if (!mapRef.current || !lat || !lng) return;
+    mapRef.current.panTo({ lat, lng });
+  }, [lat, lng]);
 
   if (loadError) {
     return (
-      <div className="w-full h-[420px] bg-zinc-900 border border-zinc-700 rounded-2xl flex items-center justify-center">
+      <div
+        style={{ height: altura }}
+        className="w-full bg-zinc-900 border border-zinc-700 rounded-2xl flex items-center justify-center"
+      >
         <p className="text-zinc-500 text-sm">Error al cargar el mapa</p>
       </div>
     );
@@ -143,7 +173,10 @@ export default function MapaTILA({
 
   if (!isLoaded) {
     return (
-      <div className="w-full h-[420px] bg-zinc-900 border border-zinc-700 rounded-2xl flex items-center justify-center">
+      <div
+        style={{ height: altura }}
+        className="w-full bg-zinc-900 border border-zinc-700 rounded-2xl flex items-center justify-center"
+      >
         <p className="text-yellow-400 font-black animate-pulse">Cargando mapa...</p>
       </div>
     );
@@ -210,7 +243,7 @@ export default function MapaTILA({
         />
       )}
 
-      {/* Ruta hacia parada activa */}
+      {/* Ruta hacia parada activa — solo modo chofer */}
       {directions && (
         <DirectionsRenderer
           directions={directions}
