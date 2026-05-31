@@ -22,7 +22,6 @@ const tiposCarga = [
 const calcularKmAutomatico = (origen: string, destino: string) => {
   const o = origen.toLowerCase();
   const d = destino.toLowerCase();
-
   if (o.includes("rosario") && d.includes("cordoba")) return 400;
   if (o.includes("cordoba") && d.includes("rosario")) return 400;
   if (o.includes("buenos aires") && d.includes("santa fe")) return 475;
@@ -31,7 +30,6 @@ const calcularKmAutomatico = (origen: string, destino: string) => {
   if (o.includes("corrientes") && d.includes("pilar")) return 900;
   if (o.includes("san isidro") && d.includes("mar azul")) return 420;
   if (o.includes("mar azul") && d.includes("san isidro")) return 420;
-
   return 0;
 };
 
@@ -58,11 +56,7 @@ export default function PublicarPage() {
 
   const precioCombustible = 2500;
 
-  const calcularValores = (
-    kilometros: number,
-    litrosPorKm: number,
-    minimo: number
-  ) => {
+  const calcularValores = (kilometros: number, litrosPorKm: number, minimo: number) => {
     const baseCalculada = kilometros * litrosPorKm * precioCombustible;
     const base = Math.max(Math.round(baseCalculada), minimo);
     const cliente = Math.round(base * 1.075);
@@ -75,11 +69,9 @@ export default function PublicarPage() {
     const calcularDistancia = async () => {
       if (!origen || !destino) return;
 
-      // Construir array de puntos: origen + paradas válidas + destino
       const paradasValidas = paradasIntermedias.filter((p) => p.trim() !== "");
       const puntos = [origen, ...paradasValidas, destino];
 
-      // Si solo hay origen y destino, calcular directo como antes
       if (puntos.length === 2) {
         try {
           const response = await fetch(
@@ -87,18 +79,13 @@ export default function PublicarPage() {
           );
           const data = await response.json();
           setKm(String(data.km || calcularKmAutomatico(origen, destino)));
-        } catch (error) {
-          console.log(error);
+        } catch {
           setKm(String(calcularKmAutomatico(origen, destino)));
         }
         return;
       }
 
-      // Multietapa: calcular cada tramo en paralelo
-      const tramos = puntos.slice(0, -1).map((punto, i) => ({
-        desde: punto,
-        hasta: puntos[i + 1],
-      }));
+      const tramos = puntos.slice(0, -1).map((punto, i) => ({ desde: punto, hasta: puntos[i + 1] }));
 
       const resultados = await Promise.all(
         tramos.map(async ({ desde, hasta }) => {
@@ -107,22 +94,15 @@ export default function PublicarPage() {
               `/api/distancia?origen=${encodeURIComponent(desde)}&destino=${encodeURIComponent(hasta)}`
             );
             const data = await response.json();
-
             if (data.km && data.km > 0) return data.km;
-
-            const fallback = calcularKmAutomatico(desde, hasta);
-            if (fallback > 0) return fallback;
-
-            console.warn(`Sin distancia para tramo: ${desde} → ${hasta}`);
-            return 0;
-          } catch (error) {
-            console.warn(`Error calculando tramo ${desde} → ${hasta}:`, error);
+            return calcularKmAutomatico(desde, hasta);
+          } catch {
             return calcularKmAutomatico(desde, hasta);
           }
         })
       );
 
-      const totalKm = resultados.reduce((acc, km) => acc + km, 0);
+      const totalKm = resultados.reduce((acc, k) => acc + k, 0);
       setKm(String(totalKm > 0 ? totalKm : 0));
     };
 
@@ -135,44 +115,25 @@ export default function PublicarPage() {
 
   const calcularTarifa = () => {
     if (!vehiculo || !tipoCarga || !km) {
-      setPrecioBase(0);
-      setPrecioCliente(0);
-      setPagoChofer(0);
-      setComisionPlataforma(0);
+      setPrecioBase(0); setPrecioCliente(0); setPagoChofer(0); setComisionPlataforma(0);
       return;
     }
-
     const kilometros = Number(km);
-
     if (!kilometros || kilometros <= 0) {
-      setPrecioBase(0);
-      setPrecioCliente(0);
-      setPagoChofer(0);
-      setComisionPlataforma(0);
+      setPrecioBase(0); setPrecioCliente(0); setPagoChofer(0); setComisionPlataforma(0);
       return;
     }
-
     const vehiculoSeleccionado = vehiculos.find((v) => v.nombre === vehiculo);
     const cargaSeleccionada = tiposCarga.find((c) => c.nombre === tipoCarga);
-
     if (!vehiculoSeleccionado || !cargaSeleccionada) return;
-
-    const litrosPorKm =
-      vehiculoSeleccionado.litrosKm + cargaSeleccionada.extraLitros;
-
-    const valores = calcularValores(
-      kilometros,
-      litrosPorKm,
-      vehiculoSeleccionado.minimo
-    );
-
+    const litrosPorKm = vehiculoSeleccionado.litrosKm + cargaSeleccionada.extraLitros;
+    const valores = calcularValores(kilometros, litrosPorKm, vehiculoSeleccionado.minimo);
     setPrecioBase(valores.base);
     setPrecioCliente(valores.cliente);
     setPagoChofer(valores.chofer);
     setComisionPlataforma(valores.comision);
   };
 
-  // Paradas intermedias — handlers
   const agregarParada = () => {
     if (paradasIntermedias.length >= MAX_PARADAS) return;
     setParadasIntermedias([...paradasIntermedias, ""]);
@@ -188,6 +149,7 @@ export default function PublicarPage() {
     setParadasIntermedias(paradasIntermedias.filter((_, i) => i !== index));
   };
 
+  // ─── FUNCIÓN PRINCIPAL ────────────────────────────────────────────────────
   const publicarCarga = async () => {
     if (publicando) return;
 
@@ -197,7 +159,6 @@ export default function PublicarPage() {
     }
 
     const usuarioGuardado = localStorage.getItem("usuario");
-
     if (!usuarioGuardado) {
       alert("Sesión no encontrada. Volvé a iniciar sesión.");
       router.push("/login");
@@ -205,7 +166,6 @@ export default function PublicarPage() {
     }
 
     const usuario = JSON.parse(usuarioGuardado);
-
     const vehiculoSeleccionado = vehiculos.find((v) => v.nombre === vehiculo);
     const cargaSeleccionada = tiposCarga.find((c) => c.nombre === tipoCarga);
 
@@ -214,9 +174,7 @@ export default function PublicarPage() {
       return;
     }
 
-    const litrosPorKm =
-      vehiculoSeleccionado.litrosKm + cargaSeleccionada.extraLitros;
-
+    const litrosPorKm = vehiculoSeleccionado.litrosKm + cargaSeleccionada.extraLitros;
     const kilometros = Number(km || calcularKmAutomatico(origen, destino));
 
     if (!kilometros || kilometros <= 0) {
@@ -226,87 +184,88 @@ export default function PublicarPage() {
 
     setPublicando(true);
 
-    const valoresFinales = calcularValores(
-      kilometros,
-      litrosPorKm,
-      vehiculoSeleccionado.minimo
-    );
+    const valoresFinales = calcularValores(kilometros, litrosPorKm, vehiculoSeleccionado.minimo);
 
-    // Insert principal en cargas
+    // PASO 1: Insert en cargas
     const { data, error } = await supabase
       .from("cargas")
-      .insert([
-        {
-          cliente_id: usuario.id,
-          origen,
-          destino,
-          vehiculo,
-          peso,
-          tipo_carga: tipoCarga,
-          detalles: presentacion,
-          km_estimados: kilometros,
-          litros_por_km: litrosPorKm,
-          precio_base: valoresFinales.base,
-          precio_cliente: valoresFinales.cliente,
-          pago_chofer: valoresFinales.chofer,
-          comision_plataforma: valoresFinales.comision,
-          estado: "pendiente",
-          tracking: false,
-        },
-      ])
+      .insert([{
+        cliente_id: usuario.id,
+        origen,
+        destino,
+        vehiculo,
+        peso,
+        tipo_carga: tipoCarga,
+        detalles: presentacion,
+        km_estimados: kilometros,
+        litros_por_km: litrosPorKm,
+        precio_base: valoresFinales.base,
+        precio_cliente: valoresFinales.cliente,
+        pago_chofer: valoresFinales.chofer,
+        comision_plataforma: valoresFinales.comision,
+        estado: "pendiente",
+        tracking: false,
+      }])
       .select()
       .single();
 
     if (error) {
       console.log(error);
-      alert(error.message);
+      alert("Error publicando carga: " + error.message);
       setPublicando(false);
       return;
     }
 
-    // Insert en paradas_viaje solo si hay paradas intermedias válidas
-    const paradasValidas = paradasIntermedias.filter((p) => p.trim() !== "");
+    // PASO 2: Insert en paradas_viaje si hay paradas intermedias
+    const paradasValidas = paradasIntermedias
+      .map((p) => p.trim())
+      .filter(Boolean);
+
+    alert("Paradas válidas: " + paradasValidas.length);
+    alert("Carga creada ID: " + data.id);
 
     if (paradasValidas.length > 0) {
-      const filas = [
-        // Parada 0 — retiro (origen)
+      const paradasParaInsertar = [
         {
-          carga_id: data.id,
+          carga_id: Number(data.id),
           orden: 0,
           tipo: "retiro",
-          direccion: origen,
+          direccion: origen.trim(),
           estado: "pendiente",
         },
-        // Paradas intermedias
         ...paradasValidas.map((direccion, index) => ({
-          carga_id: data.id,
+          carga_id: Number(data.id),
           orden: index + 1,
-          tipo: "entrega",
-          direccion: direccion.trim(),
+          tipo: "parada",
+          direccion,
           estado: "pendiente",
         })),
-        // Parada final — destino
         {
-          carga_id: data.id,
+          carga_id: Number(data.id),
           orden: paradasValidas.length + 1,
           tipo: "entrega",
-          direccion: destino,
+          direccion: destino.trim(),
           estado: "pendiente",
         },
       ];
 
+      alert("Insertando " + paradasParaInsertar.length + " paradas");
+
       const { error: errorParadas } = await supabase
         .from("paradas_viaje")
-        .insert(filas);
+        .insert(paradasParaInsertar);
 
       if (errorParadas) {
-        // No bloqueante — el viaje se publicó igual
-        console.error("Error insertando paradas_viaje:", errorParadas);
+        alert("Error insertando paradas: " + errorParadas.message);
+        console.error(errorParadas);
+      } else {
+        alert("Paradas insertadas correctamente");
       }
     }
 
+    // PASO 3: Redirigir recién después de insertar todo
     setPublicando(false);
-    localStorage.setItem("viajeActivoId", data.id);
+    localStorage.setItem("viajeActivoId", String(data.id));
     router.push("/panel-cliente");
   };
 
@@ -328,7 +287,6 @@ export default function PublicarPage() {
           className="bg-zinc-900 p-4 rounded-xl"
         />
 
-        {/* Paradas intermedias */}
         {paradasIntermedias.map((parada, index) => (
           <div key={index} className="flex gap-3 items-center">
             <input
@@ -347,7 +305,6 @@ export default function PublicarPage() {
           </div>
         ))}
 
-        {/* Botón agregar parada */}
         {paradasIntermedias.length < MAX_PARADAS && (
           <button
             onClick={agregarParada}
@@ -372,9 +329,7 @@ export default function PublicarPage() {
         >
           <option value="">Seleccionar tipo de vehículo</option>
           {vehiculos.map((v) => (
-            <option key={v.nombre} value={v.nombre}>
-              {v.nombre}
-            </option>
+            <option key={v.nombre} value={v.nombre}>{v.nombre}</option>
           ))}
         </select>
 
@@ -393,9 +348,7 @@ export default function PublicarPage() {
         >
           <option value="">Seleccionar tipo de carga</option>
           {tiposCarga.map((c) => (
-            <option key={c.nombre} value={c.nombre}>
-              {c.nombre}
-            </option>
+            <option key={c.nombre} value={c.nombre}>{c.nombre}</option>
           ))}
         </select>
 
@@ -411,24 +364,20 @@ export default function PublicarPage() {
           <h2 className="text-3xl font-black text-yellow-400 mb-4">
             Tarifa automática
           </h2>
-
           <div className="space-y-3 text-xl">
             <p>
               💰 <strong>Precio final cliente:</strong>{" "}
               ${precioCliente.toLocaleString()}
             </p>
-
             <p className="text-zinc-400">
               📍{" "}
               {paradasIntermedias.filter((p) => p.trim()).length > 0
                 ? `Distancia total por ruta multietapa: ${km || "Calculando..."} km`
                 : `Distancia calculada automáticamente: ${km || "Calculando..."} km`}
             </p>
-
             {paradasIntermedias.filter((p) => p.trim()).length > 0 && (
               <p className="text-zinc-500 text-sm">
-                * Tarifa calculada solo entre origen y destino final.
-                Las paradas intermedias no afectan el precio en esta versión.
+                * Tarifa calculada sumando todos los tramos del recorrido.
               </p>
             )}
           </div>
