@@ -9,12 +9,9 @@ const ESTADOS_VIAJE = [
   "Chofer asignado", "En camino", "Carga retirada",
   "En ruta", "Descarga completada", "Viaje finalizado",
 ];
-
 const ESTADOS_ACTIVOS = [
-  "Chofer asignado", "En camino", "Carga retirada",
-  "En ruta", "Descarga completada",
+  "Chofer asignado", "En camino", "Carga retirada", "En ruta", "Descarga completada",
 ];
-
 const LABELS = ["A", "B", "C", "D", "E", "F"];
 
 const colorEstado = (estado: string) => {
@@ -32,6 +29,7 @@ const colorEstado = (estado: string) => {
 const colorAprobacion = (estado: string) => {
   switch (estado) {
     case "aprobado": return "bg-green-600 text-white";
+    case "activo": return "bg-green-600 text-white";
     case "rechazado": return "bg-red-700 text-white";
     case "suspendido": return "bg-orange-600 text-white";
     default: return "bg-yellow-400 text-black";
@@ -50,17 +48,125 @@ const getEstadoParadaLabel = (estado: string) => {
   return "⬜ Pendiente";
 };
 
-const TarjetaChofer = ({
-  chofer,
-  onActualizarAprobacion,
+const generarPasswordTemporal = () => {
+  const num = Math.floor(100000 + Math.random() * 900000);
+  return `TILA-${num}`;
+};
+
+// ─── Tarjeta usuario unificada ────────────────────────────────────────────────
+
+const TarjetaUsuario = ({
+  usuario,
+  esUnicoAdmin,
+  usuarioActualId,
+  onActualizar,
+  onResetPassword,
+  onEliminar,
+  onRestaurar,
 }: {
-  chofer: any;
-  onActualizarAprobacion: (id: string, estado: string) => void;
-}) => (
+  usuario: any;
+  esUnicoAdmin: boolean;
+  usuarioActualId: string;
+  onActualizar: (id: string, campo: string, valor: string) => void;
+  onResetPassword: (id: string, nombre: string) => void;
+  onEliminar: (id: string, nombre: string, esAdmin: boolean) => void;
+  onRestaurar: (id: string) => void;
+}) => {
+  const [editando, setEditando] = useState(false);
+  const [nombre, setNombre] = useState(usuario.nombre || "");
+  const [email, setEmail] = useState(usuario.email || "");
+  const [telefono, setTelefono] = useState(usuario.telefono || "");
+  const [dni, setDni] = useState(usuario.dni || "");
+
+  const guardarEdicion = async () => {
+    const { error } = await supabase
+      .from("usuarios")
+      .update({ nombre, email, telefono, dni })
+      .eq("id", usuario.id);
+    if (error) { alert("Error al guardar: " + error.message); return; }
+    setEditando(false);
+  };
+
+  const estaEliminado = usuario.eliminado === true;
+  const esSelf = usuario.id === usuarioActualId;
+
+  return (
+    <div className={`border rounded-2xl p-5 ${estaEliminado ? "border-red-900 bg-red-950/20 opacity-60" : "border-zinc-800 bg-black"}`}>
+      <div className="flex items-center justify-between mb-3 gap-2 flex-wrap">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className={`px-2 py-1 rounded-lg text-xs font-black ${
+            usuario.rol === "admin" ? "bg-purple-600 text-white" :
+            usuario.rol === "chofer" ? "bg-blue-600 text-white" :
+            "bg-zinc-600 text-white"
+          }`}>{usuario.rol?.toUpperCase()}</span>
+          <span className={`px-2 py-1 rounded-lg text-xs font-black ${colorAprobacion(usuario.estado_aprobacion || "pendiente")}`}>
+            {(usuario.estado_aprobacion || "pendiente").toUpperCase()}
+          </span>
+          {estaEliminado && <span className="px-2 py-1 rounded-lg text-xs font-black bg-red-700 text-white">ELIMINADO</span>}
+        </div>
+        <button onClick={() => setEditando(!editando)} className="text-xs text-zinc-400 hover:text-yellow-400 font-black">
+          {editando ? "✕ Cancelar" : "✏️ Editar"}
+        </button>
+      </div>
+
+      {editando ? (
+        <div className="space-y-2 mb-4">
+          <input value={nombre} onChange={e => setNombre(e.target.value)} placeholder="Nombre" className="w-full bg-zinc-900 border border-zinc-700 text-white p-2 rounded-xl text-sm" />
+          <input value={email} onChange={e => setEmail(e.target.value)} placeholder="Email" className="w-full bg-zinc-900 border border-zinc-700 text-white p-2 rounded-xl text-sm" />
+          <input value={telefono} onChange={e => setTelefono(e.target.value)} placeholder="Teléfono" className="w-full bg-zinc-900 border border-zinc-700 text-white p-2 rounded-xl text-sm" />
+          <input value={dni} onChange={e => setDni(e.target.value)} placeholder="DNI" className="w-full bg-zinc-900 border border-zinc-700 text-white p-2 rounded-xl text-sm" />
+          <button onClick={guardarEdicion} className="w-full bg-yellow-400 text-black font-black py-2 rounded-xl text-sm">💾 Guardar cambios</button>
+        </div>
+      ) : (
+        <div className="space-y-1 text-sm mb-4">
+          <p className="text-yellow-400 font-black text-base">{usuario.nombre || "Sin nombre"}</p>
+          <p>📧 {usuario.email || "Sin email"}</p>
+          {usuario.vehiculo && <p>🚛 {usuario.vehiculo}</p>}
+          {usuario.telefono && <p>📞 {usuario.telefono}</p>}
+          {usuario.dni && <p>🪪 DNI: {usuario.dni}</p>}
+          <p className="text-zinc-500 text-xs">ID: {usuario.id?.slice(0, 8)}</p>
+        </div>
+      )}
+
+      {!estaEliminado && (
+        <div className="grid grid-cols-2 gap-2">
+          {/* Acciones por rol */}
+          {usuario.rol === "chofer" && <>
+            <button onClick={() => onActualizar(usuario.id, "estado_aprobacion", "aprobado")} className="bg-green-700 text-white font-black py-2 rounded-xl text-xs">✅ Aprobar</button>
+            <button onClick={() => onActualizar(usuario.id, "estado_aprobacion", "rechazado")} className="bg-red-700 text-white font-black py-2 rounded-xl text-xs">❌ Rechazar</button>
+            <button onClick={() => onActualizar(usuario.id, "estado_aprobacion", "suspendido")} className="bg-orange-600 text-white font-black py-2 rounded-xl text-xs">⛔ Suspender</button>
+            <button onClick={() => onActualizar(usuario.id, "estado_aprobacion", "pendiente")} className="bg-zinc-600 text-white font-black py-2 rounded-xl text-xs">🔄 Reactivar</button>
+          </>}
+
+          {usuario.rol === "cliente" && <>
+            <button onClick={() => onActualizar(usuario.id, "estado_aprobacion", "activo")} className="bg-green-700 text-white font-black py-2 rounded-xl text-xs">✅ Activar</button>
+            <button onClick={() => onActualizar(usuario.id, "estado_aprobacion", "suspendido")} className="bg-orange-600 text-white font-black py-2 rounded-xl text-xs">⛔ Suspender</button>
+          </>}
+
+          {/* Reset password — todos */}
+          <button onClick={() => onResetPassword(usuario.id, usuario.nombre || "usuario")} className="bg-blue-700 text-white font-black py-2 rounded-xl text-xs col-span-2">🔑 Resetear contraseña</button>
+
+          {/* Eliminar — no admin único, no self */}
+          {!(usuario.rol === "admin" && esUnicoAdmin) && !esSelf && (
+            <button onClick={() => onEliminar(usuario.id, usuario.nombre || "usuario", usuario.rol === "admin")} className="bg-red-900 text-white font-black py-2 rounded-xl text-xs col-span-2">🗑️ Marcar como eliminado</button>
+          )}
+        </div>
+      )}
+
+      {estaEliminado && (
+        <button onClick={() => onRestaurar(usuario.id)} className="w-full bg-zinc-700 text-white font-black py-2 rounded-xl text-xs">♻️ Restaurar usuario</button>
+      )}
+    </div>
+  );
+};
+
+// ─── TarjetaChofer para sección aprobación ───────────────────────────────────
+
+const TarjetaChofer = ({ chofer, onActualizarAprobacion }: { chofer: any; onActualizarAprobacion: (id: string, estado: string) => void }) => (
   <div className="bg-black border border-zinc-800 rounded-2xl p-5">
     <div className="flex items-center justify-between mb-3 gap-3 flex-wrap">
       <h3 className="text-xl font-black text-yellow-400">{chofer.nombre || "Chofer"}</h3>
-      <div className="flex gap-2">
+      <div className="flex gap-2 flex-wrap">
         <span className={`px-3 py-1 rounded-xl text-sm font-black ${chofer.online ? "bg-green-500 text-black" : "bg-red-600 text-white"}`}>
           {chofer.online ? "ONLINE" : "OFFLINE"}
         </span>
@@ -71,12 +177,9 @@ const TarjetaChofer = ({
     </div>
     <div className="space-y-1 text-sm mb-4">
       <p>🚛 <strong>Vehículo:</strong> {chofer.vehiculo || "Sin dato"}</p>
-      <p>🪪 <strong>Patente:</strong> {chofer.patente || "Sin dato"}</p>
       <p>📞 <strong>Teléfono:</strong> {chofer.telefono || "Sin dato"}</p>
       <p>📧 <strong>Email:</strong> {chofer.email || "Sin dato"}</p>
       <p>🪪 <strong>DNI:</strong> {chofer.dni || "Sin dato"}</p>
-      <p>📄 <strong>Licencia:</strong> {chofer.licencia || "Sin dato"}</p>
-      <p>🛡️ <strong>Seguro:</strong> {chofer.seguro_vehiculo || "Sin dato"}</p>
     </div>
     <div className="grid grid-cols-2 gap-2">
       <button onClick={() => onActualizarAprobacion(chofer.id, "aprobado")} className="bg-green-600 text-white font-black py-2 rounded-xl text-sm">✅ Aprobar</button>
@@ -91,46 +194,30 @@ const TarjetaCliente = ({ cliente }: { cliente: any }) => (
   <div className="bg-black border border-zinc-800 rounded-2xl p-5">
     <h3 className="text-xl font-black text-purple-400 mb-3">{cliente.nombre || "Cliente"}</h3>
     <div className="space-y-1 text-sm">
-      <p>📧 <strong>Email:</strong> {cliente.email || "Sin dato"}</p>
-      <p>📞 <strong>Teléfono:</strong> {cliente.telefono || "Sin dato"}</p>
-      <p>🪪 <strong>DNI:</strong> {cliente.dni || "Sin dato"}</p>
-      <p>📅 <strong>Registro:</strong> {cliente.created_at?.slice(0, 10) || "Sin dato"}</p>
+      <p>📧 {cliente.email || "Sin dato"}</p>
+      <p>📞 {cliente.telefono || "Sin dato"}</p>
+      <p>🪪 DNI: {cliente.dni || "Sin dato"}</p>
+      <p>📅 {cliente.created_at?.slice(0, 10) || "Sin dato"}</p>
     </div>
   </div>
 );
 
-const TarjetaViaje = ({
-  carga,
-  paradas,
-  onAbrirCliente,
-  onAbrirChofer,
-  onAsignarChofer,
-  onEliminarViaje,
-  onActualizarEstado,
-}: {
-  carga: any;
-  paradas: any[];
-  onAbrirCliente: (id: string) => void;
-  onAbrirChofer: (id: string) => void;
-  onAsignarChofer: (id: string) => void;
-  onEliminarViaje: (id: string) => void;
+const TarjetaViaje = ({ carga, paradas, onAbrirCliente, onAbrirChofer, onAsignarChofer, onEliminarViaje, onActualizarEstado }: {
+  carga: any; paradas: any[];
+  onAbrirCliente: (id: string) => void; onAbrirChofer: (id: string) => void;
+  onAsignarChofer: (id: string) => void; onEliminarViaje: (id: string) => void;
   onActualizarEstado: (id: string, estado: string) => void;
 }) => (
   <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-5 shadow-xl">
     <div className="flex flex-col gap-3 mb-5">
       <div className="flex items-center justify-between gap-3 flex-wrap">
-        <h3 className="text-2xl font-black text-yellow-400">
-          {carga.origen} → {carga.destino}
-        </h3>
-        <span className={`px-3 py-2 rounded-2xl font-black text-sm ${colorEstado(carga.estado)}`}>
-          {carga.estado || "Pendiente"}
-        </span>
+        <h3 className="text-2xl font-black text-yellow-400">{carga.origen} → {carga.destino}</h3>
+        <span className={`px-3 py-2 rounded-2xl font-black text-sm ${colorEstado(carga.estado)}`}>{carga.estado || "Pendiente"}</span>
       </div>
       <p className="text-zinc-500 text-sm">ID: {String(carga.id).slice(0, 8)} · {carga.created_at?.slice(0, 10)}</p>
     </div>
 
-    {/* Ruta multietapa si hay paradas */}
-    {paradas.length > 0 ? (
+    {paradas.length > 0 && (
       <div className="bg-zinc-800 rounded-2xl p-4 mb-4">
         <p className="text-zinc-400 text-xs font-black mb-2">RUTA DEL VIAJE</p>
         <div className="space-y-2">
@@ -138,11 +225,8 @@ const TarjetaViaje = ({
             <div key={parada.id} className="flex items-center gap-2">
               <span className={`w-7 h-7 rounded-full flex items-center justify-center font-black text-xs flex-shrink-0 ${
                 parada.estado === "completada" ? "bg-green-500 text-white" :
-                parada.estado === "en_curso" ? "bg-yellow-400 text-black" :
-                "bg-zinc-600 text-zinc-300"
-              }`}>
-                {LABELS[index] || index}
-              </span>
+                parada.estado === "en_curso" ? "bg-yellow-400 text-black" : "bg-zinc-600 text-zinc-300"
+              }`}>{LABELS[index] || index}</span>
               <div className="flex-1 min-w-0">
                 <p className="text-xs text-zinc-400 font-black">{getTipoParadaLabel(parada.tipo)}</p>
                 <p className="text-sm text-white truncate">{parada.direccion}</p>
@@ -152,23 +236,18 @@ const TarjetaViaje = ({
           ))}
         </div>
       </div>
-    ) : null}
+    )}
 
     <div className="grid grid-cols-1 gap-2 text-sm mb-5">
       <p>🚛 <strong>Vehículo:</strong> {carga.vehiculo || "Sin dato"}</p>
       <p>📍 <strong>Distancia:</strong> {carga.km_estimados ? `${carga.km_estimados} km` : "Sin calcular"}</p>
-      <p>⚖️ <strong>Peso:</strong> {carga.peso || "Sin dato"}</p>
       <p>💰 <strong>Cliente paga:</strong> ${Number(carga.precio_cliente || 0).toLocaleString()}</p>
       <p>🚛 <strong>Chofer cobra:</strong> ${Number(carga.pago_chofer || 0).toLocaleString()}</p>
       <p className="text-green-400 font-black">🏦 <strong>Comisión:</strong> ${Number(carga.comision_plataforma || 0).toLocaleString()}</p>
-      <p>👨‍✈️ <strong>Chofer:</strong> {carga.chofer_id || "Sin asignar"}</p>
       <p>📡 <strong>Tracking:</strong> {carga.tracking ? "Activo" : "Inactivo"}</p>
-      <p>📍 <strong>GPS:</strong> {carga.lat && carga.lng ? `${carga.lat}, ${carga.lng}` : "Sin GPS"}</p>
       {carga.lat && carga.lng && (
         <a href={`https://www.google.com/maps?q=${carga.lat},${carga.lng}`} target="_blank" rel="noreferrer"
-          className="bg-green-700 text-white font-black py-3 rounded-2xl text-center block mt-2">
-          Abrir GPS en mapa
-        </a>
+          className="bg-green-700 text-white font-black py-3 rounded-2xl text-center block mt-2">Abrir GPS en mapa</a>
       )}
     </div>
 
@@ -178,7 +257,6 @@ const TarjetaViaje = ({
       <button onClick={() => onAsignarChofer(carga.id)} className="bg-blue-600 text-white font-black py-3 rounded-2xl">Asignar</button>
       <button onClick={() => onEliminarViaje(carga.id)} className="bg-red-900 text-white font-black py-3 rounded-2xl">Eliminar</button>
     </div>
-
     <div className="grid grid-cols-2 gap-2 mt-3">
       {ESTADOS_VIAJE.map((estado) => (
         <button key={estado} onClick={() => onActualizarEstado(carga.id, estado)}
@@ -190,6 +268,8 @@ const TarjetaViaje = ({
   </div>
 );
 
+// ─── Componente principal ─────────────────────────────────────────────────────
+
 export default function AdminPage() {
   const { autorizado } = useProtegerRuta("admin");
 
@@ -197,19 +277,22 @@ export default function AdminPage() {
   const [paradasPorCarga, setParadasPorCarga] = useState<Record<string, any[]>>({});
   const [choferes, setChoferes] = useState<any[]>([]);
   const [clientes, setClientes] = useState<any[]>([]);
+  const [todosUsuarios, setTodosUsuarios] = useState<any[]>([]);
   const [cargando, setCargando] = useState(true);
+  const [busqueda, setBusqueda] = useState("");
+  const [filtroRol, setFiltroRol] = useState("todos");
+  const [mostrarEliminados, setMostrarEliminados] = useState(false);
+
+  const usuarioActual = typeof window !== "undefined" ? JSON.parse(localStorage.getItem("usuario") || "{}") : {};
 
   const cargarViajes = useCallback(async () => {
     const { data, error } = await supabase.from("cargas").select("*").order("created_at", { ascending: false });
     if (error) { console.error("Error cargando viajes:", error); return; }
     const cargasData = data || [];
     setCargas(cargasData);
-
-    // Cargar paradas para todas las cargas
     if (cargasData.length > 0) {
       const ids = cargasData.map((c: any) => c.id);
-      const { data: dataParadas } = await supabase
-        .from("paradas_viaje").select("*").in("carga_id", ids).order("orden", { ascending: true });
+      const { data: dataParadas } = await supabase.from("paradas_viaje").select("*").in("carga_id", ids).order("orden", { ascending: true });
       if (dataParadas) {
         const agrupadas: Record<string, any[]> = {};
         dataParadas.forEach((p: any) => {
@@ -222,61 +305,105 @@ export default function AdminPage() {
     }
   }, []);
 
-  const cargarChoferes = useCallback(async () => {
-    const { data, error } = await supabase.from("usuarios").select("*").eq("rol", "chofer").order("created_at", { ascending: false });
-    if (error) { console.error("Error cargando choferes:", error); return; }
-    setChoferes(data || []);
-  }, []);
-
-  const cargarClientes = useCallback(async () => {
-    const { data, error } = await supabase.from("usuarios").select("*").eq("rol", "cliente").order("created_at", { ascending: false });
-    if (error) { console.error("Error cargando clientes:", error); return; }
-    setClientes(data || []);
+  const cargarUsuarios = useCallback(async () => {
+    const { data, error } = await supabase.from("usuarios").select("*").order("created_at", { ascending: false });
+    if (error) { console.error("Error cargando usuarios:", error); return; }
+    const todos = data || [];
+    setTodosUsuarios(todos);
+    setChoferes(todos.filter((u: any) => u.rol === "chofer" && !u.eliminado));
+    setClientes(todos.filter((u: any) => u.rol === "cliente" && !u.eliminado));
   }, []);
 
   useEffect(() => {
-    const iniciarAdmin = async () => {
+    const iniciar = async () => {
       setCargando(true);
-      try { await Promise.all([cargarViajes(), cargarChoferes(), cargarClientes()]); }
-      catch (error) { console.error("Error iniciando admin:", error); }
+      try { await Promise.all([cargarViajes(), cargarUsuarios()]); }
+      catch (e) { console.error(e); }
       finally { setCargando(false); }
     };
-    iniciarAdmin();
+    iniciar();
 
-    const channel = supabase.channel("admin-central-operativa-realtime")
-      .on("postgres_changes", { event: "*", schema: "public", table: "cargas" }, async () => { await cargarViajes(); })
-      .on("postgres_changes", { event: "*", schema: "public", table: "usuarios" }, async () => { await cargarChoferes(); await cargarClientes(); })
-      .on("postgres_changes", { event: "*", schema: "public", table: "paradas_viaje" }, async () => { await cargarViajes(); })
+    const channel = supabase.channel("admin-realtime")
+      .on("postgres_changes", { event: "*", schema: "public", table: "cargas" }, () => cargarViajes())
+      .on("postgres_changes", { event: "*", schema: "public", table: "usuarios" }, () => cargarUsuarios())
+      .on("postgres_changes", { event: "*", schema: "public", table: "paradas_viaje" }, () => cargarViajes())
       .subscribe();
 
-    const intervalo = setInterval(() => { cargarViajes(); cargarChoferes(); cargarClientes(); }, 5000);
+    const intervalo = setInterval(() => { cargarViajes(); cargarUsuarios(); }, 5000);
     return () => { supabase.removeChannel(channel); clearInterval(intervalo); };
-  }, [cargarViajes, cargarChoferes, cargarClientes]);
+  }, [cargarViajes, cargarUsuarios]);
 
   const pendientes = useMemo(() => cargas.filter((c) => !c.estado || c.estado.toLowerCase() === "pendiente"), [cargas]);
   const activos = useMemo(() => cargas.filter((c) => ESTADOS_ACTIVOS.includes(c.estado)), [cargas]);
   const finalizados = useMemo(() => cargas.filter((c) => c.estado === "Viaje finalizado"), [cargas]);
   const choferesOnline = useMemo(() => choferes.filter((c) => c.online === true), [choferes]);
-  const gpsActivos = useMemo(() => cargas.filter((c) => c.lat && c.lng && c.estado !== "Viaje finalizado" && ESTADOS_ACTIVOS.includes(c.estado)), [cargas]);
+  const gpsActivos = useMemo(() => cargas.filter((c) => c.lat && c.lng && ESTADOS_ACTIVOS.includes(c.estado)), [cargas]);
   const primerGpsActivo = gpsActivos[0];
 
+  const adminCount = useMemo(() => todosUsuarios.filter((u) => u.rol === "admin" && !u.eliminado).length, [todosUsuarios]);
+
+  const usuariosFiltrados = useMemo(() => {
+    return todosUsuarios.filter((u) => {
+      if (!mostrarEliminados && u.eliminado) return false;
+      if (filtroRol !== "todos" && u.rol !== filtroRol) return false;
+      if (busqueda) {
+        const q = busqueda.toLowerCase();
+        return (u.nombre || "").toLowerCase().includes(q) ||
+          (u.email || "").toLowerCase().includes(q) ||
+          (u.telefono || "").toLowerCase().includes(q) ||
+          (u.dni || "").toLowerCase().includes(q) ||
+          (u.rol || "").toLowerCase().includes(q);
+      }
+      return true;
+    });
+  }, [todosUsuarios, busqueda, filtroRol, mostrarEliminados]);
+
+  const actualizarCampoUsuario = async (id: string, campo: string, valor: string) => {
+    const { error } = await supabase.from("usuarios").update({ [campo]: valor }).eq("id", id);
+    if (error) { alert("Error: " + error.message); return; }
+    await cargarUsuarios();
+  };
+
+  const resetearPassword = async (id: string, nombre: string) => {
+    const nuevaPassword = generarPasswordTemporal();
+    const ok = confirm(`¿Resetear contraseña de ${nombre}?\n\nLa nueva contraseña temporal será:\n${nuevaPassword}\n\nAnotala antes de confirmar.`);
+    if (!ok) return;
+    const { error } = await supabase.from("usuarios").update({ password: nuevaPassword }).eq("id", id);
+    if (error) { alert("Error al resetear: " + error.message); return; }
+    alert(`✅ Contraseña reseteada correctamente.\n\nNueva contraseña temporal:\n${nuevaPassword}\n\nCompartila con el usuario.`);
+    await cargarUsuarios();
+  };
+
+  const marcarEliminado = async (id: string, nombre: string, esAdmin: boolean) => {
+    if (esAdmin && adminCount <= 1) { alert("No podés eliminar al único administrador."); return; }
+    const ok = confirm(`¿Marcar como eliminado a "${nombre}"?\n\nEl usuario no podrá ingresar al sistema. Esta acción se puede revertir desde Admin.`);
+    if (!ok) return;
+    const { error } = await supabase.from("usuarios").update({ eliminado: true }).eq("id", id);
+    if (error) { alert("Error: " + error.message); return; }
+    await cargarUsuarios();
+  };
+
+  const restaurarUsuario = async (id: string) => {
+    const { error } = await supabase.from("usuarios").update({ eliminado: false }).eq("id", id);
+    if (error) { alert("Error: " + error.message); return; }
+    await cargarUsuarios();
+  };
+
   const actualizarAprobacionChofer = async (id: string, estado: string) => {
-    const { error } = await supabase.from("usuarios").update({ estado_aprobacion: estado }).eq("id", id);
-    if (error) { console.error(error); alert("Error al actualizar chofer"); return; }
-    await cargarChoferes();
+    await actualizarCampoUsuario(id, "estado_aprobacion", estado);
   };
 
   const actualizarEstado = async (id: string, estado: string) => {
     const updateData: any = { estado };
     if (estado === "Viaje finalizado") updateData.tracking = false;
     const { error } = await supabase.from("cargas").update(updateData).eq("id", id);
-    if (error) { console.error(error); alert("Error al actualizar estado"); return; }
+    if (error) { alert("Error: " + error.message); return; }
     await cargarViajes();
   };
 
   const asignarChofer = async (id: string) => {
     const { error } = await supabase.from("cargas").update({ estado: "Chofer asignado", chofer_id: "chofer_demo", tracking: true }).eq("id", id);
-    if (error) { console.error(error); alert("Error al asignar chofer"); return; }
+    if (error) { alert("Error: " + error.message); return; }
     await cargarViajes();
   };
 
@@ -284,7 +411,7 @@ export default function AdminPage() {
     const ok = confirm("¿Eliminar este viaje?");
     if (!ok) return;
     const { error } = await supabase.from("cargas").delete().eq("id", id);
-    if (error) { console.error(error); alert("Error al eliminar viaje"); return; }
+    if (error) { alert("Error: " + error.message); return; }
     await cargarViajes();
   };
 
@@ -309,18 +436,61 @@ export default function AdminPage() {
         <div className="bg-zinc-900 border border-green-400 rounded-3xl p-6"><p className="text-zinc-400">Activos</p><h2 className="text-6xl font-black text-green-400">{activos.length}</h2></div>
         <div className="bg-zinc-900 border border-red-400 rounded-3xl p-6"><p className="text-zinc-400">Finalizados</p><h2 className="text-6xl font-black text-red-400">{finalizados.length}</h2></div>
         <div className="bg-zinc-900 border border-blue-400 rounded-3xl p-6"><p className="text-zinc-400">Choferes online</p><h2 className="text-6xl font-black text-blue-400">{choferesOnline.length}</h2></div>
-        <div className="bg-zinc-900 border border-purple-400 rounded-3xl p-6"><p className="text-zinc-400">Clientes</p><h2 className="text-6xl font-black text-purple-400">{clientes.length}</h2></div>
+        <div className="bg-zinc-900 border border-purple-400 rounded-3xl p-6"><p className="text-zinc-400">Usuarios</p><h2 className="text-6xl font-black text-purple-400">{todosUsuarios.filter(u => !u.eliminado).length}</h2></div>
+      </section>
+
+      {/* Gestión de usuarios */}
+      <section className="bg-zinc-900 border border-yellow-400 rounded-3xl p-6 mb-8">
+        <h2 className="text-3xl font-black text-yellow-400 mb-2">Gestión de Usuarios</h2>
+        <p className="text-zinc-500 text-sm mb-5">Administrá clientes, choferes y administradores.</p>
+
+        {/* Filtros */}
+        <div className="flex flex-col md:flex-row gap-3 mb-6">
+          <input
+            type="text"
+            placeholder="Buscar por nombre, email, teléfono, DNI o rol..."
+            value={busqueda}
+            onChange={(e) => setBusqueda(e.target.value)}
+            className="flex-1 bg-zinc-800 border border-zinc-700 text-white p-3 rounded-xl text-sm"
+          />
+          <select value={filtroRol} onChange={(e) => setFiltroRol(e.target.value)} className="bg-zinc-800 border border-zinc-700 text-white p-3 rounded-xl text-sm">
+            <option value="todos">Todos los roles</option>
+            <option value="cliente">Clientes</option>
+            <option value="chofer">Choferes</option>
+            <option value="admin">Admins</option>
+          </select>
+          <button onClick={() => setMostrarEliminados(!mostrarEliminados)}
+            className={`px-4 py-3 rounded-xl font-black text-sm ${mostrarEliminados ? "bg-red-700 text-white" : "bg-zinc-700 text-zinc-400"}`}>
+            {mostrarEliminados ? "👁️ Ocultando eliminados" : "👁️ Ver eliminados"}
+          </button>
+        </div>
+
+        <p className="text-zinc-500 text-xs mb-4">{usuariosFiltrados.length} usuario{usuariosFiltrados.length !== 1 ? "s" : ""} encontrado{usuariosFiltrados.length !== 1 ? "s" : ""}</p>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+          {usuariosFiltrados.length === 0 ? <p className="text-zinc-500">No hay usuarios que coincidan.</p> :
+            usuariosFiltrados.map((usuario) => (
+              <TarjetaUsuario
+                key={usuario.id}
+                usuario={usuario}
+                esUnicoAdmin={adminCount <= 1}
+                usuarioActualId={usuarioActual?.id || ""}
+                onActualizar={actualizarCampoUsuario}
+                onResetPassword={resetearPassword}
+                onEliminar={marcarEliminado}
+                onRestaurar={restaurarUsuario}
+              />
+            ))}
+        </div>
       </section>
 
       {/* Gestión de choferes */}
       <section className="bg-zinc-900 border border-green-400 rounded-3xl p-6 mb-8">
-        <h2 className="text-3xl font-black text-green-400 mb-2">Gestión de Choferes</h2>
-        <p className="text-zinc-500 text-sm mb-6">Aprobar, rechazar o suspender choferes para acceso a la plataforma.</p>
+        <h2 className="text-3xl font-black text-green-400 mb-2">Aprobación de Choferes</h2>
+        <p className="text-zinc-500 text-sm mb-6">Control de acceso a la plataforma para choferes.</p>
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
           {choferes.length === 0 ? <p className="text-zinc-500">No hay choferes registrados.</p> :
-            choferes.map((chofer) => (
-              <TarjetaChofer key={chofer.id} chofer={chofer} onActualizarAprobacion={actualizarAprobacionChofer} />
-            ))}
+            choferes.map((chofer) => <TarjetaChofer key={chofer.id} chofer={chofer} onActualizarAprobacion={actualizarAprobacionChofer} />)}
         </div>
       </section>
 
@@ -337,23 +507,20 @@ export default function AdminPage() {
       <section className="bg-zinc-900 border border-yellow-400 rounded-3xl p-6 mb-8">
         <h2 className="text-3xl font-black text-yellow-400 mb-4">Mapa Global Operativo</h2>
         <div className="rounded-3xl overflow-hidden border-2 border-yellow-400 mb-6">
-          <iframe title="Mapa global operativo TILA"
+          <iframe title="Mapa TILA"
             src={`https://www.google.com/maps?q=${encodeURIComponent(primerGpsActivo ? `${primerGpsActivo.lat},${primerGpsActivo.lng}` : "Argentina")}&output=embed`}
             width="100%" height="420" loading="lazy" />
         </div>
-        <h3 className="text-2xl font-black text-green-400 mb-4">GPS activos en tiempo real</h3>
+        <h3 className="text-2xl font-black text-green-400 mb-4">GPS activos</h3>
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-          {gpsActivos.length === 0 ? <p className="text-zinc-500">No hay unidades con GPS activo todavía.</p> :
+          {gpsActivos.length === 0 ? <p className="text-zinc-500">Sin GPS activos.</p> :
             gpsActivos.map((carga) => (
               <div key={carga.id} className="bg-black border border-zinc-800 rounded-2xl p-5">
                 <h4 className="text-xl font-black text-yellow-400 mb-2">{carga.origen} → {carga.destino}</h4>
-                <p className="text-sm">🚛 <strong>Vehículo:</strong> {carga.vehiculo || "Sin dato"}</p>
-                <p className="text-sm">📦 <strong>Estado:</strong> {carga.estado}</p>
-                <p className="text-sm">📍 <strong>GPS:</strong> {carga.lat}, {carga.lng}</p>
+                <p className="text-sm">📦 {carga.estado}</p>
+                <p className="text-sm">📍 {carga.lat}, {carga.lng}</p>
                 <a href={`https://www.google.com/maps?q=${carga.lat},${carga.lng}`} target="_blank" rel="noreferrer"
-                  className="block bg-green-700 hover:bg-green-600 text-white font-black text-center py-3 rounded-2xl mt-4">
-                  Abrir ubicación
-                </a>
+                  className="block bg-green-700 text-white font-black text-center py-3 rounded-2xl mt-4">Abrir ubicación</a>
               </div>
             ))}
         </div>
