@@ -54,6 +54,28 @@ const generarPasswordTemporal = () => {
   return `TILA-${num}`;
 };
 
+const tiempoRelativo = (iso: string | null | undefined) => {
+  if (!iso) return null;
+  const diff = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+  if (diff < 30) return { texto: "🟢 Online", color: "text-green-400" };
+  if (diff < 120) return { texto: "🟡 Conectado", color: "text-yellow-400" };
+  return { texto: "🔴 Posible pérdida de señal", color: "text-red-400" };
+};
+
+const colorBateria = (nivel: number | null) => {
+  if (nivel === null) return "text-zinc-500";
+  if (nivel < 20) return "text-red-400";
+  if (nivel < 50) return "text-yellow-400";
+  return "text-green-400";
+};
+
+const emojiBateria = (nivel: number | null) => {
+  if (nivel === null) return "🔋";
+  if (nivel < 20) return "🔴";
+  if (nivel < 50) return "🟡";
+  return "🟢";
+};
+
 // ─── Tarjeta usuario unificada ────────────────────────────────────────────────
 
 const TarjetaUsuario = ({
@@ -203,12 +225,14 @@ const TarjetaCliente = ({ cliente }: { cliente: any }) => (
   </div>
 );
 
-const TarjetaViaje = ({ carga, paradas, onAbrirCliente, onAbrirChofer, onAsignarChofer, onEliminarViaje, onActualizarEstado }: {
-  carga: any; paradas: any[];
+const TarjetaViaje = ({ carga, paradas, choferInfo, onAbrirCliente, onAbrirChofer, onAsignarChofer, onEliminarViaje, onActualizarEstado }: {
+  carga: any; paradas: any[]; choferInfo?: any;
   onAbrirCliente: (id: string) => void; onAbrirChofer: (id: string) => void;
   onAsignarChofer: (id: string) => void; onEliminarViaje: (id: string) => void;
   onActualizarEstado: (id: string, estado: string) => void;
-}) => (
+}) => {
+  const senal = tiempoRelativo(choferInfo?.ultima_senal_at);
+  return (
   <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-5 shadow-xl">
     <div className="flex flex-col gap-3 mb-5">
       <div className="flex items-center justify-between gap-3 flex-wrap">
@@ -217,6 +241,43 @@ const TarjetaViaje = ({ carga, paradas, onAbrirCliente, onAbrirChofer, onAsignar
       </div>
       <p className="text-zinc-500 text-sm">ID: {String(carga.id).slice(0, 8)} · {carga.created_at?.slice(0, 10)}</p>
     </div>
+
+    {/* Estado operativo del chofer */}
+    {carga.chofer_id && (
+      <div className="bg-zinc-800 rounded-2xl p-4 mb-4">
+        <p className="text-zinc-400 text-xs font-black mb-3">📡 ESTADO OPERATIVO</p>
+        <div className="grid grid-cols-2 gap-2 text-sm">
+          <div>
+            <p className="text-zinc-500 text-xs">Velocidad</p>
+            <p className="text-yellow-400 font-black">
+              {carga.velocidad_kmh != null ? `${carga.velocidad_kmh} km/h` : "Sin datos"}
+            </p>
+          </div>
+          <div>
+            <p className="text-zinc-500 text-xs">Señal</p>
+            <p className={`font-black text-xs ${senal?.color || "text-zinc-500"}`}>
+              {senal?.texto || "Sin datos"}
+            </p>
+          </div>
+          <div>
+            <p className="text-zinc-500 text-xs">Batería</p>
+            <p className={`font-black ${colorBateria(choferInfo?.bateria_nivel ?? null)}`}>
+              {choferInfo?.bateria_nivel != null
+                ? `${emojiBateria(choferInfo.bateria_nivel)} ${choferInfo.bateria_nivel}%`
+                : "No disponible"}
+            </p>
+          </div>
+          <div>
+            <p className="text-zinc-500 text-xs">Cargando</p>
+            <p className={`font-black text-sm ${choferInfo?.bateria_cargando ? "text-green-400" : "text-zinc-400"}`}>
+              {choferInfo?.bateria_nivel != null
+                ? choferInfo.bateria_cargando ? "⚡ Sí" : "No"
+                : "—"}
+            </p>
+          </div>
+        </div>
+      </div>
+    )}
 
     {paradas.length > 0 && (
       <div className="bg-zinc-800 rounded-2xl p-4 mb-4">
@@ -267,7 +328,8 @@ const TarjetaViaje = ({ carga, paradas, onAbrirCliente, onAbrirChofer, onAsignar
       ))}
     </div>
   </div>
-);
+  );
+};
 
 // ─── Componente principal ─────────────────────────────────────────────────────
 
@@ -276,6 +338,7 @@ export default function AdminPage() {
 
   const [cargas, setCargas] = useState<any[]>([]);
   const [paradasPorCarga, setParadasPorCarga] = useState<Record<string, any[]>>({});
+  const [choferInfoPorCarga, setChoferInfoPorCarga] = useState<Record<string, any>>({});
   const [choferes, setChoferes] = useState<any[]>([]);
   const [clientes, setClientes] = useState<any[]>([]);
   const [todosUsuarios, setTodosUsuarios] = useState<any[]>([]);
@@ -308,7 +371,9 @@ export default function AdminPage() {
     if (error) { console.error("Error cargando viajes:", error); return; }
     const cargasData = data || [];
     setCargas(cargasData);
+
     if (cargasData.length > 0) {
+      // Cargar paradas
       const ids = cargasData.map((c: any) => c.id);
       const { data: dataParadas } = await supabase.from("paradas_viaje").select("*").in("carga_id", ids).order("orden", { ascending: true });
       if (dataParadas) {
@@ -319,6 +384,29 @@ export default function AdminPage() {
           agrupadas[key].push(p);
         });
         setParadasPorCarga(agrupadas);
+      }
+
+      // Cargar info de choferes para viajes activos
+      const choferIds = [...new Set(cargasData
+        .filter((c: any) => c.chofer_id)
+        .map((c: any) => c.chofer_id)
+      )];
+      if (choferIds.length > 0) {
+        const { data: dataChoferes } = await supabase
+          .from("usuarios")
+          .select("id, nombre, bateria_nivel, bateria_cargando, ultima_senal_at")
+          .in("id", choferIds);
+        if (dataChoferes) {
+          const infoMap: Record<string, any> = {};
+          // Mapear por carga_id
+          cargasData.forEach((c: any) => {
+            if (c.chofer_id) {
+              const chofer = dataChoferes.find((ch: any) => ch.id === c.chofer_id);
+              if (chofer) infoMap[String(c.id)] = chofer;
+            }
+          });
+          setChoferInfoPorCarga(infoMap);
+        }
       }
     }
   }, []);
@@ -595,21 +683,21 @@ export default function AdminPage() {
           <h2 className="text-3xl font-black text-yellow-400 mb-4">Pendientes</h2>
           <div className="grid gap-4">
             {pendientes.length === 0 ? <p className="text-zinc-500">Sin pendientes.</p> :
-              pendientes.map((carga) => <TarjetaViaje key={carga.id} carga={carga} paradas={paradasPorCarga[String(carga.id)] || []} onAbrirCliente={abrirCliente} onAbrirChofer={abrirChofer} onAsignarChofer={asignarChofer} onEliminarViaje={eliminarViaje} onActualizarEstado={actualizarEstado} />)}
+              pendientes.map((carga) => <TarjetaViaje key={carga.id} carga={carga} paradas={paradasPorCarga[String(carga.id)] || []} choferInfo={choferInfoPorCarga[String(carga.id)]} onAbrirCliente={abrirCliente} onAbrirChofer={abrirChofer} onAsignarChofer={asignarChofer} onEliminarViaje={eliminarViaje} onActualizarEstado={actualizarEstado} />)}
           </div>
         </div>
         <div>
           <h2 className="text-3xl font-black text-green-400 mb-4">Activos</h2>
           <div className="grid gap-4">
             {activos.length === 0 ? <p className="text-zinc-500">Sin activos.</p> :
-              activos.map((carga) => <TarjetaViaje key={carga.id} carga={carga} paradas={paradasPorCarga[String(carga.id)] || []} onAbrirCliente={abrirCliente} onAbrirChofer={abrirChofer} onAsignarChofer={asignarChofer} onEliminarViaje={eliminarViaje} onActualizarEstado={actualizarEstado} />)}
+              activos.map((carga) => <TarjetaViaje key={carga.id} carga={carga} paradas={paradasPorCarga[String(carga.id)] || []} choferInfo={choferInfoPorCarga[String(carga.id)]} onAbrirCliente={abrirCliente} onAbrirChofer={abrirChofer} onAsignarChofer={asignarChofer} onEliminarViaje={eliminarViaje} onActualizarEstado={actualizarEstado} />)}
           </div>
         </div>
         <div>
           <h2 className="text-3xl font-black text-red-400 mb-4">Finalizados</h2>
           <div className="grid gap-4">
             {finalizados.length === 0 ? <p className="text-zinc-500">Sin finalizados.</p> :
-              finalizados.map((carga) => <TarjetaViaje key={carga.id} carga={carga} paradas={paradasPorCarga[String(carga.id)] || []} onAbrirCliente={abrirCliente} onAbrirChofer={abrirChofer} onAsignarChofer={asignarChofer} onEliminarViaje={eliminarViaje} onActualizarEstado={actualizarEstado} />)}
+              finalizados.map((carga) => <TarjetaViaje key={carga.id} carga={carga} paradas={paradasPorCarga[String(carga.id)] || []} choferInfo={choferInfoPorCarga[String(carga.id)]} onAbrirCliente={abrirCliente} onAbrirChofer={abrirChofer} onAsignarChofer={asignarChofer} onEliminarViaje={eliminarViaje} onActualizarEstado={actualizarEstado} />)}
           </div>
         </div>
       </section>
