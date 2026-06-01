@@ -1,308 +1,279 @@
 "use client";
 
-import Link from "next/link";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { supabase } from "../lib/supabase";
 import { useProtegerRuta } from "../hooks/useProtegerRuta";
-import MapaTILA from "../components/MapaTILA";
-
-type ParadaMapa = {
-  direccion: string;
-  tipo: "retiro" | "entrega" | "parada";
-  estado: "pendiente" | "en_curso" | "completada";
-};
-
-const estadosTracking = [
-  { nombre: "Chofer asignado", color: "bg-green-700 text-white border-green-400" },
-  { nombre: "En camino", color: "bg-yellow-400 text-black border-yellow-400" },
-  { nombre: "Carga retirada", color: "bg-blue-600 text-white border-blue-400" },
-  { nombre: "En ruta", color: "bg-zinc-600 text-white border-zinc-400" },
-  { nombre: "Descarga completada", color: "bg-red-600 text-white border-red-400" },
-  { nombre: "Viaje finalizado", color: "bg-green-500 text-white border-green-300" },
-];
 
 const LABELS = ["A", "B", "C", "D", "E", "F"];
 
-const getTipoParadaLabel = (tipo: string) => {
-  if (tipo === "retiro") return "📦 Carga / Retiro";
-  if (tipo === "entrega") return "🏁 Descarga / Entrega final";
-  return "📍 Parada intermedia";
-};
+export default function PanelChoferPage() {
+  const { autorizado } = useProtegerRuta("chofer");
 
-const getEstadoParadaLabel = (estado: string) => {
-  if (estado === "completada") return "✅ Completada";
-  if (estado === "en_curso") return "🔵 En curso";
-  return "⬜ Pendiente";
-};
+  const [cargas, setCargas] = useState<any[]>([]);
+  const [paradasPorCarga, setParadasPorCarga] = useState<Record<string, any[]>>({});
+  const [indice, setIndice] = useState(0);
+  const [cargando, setCargando] = useState(true);
+  const [online, setOnline] = useState(false);
+  const [vehiculoChofer, setVehiculoChofer] = useState("");
+  const [onlineCargado, setOnlineCargado] = useState(false);
 
-export default function PanelClientePage() {
-  const { autorizado } = useProtegerRuta("cliente");
-
-  const [viaje, setViaje] = useState<any>(null);
-  const [paradas, setParadas] = useState<any[]>([]);
-  const [alerta, setAlerta] = useState<string | null>(null);
-  const [viajeEliminado, setViajeEliminado] = useState(false);
-  const [mapaAmpliado, setMapaAmpliado] = useState(false);
-  const ultimoEstadoRef = useRef<string | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
-  const dispararAlerta = (estado: string) => {
-    setAlerta(estado);
-    if (audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current.currentTime = 0;
-      audioRef.current.play().catch(() => {});
-    }
-    setTimeout(() => {
-      if (audioRef.current) { audioRef.current.pause(); audioRef.current.currentTime = 0; }
-      setAlerta(null);
-    }, 5000);
-  };
-
-  const procesarViaje = (nuevoViaje: any) => {
-    if (!nuevoViaje) return;
-    const nuevoEstado = nuevoViaje.estado || "Chofer asignado";
-    const estadoAnterior = ultimoEstadoRef.current;
-    setViaje(nuevoViaje);
-    if (estadoAnterior && estadoAnterior !== nuevoEstado) dispararAlerta(nuevoEstado);
-    ultimoEstadoRef.current = nuevoEstado;
-  };
-
-  const cargarViaje = async (viajeId: string) => {
-    const { data, error } = await supabase
-      .from("cargas")
-      .select("*")
-      .eq("id", viajeId)
-      .single();
-
-    if (error) {
-      console.log(error);
-      localStorage.removeItem("viajeActivoId");
-      localStorage.removeItem("viajeActivo");
-      setViajeEliminado(true);
-      return;
-    }
-
-    procesarViaje(data);
-  };
-
-  const cargarParadas = async (viajeId: string) => {
-    const { data, error } = await supabase
-      .from("paradas_viaje")
-      .select("*")
-      .eq("carga_id", Number(viajeId))
-      .order("orden", { ascending: true });
-
-    if (!error && data && data.length > 0) {
-      setParadas(data);
-    }
-  };
-
-  const publicarOtroViaje = () => {
-    localStorage.removeItem("viajeActivoId");
-    localStorage.removeItem("viajeActivo");
-    const usuarioGuardado = localStorage.getItem("usuario");
-    const usuario = usuarioGuardado ? JSON.parse(usuarioGuardado) : null;
-    if (!usuario?.id || usuario?.rol !== "cliente") { window.location.href = "/"; return; }
-    window.location.href = "/publicar";
-  };
-
   useEffect(() => {
-    const viajeId = localStorage.getItem("viajeActivoId");
-    if (!viajeId) return;
-
-    cargarViaje(viajeId);
-    cargarParadas(viajeId);
-
-    const canal = supabase
-      .channel("tracking-cliente")
-      .on("postgres_changes", { event: "*", schema: "public", table: "cargas", filter: `id=eq.${viajeId}` },
-        () => { cargarViaje(viajeId); }
-      )
-      .on("postgres_changes", { event: "*", schema: "public", table: "paradas_viaje", filter: `carga_id=eq.${viajeId}` },
-        () => { cargarParadas(viajeId); }
-      )
-      .subscribe();
-
-    const intervalo = setInterval(() => {
-      cargarViaje(viajeId);
-      cargarParadas(viajeId);
-    }, 5000);
-
-    return () => { supabase.removeChannel(canal); clearInterval(intervalo); };
+    const iniciarPanel = async () => {
+      try {
+        const usuarioGuardado = localStorage.getItem("usuario");
+        if (!usuarioGuardado) { setOnlineCargado(true); return; }
+        const usuario = JSON.parse(usuarioGuardado);
+        const { data, error } = await supabase
+          .from("usuarios")
+          .select("online")
+          .eq("id", usuario.id)
+          .single();
+        if (!error && data) setOnline(data.online ?? false);
+      } catch (error) {
+        console.log(error);
+      } finally {
+        setOnlineCargado(true);
+      }
+    };
+    iniciarPanel();
   }, []);
 
-  // Paradas para MapaTILA
-  const paradasParaMapa: ParadaMapa[] = useMemo(() => {
-    if (paradas.length === 0) return [];
-    return paradas.map((p) => ({
-      direccion: p.direccion,
-      tipo: p.tipo as "retiro" | "entrega" | "parada",
-      estado: p.estado as "pendiente" | "en_curso" | "completada",
-    }));
-  }, [paradas]);
+  useEffect(() => {
+    cargarCargas();
+    const canal = supabase
+      .channel("panel-chofer-cargas")
+      .on("postgres_changes", { event: "*", schema: "public", table: "cargas" }, () => cargarCargas())
+      .subscribe();
+    return () => { supabase.removeChannel(canal); detenerAlarma(); };
+  }, []);
+
+  useEffect(() => {
+    if (!onlineCargado) return;
+    actualizarEstadoOnline(online);
+  }, [online, onlineCargado]);
+
+  useEffect(() => {
+    if (online && cargas.length > 0) iniciarAlarma();
+    else detenerAlarma();
+  }, [online, cargas, indice]);
+
+  const cargarCargas = async () => {
+    setCargando(true);
+    try {
+      const usuarioGuardado = localStorage.getItem("usuario");
+      const usuario = usuarioGuardado ? JSON.parse(usuarioGuardado) : null;
+      const vehiculoDelChofer = usuario?.vehiculo || "";
+      setVehiculoChofer(vehiculoDelChofer);
+
+      const { data, error } = await supabase
+        .from("cargas")
+        .select("*")
+        .or("estado.is.null,estado.eq.pendiente")
+        .order("created_at", { ascending: true });
+
+      if (error) { console.log(error); alert("Error al cargar viajes"); setCargando(false); return; }
+
+      const cargasFiltradas = (data || []).filter((carga) => {
+        if (!vehiculoDelChofer) return true;
+        return String(carga.vehiculo || "").toLowerCase().trim() === String(vehiculoDelChofer || "").toLowerCase().trim();
+      });
+
+      setCargas(cargasFiltradas);
+      setIndice(0);
+
+      // Cargar paradas para cada carga filtrada
+      if (cargasFiltradas.length > 0) {
+        const ids = cargasFiltradas.map((c) => c.id);
+        const { data: dataParadas } = await supabase
+          .from("paradas_viaje")
+          .select("*")
+          .in("carga_id", ids)
+          .order("orden", { ascending: true });
+
+        if (dataParadas) {
+          const agrupadas: Record<string, any[]> = {};
+          dataParadas.forEach((p) => {
+            const key = String(p.carga_id);
+            if (!agrupadas[key]) agrupadas[key] = [];
+            agrupadas[key].push(p);
+          });
+          setParadasPorCarga(agrupadas);
+        }
+      }
+
+      setCargando(false);
+    } catch (error) {
+      console.log(error);
+      setCargando(false);
+    }
+  };
+
+  const iniciarAlarma = () => {
+    if (!audioRef.current) return;
+    audioRef.current.currentTime = 0;
+    audioRef.current.play().catch(() => {});
+  };
+
+  const detenerAlarma = () => {
+    if (!audioRef.current) return;
+    audioRef.current.pause();
+    audioRef.current.currentTime = 0;
+  };
+
+  const actualizarEstadoOnline = async (estado: boolean) => {
+    try {
+      const usuarioGuardado = localStorage.getItem("usuario");
+      if (!usuarioGuardado) return;
+      const usuario = JSON.parse(usuarioGuardado);
+      await supabase.from("usuarios").update({ online: estado }).eq("id", usuario.id);
+    } catch (error) { console.log(error); }
+  };
+
+  const rechazarViaje = () => {
+    detenerAlarma();
+    if (indice < cargas.length - 1) setIndice(indice + 1);
+    else { setIndice(0); cargarCargas(); }
+  };
+
+  const aceptarViaje = async () => {
+    if (!online) { alert("Tenés que estar ONLINE para aceptar viajes"); return; }
+    const carga = cargas[indice];
+    if (!carga?.id) return;
+    detenerAlarma();
+    const usuarioGuardado = localStorage.getItem("usuario");
+    const usuario = usuarioGuardado ? JSON.parse(usuarioGuardado) : null;
+    if (!usuario?.id || usuario?.rol !== "chofer") { alert("Sesión inválida: ingresá como chofer"); return; }
+    const { data, error } = await supabase
+      .from("cargas")
+      .update({ estado: "Chofer asignado", chofer_id: usuario.id, tracking: true })
+      .eq("estado", "pendiente")
+      .eq("id", carga.id)
+      .select()
+      .single();
+    if (error) { console.log(error); alert("Este viaje ya fue tomado por otro chofer"); cargarCargas(); return; }
+    localStorage.setItem("viajeActivoId", data.id);
+    window.location.href = "/viaje-activo";
+  };
+
+  const cerrarSesion = () => { localStorage.clear(); window.location.href = "/login"; };
+
+  const getTipoParadaLabel = (tipo: string) => {
+    if (tipo === "retiro") return "📦 Carga / Retiro";
+    if (tipo === "entrega") return "🏁 Descarga / Entrega final";
+    return "📍 Parada intermedia";
+  };
+
+  const cargaActual = online ? cargas[indice] : null;
+  const paradasActuales = cargaActual ? (paradasPorCarga[String(cargaActual.id)] || []) : [];
+
+  const BotonOnline = () => (
+    <div className="w-full flex justify-center mb-6">
+      <button
+        onClick={() => setOnline(!online)}
+        className={`px-8 py-4 rounded-3xl font-black text-xl md:text-2xl shadow-2xl transition ${online ? "bg-green-500 text-black" : "bg-red-600 text-white"}`}
+      >
+        {online ? "🟢 ONLINE" : "🔴 OFFLINE"}
+      </button>
+    </div>
+  );
 
   if (!autorizado) return null;
 
   return (
-    <main className="min-h-screen bg-black text-white p-6">
-      <audio ref={audioRef} src="/sounds/alerta-viaje.mp3" preload="auto" />
+    <main className="min-h-screen bg-black text-white px-4 py-6 flex items-center justify-center">
+      <audio ref={audioRef} src="/sounds/alerta-viaje.mp3" loop preload="auto" />
 
-      {alerta && (
-        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-6">
-          <div className="bg-yellow-400 text-black rounded-3xl p-10 text-center border-4 border-white animate-pulse shadow-2xl max-w-xl">
-            <p className="text-2xl font-black mb-3">🚨 ACTUALIZACIÓN DEL VIAJE 🚨</p>
-            <h2 className="text-5xl font-black">{alerta}</h2>
-          </div>
-        </div>
-      )}
-
-      {mapaAmpliado && viaje && (
-        <div className="fixed inset-0 z-40 bg-black flex flex-col">
-          <div className="flex items-center justify-between p-4 border-b border-zinc-800">
-            <p className="text-yellow-400 font-black text-lg">🗺️ {viaje.origen} → {viaje.destino}</p>
-            <button onClick={() => setMapaAmpliado(false)} className="bg-red-700 hover:bg-red-600 text-white font-black px-5 py-2 rounded-xl">
-              ✕ Cerrar mapa
+      {cargando ? (
+        <section className="w-full max-w-xl text-center">
+          <BotonOnline />
+          <h1 className="text-4xl md:text-5xl font-black text-yellow-400 animate-pulse">Buscando viajes...</h1>
+        </section>
+      ) : !cargaActual ? (
+        <section className="w-full max-w-3xl text-center bg-zinc-900 border border-zinc-800 rounded-3xl p-8 md:p-12">
+          <BotonOnline />
+          <h1 className="text-4xl md:text-6xl font-black text-yellow-400 mb-4">DESPACHO EN TIEMPO REAL</h1>
+          <p className="text-green-400 font-black text-lg md:text-xl mb-4">Vehículo habilitado: {vehiculoChofer || "No definido"}</p>
+          <p className="text-zinc-400 text-lg md:text-2xl mb-8">
+            {online ? "No hay viajes compatibles pendientes por ahora." : "Estás offline. Activá ONLINE para recibir viajes."}
+          </p>
+          <button onClick={() => { window.location.href = "/billetera-chofer"; }} className="w-full max-w-md bg-zinc-800 border-2 border-yellow-400 hover:bg-zinc-700 text-yellow-400 font-black text-xl py-5 rounded-3xl">
+            💼 MI BILLETERA
+          </button>
+          <div className="mt-5 flex justify-center">
+            <button onClick={cerrarSesion} className="bg-red-700 hover:bg-red-600 border border-red-500 text-white font-black text-lg px-8 py-3 rounded-2xl">
+              ⛔ CERRAR SESIÓN
             </button>
           </div>
-          <div className="flex-1">
-            <MapaTILA
-              lat={viaje?.lat} lng={viaje?.lng}
-              origen={viaje.origen} destino={viaje.destino}
-              soloLectura={true} altura="100%"
-              paradas={paradasParaMapa.length >= 2 ? paradasParaMapa : undefined}
-            />
-          </div>
-        </div>
-      )}
-
-      <div className="flex items-center justify-between mb-8">
-        <Link href="/" className="text-zinc-400 hover:text-white">← Volver</Link>
-        <div className="bg-zinc-900 border border-zinc-800 rounded-2xl px-5 py-3">
-          <span className="text-green-400 font-bold animate-pulse">Cliente conectado</span>
-        </div>
-      </div>
-
-      <h1 className="text-5xl font-black text-yellow-400 mb-2">Panel Cliente</h1>
-      <p className="text-zinc-400 mb-8">Seguimiento de tu carga en tiempo real.</p>
-
-      {viajeEliminado ? (
-        <div className="bg-zinc-900 border border-red-600 rounded-3xl p-10 text-center">
-          <h2 className="text-3xl font-black text-red-400 mb-3">Este viaje ya no está disponible</h2>
-          <p className="text-zinc-500 mb-6">El viaje fue cancelado o eliminado. Podés publicar uno nuevo.</p>
-          <Link href="/publicar" className="inline-block bg-yellow-400 hover:bg-yellow-500 text-black font-black px-8 py-4 rounded-2xl">Publicar carga</Link>
-        </div>
-      ) : !viaje ? (
-        <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-10 text-center">
-          <h2 className="text-3xl font-black mb-3">No hay viaje activo cargado</h2>
-          <p className="text-zinc-500 mb-6">Primero el chofer debe aceptar una carga.</p>
-          <Link href="/publicar" className="inline-block bg-yellow-400 hover:bg-yellow-500 text-black font-black px-8 py-4 rounded-2xl">Publicar carga</Link>
-        </div>
-      ) : viaje.estado === "Viaje finalizado" ? (
-        <div className="bg-zinc-900 border-4 border-green-500 rounded-3xl p-10 text-center animate-pulse max-w-3xl mx-auto">
-          <h2 className="text-6xl font-black text-green-400 mb-4">✅ Viaje finalizado</h2>
-          <p className="text-zinc-300 text-2xl mb-3">Tu carga fue entregada correctamente.</p>
-          <h3 className="text-4xl font-black text-yellow-400 mb-8">{viaje.origen} → {viaje.destino}</h3>
-          <div className="grid gap-4 max-w-md mx-auto">
-            <button onClick={publicarOtroViaje} className="bg-yellow-400 hover:bg-yellow-500 text-black font-black px-8 py-4 rounded-2xl">Publicar otro viaje</button>
-            <Link href="/" className="bg-zinc-800 hover:bg-zinc-700 text-white font-black px-8 py-4 rounded-2xl">Volver al inicio</Link>
-          </div>
-        </div>
+        </section>
       ) : (
-        <div className="grid gap-6">
-          <div className="bg-zinc-900 border-2 border-yellow-400 rounded-3xl p-8 animate-pulse">
-            <p className="text-pink-500 font-black text-xl mb-3">🚨 VIAJE EN SEGUIMIENTO 🚨</p>
-            <h2 className="text-4xl font-black text-yellow-400">{viaje.origen} → {viaje.destino}</h2>
-            <p className="text-zinc-400 mt-3">
-              Estado actual: <span className="text-green-400 font-black">{viaje.estado || "Chofer asignado"}</span>
-            </p>
-          </div>
+        <section className="w-full max-w-5xl bg-zinc-900 border-4 border-yellow-400 rounded-3xl p-5 md:p-8 shadow-2xl animate-pulse text-center">
+          <BotonOnline />
+          <p className="text-pink-500 font-black text-xl md:text-2xl mb-4">🚨 NUEVO VIAJE DISPONIBLE 🚨</p>
+          <p className="text-green-400 font-black text-lg md:text-xl mb-6">Vehículo habilitado: {vehiculoChofer || "No definido"}</p>
 
-          {/* Ruta multietapa si hay paradas */}
-          {paradas.length > 0 && (
-            <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-6">
-              <h3 className="text-2xl font-black text-yellow-400 mb-4">Ruta del viaje</h3>
-              <div className="space-y-2">
-                {paradas.map((parada, index) => (
-                  <div key={parada.id} className={`flex items-center gap-3 p-3 rounded-xl border ${
-                    parada.estado === "completada" ? "bg-green-900/30 border-green-700" :
-                    parada.estado === "en_curso" ? "bg-yellow-400/10 border-yellow-400" :
-                    "bg-zinc-800/30 border-zinc-700"
-                  }`}>
+          {/* Ruta multietapa si hay paradas, sino origen → destino */}
+          {paradasActuales.length > 0 ? (
+            <div className="mb-6">
+              <h1 className="text-2xl md:text-4xl font-black text-yellow-400 mb-4 leading-tight">
+                Ruta del viaje
+              </h1>
+              <div className="flex flex-col gap-2 text-left">
+                {paradasActuales.map((parada, index) => (
+                  <div key={parada.id} className="flex items-center gap-3">
                     <span className={`w-8 h-8 rounded-full flex items-center justify-center font-black text-sm flex-shrink-0 ${
-                      parada.estado === "completada" ? "bg-green-500 text-white" :
-                      parada.estado === "en_curso" ? "bg-yellow-400 text-black" :
-                      "bg-zinc-600 text-zinc-400"
+                      parada.tipo === "retiro" ? "bg-blue-600 text-white" :
+                      parada.tipo === "entrega" ? "bg-green-600 text-white" :
+                      "bg-zinc-600 text-white"
                     }`}>
                       {LABELS[index] || index}
                     </span>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-zinc-400 text-xs font-black">{getTipoParadaLabel(parada.tipo)}</p>
-                      <p className={`font-black text-sm truncate ${
-                        parada.estado === "completada" ? "text-green-400" :
-                        parada.estado === "en_curso" ? "text-yellow-400" : "text-zinc-400"
-                      }`}>{parada.direccion}</p>
+                    <div>
+                      <p className="text-xs font-black text-zinc-400">{getTipoParadaLabel(parada.tipo)}</p>
+                      <p className="text-white text-base font-black">{parada.direccion}</p>
                     </div>
-                    <span className="text-xs flex-shrink-0 text-zinc-400">
-                      {getEstadoParadaLabel(parada.estado)}
-                    </span>
+                    {index < paradasActuales.length - 1 && (
+                      <span className="text-yellow-400 ml-auto">↓</span>
+                    )}
                   </div>
                 ))}
               </div>
             </div>
+          ) : (
+            <h1 className="text-3xl md:text-6xl font-black text-yellow-400 mb-6 leading-tight">
+              {cargaActual.origen} → {cargaActual.destino}
+            </h1>
           )}
 
-          <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-8">
-            <h3 className="text-3xl font-black text-yellow-400 mb-4">Datos del viaje</h3>
-            <div className="space-y-3 text-xl">
-              <p>🚚 <strong>Vehículo:</strong> {viaje.vehiculo || "Pendiente"}</p>
-              <p>📍 <strong>Distancia:</strong> {viaje.km_estimados ? `${viaje.km_estimados} km` : "Sin calcular"}</p>
-              <p>⚖️ <strong>Peso:</strong> {viaje.peso || "Pendiente"}</p>
-              <p>📦 <strong>Tipo:</strong> {viaje.tipo_carga || "Pendiente"}</p>
-              <p>💰 <strong>Precio estimado total:</strong> ${Number(viaje.precio_cliente || 0).toLocaleString()}</p>
-              <p>📝 <strong>Detalles:</strong> {viaje.detalles || "Sin detalles"}</p>
-            </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-lg md:text-2xl mb-8 text-left">
+            <p>🚛 <strong>Vehículo:</strong> {cargaActual.vehiculo || "Sin dato"}</p>
+            <p>📍 <strong>Distancia:</strong> {cargaActual.km_estimados ? `${cargaActual.km_estimados} km` : "Sin calcular"}</p>
+            <p>⚖️ <strong>Peso:</strong> {cargaActual.peso || "Sin dato"}</p>
+            <p>💰 <strong>Ganancia chofer:</strong> ${Number(cargaActual.pago_chofer || 0).toLocaleString()}</p>
+            <p>📦 <strong>Tipo:</strong> {cargaActual.tipo_carga || "Sin dato"}</p>
+            <p className="md:col-span-2">📝 <strong>Detalles:</strong> {cargaActual.detalles || "Sin detalles"}</p>
           </div>
 
-          <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-6">
-            <h3 className="text-3xl font-black text-yellow-400 mb-4">Tracking de carga</h3>
-
-            {!viaje?.lat || !viaje?.lng ? (
-              <div className="bg-zinc-800 rounded-2xl p-5 text-center mb-4">
-                <p className="text-zinc-400 text-lg">📡 Esperando ubicación del chofer...</p>
-              </div>
-            ) : null}
-
-            <div className="rounded-2xl overflow-hidden border-2 border-yellow-400 mb-4">
-              <MapaTILA
-                lat={viaje?.lat} lng={viaje?.lng}
-                origen={viaje.origen} destino={viaje.destino}
-                soloLectura={true} altura="360px"
-                paradas={paradasParaMapa.length >= 2 ? paradasParaMapa : undefined}
-              />
-            </div>
-
-            <div className="grid grid-cols-2 gap-3 mb-6">
-              <button onClick={() => setMapaAmpliado(true)} className="bg-zinc-800 hover:bg-zinc-700 border border-yellow-400 text-yellow-400 font-black py-3 rounded-2xl">
-                🔍 Ampliar mapa
-              </button>
-              <button onClick={() => { if (viaje?.lat && viaje?.lng) setViaje({ ...viaje }); }} className="bg-zinc-800 hover:bg-zinc-700 border border-green-400 text-green-400 font-black py-3 rounded-2xl">
-                🚛 Seguir chofer
-              </button>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-4">
-              {estadosTracking.map((estado) => {
-                const activo = viaje.estado === estado.nombre;
-                return (
-                  <div key={estado.nombre} className={`rounded-2xl p-4 text-center font-black border transition ${activo ? `${estado.color} scale-105 animate-pulse` : "bg-black border-zinc-800 text-zinc-500"}`}>
-                    {estado.nombre}
-                  </div>
-                );
-              })}
-            </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+            <button onClick={aceptarViaje} disabled={!online} className={`font-black text-2xl md:text-3xl py-6 rounded-3xl ${online ? "bg-green-600 hover:bg-green-500 text-black" : "bg-zinc-800 text-zinc-500 cursor-not-allowed"}`}>
+              ACEPTAR
+            </button>
+            <button onClick={rechazarViaje} className="bg-red-600 hover:bg-red-500 text-white font-black text-2xl md:text-3xl py-6 rounded-3xl">
+              RECHAZAR
+            </button>
           </div>
-        </div>
+
+          <button onClick={() => { window.location.href = "/billetera-chofer"; }} className="w-full mt-5 bg-zinc-800 border-2 border-yellow-400 hover:bg-zinc-700 text-yellow-400 font-black text-xl md:text-2xl py-5 rounded-3xl">
+            💼 MI BILLETERA
+          </button>
+          <div className="mt-5 flex justify-center">
+            <button onClick={cerrarSesion} className="bg-red-700 hover:bg-red-600 border border-red-500 text-white font-black text-lg px-8 py-3 rounded-2xl">
+              ⛔ CERRAR SESIÓN
+            </button>
+          </div>
+          <p className="text-zinc-500 text-center mt-6">Viaje {indice + 1} de {cargas.length}</p>
+        </section>
       )}
     </main>
   );
