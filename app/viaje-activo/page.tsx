@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { supabase } from "../lib/supabase";
 import { useProtegerRuta } from "../hooks/useProtegerRuta";
 import MapaTILA, { ParadaMapa } from "../components/MapaTILA";
+import ChatAsistencia from "../components/ChatAsistencia";
 
 const estados = [
   { nombre: "En camino", color: "bg-yellow-400 text-black" },
@@ -358,6 +359,19 @@ export default function ViajeActivoPage() {
         <button onClick={abrirMapa} className="w-full bg-green-600 hover:bg-green-500 text-black font-black text-xl md:text-2xl py-5 rounded-3xl mb-6">
           Abrir en Google Maps
         </button>
+
+        {/* Chat de asistencia */}
+        {viaje?.id && (() => {
+          const u = typeof window !== "undefined" ? JSON.parse(localStorage.getItem("usuario") || "{}") : {};
+          return u?.id ? (
+            <ChatAsistencia
+              viajeId={viaje.id}
+              usuarioId={u.id}
+              usuarioRol="chofer"
+              usuarioNombre={u.nombre || "Chofer"}
+            />
+          ) : null;
+        })()}
 
         {/* Botones de estado */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
