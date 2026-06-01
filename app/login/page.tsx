@@ -33,18 +33,37 @@ export default function LoginPage() {
         return;
       }
 
+      // Validación de aprobación para choferes
       if (data.rol === "chofer") {
-        if (data.estado_validacion !== "aprobado") {
-          alert(
-            "Tu cuenta de chofer todavía está pendiente de validación"
-          );
+        const aprobacion = data.estado_aprobacion || "pendiente";
 
+        if (aprobacion === "pendiente") {
+          alert("Tu cuenta de chofer está pendiente de aprobación por el administrador. Te avisaremos cuando esté habilitada.");
+          setLoading(false);
+          return;
+        }
+
+        if (aprobacion === "rechazado") {
+          alert("Tu cuenta de chofer fue rechazada. Contactá al administrador para más información.");
+          setLoading(false);
+          return;
+        }
+
+        if (aprobacion === "suspendido") {
+          alert("Tu cuenta de chofer está suspendida. Contactá al administrador para reactivarla.");
+          setLoading(false);
+          return;
+        }
+
+        // Fallback: validación antigua por estado_validacion
+        if (aprobacion !== "aprobado" && data.estado_validacion !== "aprobado") {
+          alert("Tu cuenta de chofer todavía está pendiente de validación.");
           setLoading(false);
           return;
         }
       }
 
-      // Eliminar campos sensibles antes de guardar en localStorage
+      // Guardar en localStorage sin campos sensibles
       const {
         password: _password,
         cuit_cuil,
@@ -62,13 +81,10 @@ export default function LoginPage() {
 
       if (data.rol === "cliente") {
         router.push("/publicar");
-
       } else if (data.rol === "chofer") {
         router.push("/panel-chofer");
-
       } else if (data.rol === "admin") {
         router.push("/admin");
-
       } else {
         alert("Rol inválido");
       }
@@ -76,7 +92,6 @@ export default function LoginPage() {
     } catch (error) {
       console.log(error);
       alert("Error inesperado");
-
     } finally {
       setLoading(false);
     }
@@ -84,7 +99,6 @@ export default function LoginPage() {
 
   return (
     <main className="min-h-screen bg-black text-white flex items-center justify-center px-4 py-6 overflow-hidden">
-
       <section className="w-full max-w-md flex flex-col items-center text-center">
 
         <img
@@ -93,12 +107,9 @@ export default function LoginPage() {
           className="w-full max-w-[420px] max-h-[42vh] object-contain mb-8 animate-pulse drop-shadow-[0_0_40px_rgba(250,204,21,0.45)]"
         />
 
-        <p className="text-zinc-400 mb-8 text-lg">
-          Accedé a tu cuenta
-        </p>
+        <p className="text-zinc-400 mb-8 text-lg">Accedé a tu cuenta</p>
 
         <div className="w-full space-y-5">
-
           <input
             type="email"
             placeholder="Email"
@@ -126,7 +137,6 @@ export default function LoginPage() {
           >
             {loading ? "INGRESANDO..." : "INGRESAR"}
           </button>
-
         </div>
 
         <p className="text-zinc-500 text-sm tracking-[0.25em] mt-10">
@@ -134,7 +144,6 @@ export default function LoginPage() {
         </p>
 
       </section>
-
     </main>
   );
 }
