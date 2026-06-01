@@ -23,6 +23,29 @@ const estadosTracking = [
 
 const LABELS = ["A", "B", "C", "D", "E", "F"];
 
+const getTipoParadaLabel = (tipo: string) => {
+  if (tipo === "retiro") return "📦 Carga / Retiro";
+  if (tipo === "entrega") return "🏁 Descarga / Entrega final";
+  return "📍 Parada intermedia";
+};
+
+const getEstadoParadaLabel = (estado: string) => {
+  if (estado === "completada") return "✅ Completada";
+  if (estado === "en_curso") return "🔵 En curso";
+  return "⬜ Pendiente";
+};
+
+const formatearFecha = (iso: string | null | undefined) => {
+  if (!iso) return null;
+  const d = new Date(iso);
+  const dia = String(d.getDate()).padStart(2, "0");
+  const mes = String(d.getMonth() + 1).padStart(2, "0");
+  const anio = d.getFullYear();
+  const hora = String(d.getHours()).padStart(2, "0");
+  const min = String(d.getMinutes()).padStart(2, "0");
+  return `${dia}/${mes}/${anio} ${hora}:${min}`;
+};
+
 export default function PanelClientePage() {
   const { autorizado } = useProtegerRuta("cliente");
 
@@ -206,6 +229,26 @@ export default function PanelClientePage() {
             </p>
           </div>
 
+          {/* Horarios del viaje */}
+          {(viaje.created_at || viaje.hora_aceptacion || viaje.hora_inicio || viaje.hora_finalizacion) && (
+            <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-6">
+              <h3 className="text-2xl font-black text-yellow-400 mb-4">🕐 Cronología</h3>
+              <div className="space-y-2 text-sm">
+                {viaje.created_at && <p>📋 <strong>Publicado:</strong> <span className="text-zinc-300">{formatearFecha(viaje.created_at)}</span></p>}
+                {viaje.hora_aceptacion && <p>✅ <strong>Aceptado:</strong> <span className="text-green-400">{formatearFecha(viaje.hora_aceptacion)}</span></p>}
+                {viaje.hora_inicio && <p>🚛 <strong>En camino:</strong> <span className="text-yellow-400">{formatearFecha(viaje.hora_inicio)}</span></p>}
+                {paradas.filter(p => p.completada_at).map((p, i) => (
+                  <p key={p.id}>
+                    {p.tipo === "retiro" ? "📦" : p.tipo === "entrega" ? "🏁" : "📍"}{" "}
+                    <strong>{LABELS[i]} completada:</strong>{" "}
+                    <span className="text-green-400">{formatearFecha(p.completada_at)}</span>
+                  </p>
+                ))}
+                {viaje.hora_finalizacion && <p>🏆 <strong>Finalizado:</strong> <span className="text-green-400">{formatearFecha(viaje.hora_finalizacion)}</span></p>}
+              </div>
+            </div>
+          )}
+
           {/* Ruta multietapa si hay paradas */}
           {paradas.length > 0 && (
             <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-6">
@@ -225,13 +268,16 @@ export default function PanelClientePage() {
                       {LABELS[index] || index}
                     </span>
                     <div className="flex-1 min-w-0">
+                      <p className="text-zinc-400 text-xs font-black">{getTipoParadaLabel(parada.tipo)}</p>
                       <p className={`font-black text-sm truncate ${
                         parada.estado === "completada" ? "text-green-400" :
                         parada.estado === "en_curso" ? "text-yellow-400" : "text-zinc-400"
                       }`}>{parada.direccion}</p>
-                      <p className="text-zinc-500 text-xs capitalize">{parada.tipo}</p>
+                      {parada.completada_at && <p className="text-zinc-500 text-xs">{formatearFecha(parada.completada_at)}</p>}
                     </div>
-                    <span className="text-lg">{parada.estado === "completada" ? "✅" : parada.estado === "en_curso" ? "🔵" : "⬜"}</span>
+                    <span className="text-xs flex-shrink-0 text-zinc-400">
+                      {getEstadoParadaLabel(parada.estado)}
+                    </span>
                   </div>
                 ))}
               </div>
