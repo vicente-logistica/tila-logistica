@@ -57,11 +57,58 @@ export default function ViajeActivoPage() {
   const [ultimaActualizacionGps, setUltimaActualizacionGps] = useState("");
   const [velocidadGps, setVelocidadGps] = useState(0);
 
+  // Batería
+  const [bateriaNivel, setBateriaNivel] = useState<number | null>(null);
+  const [bateriaCargando, setBateriaCargando] = useState<boolean | null>(null);
+  const [bateriaDisponible, setBateriaDisponible] = useState(false);
+
   const [paradas, setParadas] = useState<any[]>([]);
   const [paradaActivaIndex, setParadaActivaIndex] = useState(0);
   const [confirmandoParada, setConfirmandoParada] = useState(false);
 
   const viajeTerminado = useRef(false);
+  const usuarioRef = useRef<any>(null);
+
+  // Cargar usuario del localStorage al montar
+  useEffect(() => {
+    const u = localStorage.getItem("usuario");
+    if (u) usuarioRef.current = JSON.parse(u);
+  }, []);
+
+  // Battery Status API
+  useEffect(() => {
+    const iniciarBateria = async () => {
+      try {
+        if (!("getBattery" in navigator)) { setBateriaDisponible(false); return; }
+        const battery = await (navigator as any).getBattery();
+        setBateriaDisponible(true);
+        setBateriaNivel(Math.round(battery.level * 100));
+        setBateriaCargando(battery.charging);
+
+        battery.addEventListener("levelchange", () => {
+          setBateriaNivel(Math.round(battery.level * 100));
+        });
+        battery.addEventListener("chargingchange", () => {
+          setBateriaCargando(battery.charging);
+        });
+      } catch {
+        setBateriaDisponible(false);
+      }
+    };
+    iniciarBateria();
+  }, []);
+
+  // Guardar batería en usuarios cuando cambia
+  useEffect(() => {
+    if (!bateriaDisponible || bateriaNivel === null || !usuarioRef.current?.id) return;
+    supabase.from("usuarios").update({
+      bateria_nivel: bateriaNivel,
+      bateria_cargando: bateriaCargando,
+      ultima_senal_at: new Date().toISOString(),
+    }).eq("id", usuarioRef.current.id).then(({ error }) => {
+      if (error) console.warn("Error guardando batería:", error);
+    });
+  }, [bateriaNivel, bateriaCargando, bateriaDisponible]);
 
   const paradaActiva = useMemo(() => {
     if (paradas.length > 0) {
@@ -93,6 +140,16 @@ export default function ViajeActivoPage() {
 
   useEffect(() => { cargarViajeActivo(); }, []);
 
+  // Abrir Google Maps automáticamente cuando carga el viaje con paradas
+  const mapaAbierto = useRef(false);
+  useEffect(() => {
+    if (mapaAbierto.current) return;
+    if (!viaje || cargando) return;
+    mapaAbierto.current = true;
+    abrirMapa();
+  }, [viaje, cargando, paradas]);
+
+  // GPS
   useEffect(() => {
     if (!viaje?.id) return;
     if (!navigator.geolocation) { setGpsEstado("GPS no disponible en este dispositivo"); return; }
@@ -109,8 +166,22 @@ export default function ViajeActivoPage() {
         setUltimaActualizacionGps(new Date(actualizado).toLocaleTimeString());
         setVelocidadGps(velocidad);
         setViaje((prev: any) => prev ? { ...prev, lat, lng, velocidad, gps_actualizado: actualizado } : prev);
-        const { error } = await supabase.from("cargas").update({ lat, lng, velocidad, velocidad_kmh: velocidad, gps_actualizado: actualizado, ultima_senal_at: actualizado }).eq("id", viaje.id);
+
+        const { error } = await supabase.from("cargas").update({
+          lat, lng, velocidad,
+          velocidad_kmh: velocidad,
+          gps_actualizado: actualizado,
+        }).eq("id", viaje.id);
         if (error) { console.log("Error guardando GPS:", error); setGpsEstado("Error guardando GPS"); }
+
+        // Actualizar ultima_senal_at en usuarios
+        if (usuarioRef.current?.id) {
+          await supabase.from("usuarios").update({
+            ultima_senal_at: actualizado,
+            bateria_nivel: bateriaNivel,
+            bateria_cargando: bateriaCargando,
+          }).eq("id", usuarioRef.current.id);
+        }
       },
       (error) => {
         if (error.code === 1) setGpsEstado("Permiso GPS denegado");
@@ -121,16 +192,14 @@ export default function ViajeActivoPage() {
       { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 }
     );
     return () => navigator.geolocation.clearWatch(watchId);
-  }, [viaje?.id]);
+  }, [viaje?.id, bateriaNivel, bateriaCargando]);
 
   const cargarViajeActivo = async () => {
     const viajeId = localStorage.getItem("viajeActivoId");
     if (!viajeId) { router.replace("/panel-chofer"); return; }
-
     const { data, error } = await supabase.from("cargas").select("*").eq("id", viajeId).single();
     if (error) { console.log(error); alert("Error al cargar viaje"); return; }
     setViaje(data);
-
     const { data: dataParadas, error: errorParadas } = await supabase
       .from("paradas_viaje").select("*").eq("carga_id", Number(viajeId)).order("orden", { ascending: true });
     if (errorParadas) { console.warn("Error cargando paradas_viaje:", errorParadas); }
@@ -148,7 +217,9 @@ export default function ViajeActivoPage() {
     const paradaActual = paradas[paradaActivaIndex];
     if (!paradaActual?.id) return;
     setConfirmandoParada(true);
-    const { error } = await supabase.from("paradas_viaje").update({ estado: "completada", completada_at: new Date().toISOString() }).eq("id", paradaActual.id);
+    const { error } = await supabase.from("paradas_viaje").update({
+      estado: "completada", completada_at: new Date().toISOString(),
+    }).eq("id", paradaActual.id);
     if (error) { console.error("Error confirmando parada:", error); alert("Error al confirmar parada: " + error.message); setConfirmandoParada(false); return; }
     const nuevasParadas = [...paradas];
     nuevasParadas[paradaActivaIndex] = { ...paradaActual, estado: "completada", completada_at: new Date().toISOString() };
@@ -200,19 +271,27 @@ export default function ViajeActivoPage() {
 
   const abrirMapa = () => {
     if (!viaje) return;
-    let destination = "";
-    if (paradas.length > 0 && paradaActivaIndex < paradas.length) {
-      destination = `${paradas[paradaActivaIndex].direccion}, Argentina`;
-    } else if (paradaActiva) {
-      destination = `${paradaActiva.direccion}, Argentina`;
-    } else {
-      destination = `${viaje.destino}, Argentina`;
-    }
+
     const origin = viaje.lat && viaje.lng ? `${viaje.lat},${viaje.lng}` : "";
-    const url = origin
-      ? `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(origin)}&destination=${encodeURIComponent(destination)}&travelmode=driving`
-      : `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(destination)}&travelmode=driving`;
-    window.open(url, "_blank");
+
+    if (paradas.length > 0 && paradaActivaIndex < paradas.length) {
+      // Multietapa: navegar a la parada activa actual
+      const destination = `${paradas[paradaActivaIndex].direccion}, Argentina`;
+      const url = origin
+        ? `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(origin)}&destination=${encodeURIComponent(destination)}&travelmode=driving`
+        : `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(destination)}&travelmode=driving`;
+      // Nombre único fuerza nueva ventana en celular
+      window.open(url, `_maps_${Date.now()}`);
+    } else {
+      // Viaje simple: destino final
+      const destination = paradaActiva
+        ? `${paradaActiva.direccion}, Argentina`
+        : `${viaje.destino}, Argentina`;
+      const url = origin
+        ? `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(origin)}&destination=${encodeURIComponent(destination)}&travelmode=driving`
+        : `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(destination)}&travelmode=driving`;
+      window.open(url, `_maps_${Date.now()}`);
+    }
   };
 
   if (!autorizado) {
@@ -254,7 +333,41 @@ export default function ViajeActivoPage() {
         <h1 className="text-3xl md:text-5xl font-black text-yellow-400 mb-4 leading-tight">{viaje.origen} → {viaje.destino}</h1>
         <p className="text-xl md:text-2xl mb-4">Estado actual: <span className="text-green-400 font-black">{viaje.estado || "Chofer asignado"}</span></p>
 
-        {/* Horarios del viaje */}
+        {/* Estado del dispositivo */}
+        <div className="bg-zinc-800 rounded-2xl p-4 mb-6">
+          <p className="text-zinc-400 text-xs font-black mb-3">ESTADO DEL DISPOSITIVO</p>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div className="bg-black rounded-xl p-3 text-center">
+              <p className="text-zinc-500 text-xs">GPS</p>
+              <p className={`font-black text-sm mt-1 ${gpsEstado === "GPS activo" ? "text-green-400" : "text-yellow-400"}`}>{gpsEstado}</p>
+            </div>
+            <div className="bg-black rounded-xl p-3 text-center">
+              <p className="text-zinc-500 text-xs">Velocidad</p>
+              <p className="text-yellow-400 font-black text-sm mt-1">{velocidadGps} km/h</p>
+            </div>
+            <div className="bg-black rounded-xl p-3 text-center">
+              <p className="text-zinc-500 text-xs">Batería</p>
+              <p className={`font-black text-sm mt-1 ${
+                !bateriaDisponible ? "text-zinc-500" :
+                bateriaNivel !== null && bateriaNivel < 20 ? "text-red-400" :
+                bateriaNivel !== null && bateriaNivel < 50 ? "text-yellow-400" : "text-green-400"
+              }`}>
+                {!bateriaDisponible ? "No disponible" : bateriaNivel !== null ? `${bateriaNivel}%` : "..."}
+              </p>
+            </div>
+            <div className="bg-black rounded-xl p-3 text-center">
+              <p className="text-zinc-500 text-xs">Cargando</p>
+              <p className={`font-black text-sm mt-1 ${bateriaCargando ? "text-green-400" : "text-zinc-400"}`}>
+                {!bateriaDisponible ? "—" : bateriaCargando === null ? "..." : bateriaCargando ? "⚡ Sí" : "No"}
+              </p>
+            </div>
+          </div>
+          <p className="text-zinc-600 text-xs mt-2 text-right">
+            Última señal: {ultimaActualizacionGps || "Sin datos"}
+          </p>
+        </div>
+
+        {/* Horarios */}
         <div className="bg-zinc-800 rounded-2xl p-4 mb-6">
           <p className="text-zinc-400 text-xs font-black mb-3">CRONOLOGÍA DEL VIAJE</p>
           <div className="space-y-1 text-sm">
@@ -330,22 +443,6 @@ export default function ViajeActivoPage() {
           </div>
         )}
 
-        {/* GPS */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-          <div className="bg-black border border-green-500 rounded-2xl p-4 text-center">
-            <p className="text-zinc-400 text-sm">Estado GPS</p>
-            <p className="text-green-400 font-black mt-2">{gpsEstado}</p>
-          </div>
-          <div className="bg-black border border-yellow-400 rounded-2xl p-4 text-center">
-            <p className="text-zinc-400 text-sm">Velocidad</p>
-            <p className="text-yellow-400 font-black mt-2">{velocidadGps} km/h</p>
-          </div>
-          <div className="bg-black border border-blue-400 rounded-2xl p-4 text-center">
-            <p className="text-zinc-400 text-sm">Última actualización</p>
-            <p className="text-blue-400 font-black mt-2">{ultimaActualizacionGps || "Sin datos"}</p>
-          </div>
-        </div>
-
         {/* Mapa */}
         <div className="rounded-3xl overflow-hidden border-2 border-yellow-400 mb-6">
           <MapaTILA
@@ -360,18 +457,15 @@ export default function ViajeActivoPage() {
           Abrir en Google Maps
         </button>
 
-        {/* Chat de asistencia */}
-        {viaje?.id && (() => {
-          const u = typeof window !== "undefined" ? JSON.parse(localStorage.getItem("usuario") || "{}") : {};
-          return u?.id ? (
-            <ChatAsistencia
-              viajeId={viaje.id}
-              usuarioId={u.id}
-              usuarioRol="chofer"
-              usuarioNombre={u.nombre || "Chofer"}
-            />
-          ) : null;
-        })()}
+        {/* Chat */}
+        {viaje?.id && usuarioRef.current?.id && (
+          <ChatAsistencia
+            viajeId={viaje.id}
+            usuarioId={usuarioRef.current.id}
+            usuarioRol="chofer"
+            usuarioNombre={usuarioRef.current.nombre || "Chofer"}
+          />
+        )}
 
         {/* Botones de estado */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
