@@ -387,21 +387,27 @@ export default function AdminPage() {
       }
 
       // Cargar info de choferes para viajes activos
-      const choferIds = [...new Set(cargasData
-        .filter((c: any) => c.chofer_id)
-        .map((c: any) => c.chofer_id)
+      const choferIds = [...new Set(
+        cargasData
+          .filter((c: any) => c.chofer_id && String(c.chofer_id).length > 10)
+          .map((c: any) => String(c.chofer_id).trim())
       )];
+
       if (choferIds.length > 0) {
-        const { data: dataChoferes } = await supabase
+        const { data: dataChoferes, error: errorChoferes } = await supabase
           .from("usuarios")
           .select("id, nombre, bateria_nivel, bateria_cargando, ultima_senal_at")
           .in("id", choferIds);
-        if (dataChoferes) {
+
+        if (errorChoferes) console.warn("Error cargando choferes:", errorChoferes);
+
+        if (dataChoferes && dataChoferes.length > 0) {
           const infoMap: Record<string, any> = {};
-          // Mapear por carga_id
           cargasData.forEach((c: any) => {
             if (c.chofer_id) {
-              const chofer = dataChoferes.find((ch: any) => ch.id === c.chofer_id);
+              const chofer = dataChoferes.find(
+                (ch: any) => String(ch.id).trim() === String(c.chofer_id).trim()
+              );
               if (chofer) infoMap[String(c.id)] = chofer;
             }
           });
