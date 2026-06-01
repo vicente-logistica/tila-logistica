@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../lib/supabase";
 import { useProtegerRuta } from "../hooks/useProtegerRuta";
 import MapaTILA from "../components/MapaTILA";
+import ChatAsistencia from "../components/ChatAsistencia";
 
 type ParadaMapa = {
   direccion: string;
@@ -153,11 +154,22 @@ export default function PanelClientePage() {
     }));
   }, [paradas]);
 
-  if (!autorizado) return null;
+  const viajeId = typeof window !== "undefined" ? localStorage.getItem("viajeActivoId") : null;
+  const usuarioChat = typeof window !== "undefined" ? JSON.parse(localStorage.getItem("usuario") || "{}") : {};
 
   return (
     <main className="min-h-screen bg-black text-white p-6">
       <audio ref={audioRef} src="/sounds/alerta-viaje.mp3" preload="auto" />
+
+      {/* Chat de asistencia */}
+      {viaje && viajeId && usuarioChat?.id && (
+        <ChatAsistencia
+          viajeId={viajeId}
+          usuarioId={usuarioChat.id}
+          usuarioRol="cliente"
+          usuarioNombre={usuarioChat.nombre || "Cliente"}
+        />
+      )}
 
       {alerta && (
         <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-6">
