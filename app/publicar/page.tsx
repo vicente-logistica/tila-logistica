@@ -221,9 +221,6 @@ export default function PublicarPage() {
       .map((p) => p.trim())
       .filter(Boolean);
 
-    alert("Paradas válidas: " + paradasValidas.length);
-    alert("Carga creada ID: " + data.id);
-
     if (paradasValidas.length > 0) {
       const paradasParaInsertar = [
         {
@@ -249,17 +246,13 @@ export default function PublicarPage() {
         },
       ];
 
-      alert("Insertando " + paradasParaInsertar.length + " paradas");
-
       const { error: errorParadas } = await supabase
         .from("paradas_viaje")
         .insert(paradasParaInsertar);
 
       if (errorParadas) {
-        alert("Error insertando paradas: " + errorParadas.message);
-        console.error(errorParadas);
-      } else {
-        alert("Paradas insertadas correctamente");
+        alert("El viaje se publicó pero hubo un error al guardar las paradas: " + errorParadas.message);
+        console.error("Error insertando paradas_viaje:", errorParadas);
       }
     }
 
