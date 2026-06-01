@@ -47,16 +47,33 @@ const formatearFecha = (iso: string | null | undefined) => {
   return `${dia}/${mes}/${anio} ${hora}:${min}`;
 };
 
+const tiempoRelativo = (iso: string | null | undefined) => {
+  if (!iso) return null;
+  const diff = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+  if (diff < 10) return "hace un momento";
+  if (diff < 60) return `hace ${diff} segundos`;
+  if (diff < 3600) return `hace ${Math.floor(diff / 60)} minutos`;
+  return `hace ${Math.floor(diff / 3600)} horas`;
+};
+
 export default function PanelClientePage() {
   const { autorizado } = useProtegerRuta("cliente");
 
   const [viaje, setViaje] = useState<any>(null);
   const [paradas, setParadas] = useState<any[]>([]);
+  const [choferInfo, setChoferInfo] = useState<any>(null);
   const [alerta, setAlerta] = useState<string | null>(null);
   const [viajeEliminado, setViajeEliminado] = useState(false);
   const [mapaAmpliado, setMapaAmpliado] = useState(false);
+  const [ahora, setAhora] = useState(Date.now());
   const ultimoEstadoRef = useRef<string | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  // Actualizar "hace X segundos" cada 10 segundos
+  useEffect(() => {
+    const t = setInterval(() => setAhora(Date.now()), 10000);
+    return () => clearInterval(t);
+  }, []);
 
   const dispararAlerta = (estado: string) => {
     setAlerta(estado);
@@ -81,12 +98,7 @@ export default function PanelClientePage() {
   };
 
   const cargarViaje = async (viajeId: string) => {
-    const { data, error } = await supabase
-      .from("cargas")
-      .select("*")
-      .eq("id", viajeId)
-      .single();
-
+    const { data, error } = await supabase.from("cargas").select("*").eq("id", viajeId).single();
     if (error) {
       console.log(error);
       localStorage.removeItem("viajeActivoId");
@@ -94,20 +106,23 @@ export default function PanelClientePage() {
       setViajeEliminado(true);
       return;
     }
-
     procesarViaje(data);
+
+    // Cargar info del chofer si está asignado
+    if (data?.chofer_id) {
+      const { data: chofer } = await supabase
+        .from("usuarios")
+        .select("id, nombre, vehiculo, telefono, bateria_nivel, bateria_cargando, ultima_senal_at")
+        .eq("id", data.chofer_id)
+        .single();
+      if (chofer) setChoferInfo(chofer);
+    }
   };
 
   const cargarParadas = async (viajeId: string) => {
     const { data, error } = await supabase
-      .from("paradas_viaje")
-      .select("*")
-      .eq("carga_id", Number(viajeId))
-      .order("orden", { ascending: true });
-
-    if (!error && data && data.length > 0) {
-      setParadas(data);
-    }
+      .from("paradas_viaje").select("*").eq("carga_id", Number(viajeId)).order("orden", { ascending: true });
+    if (!error && data && data.length > 0) setParadas(data);
   };
 
   const publicarOtroViaje = () => {
@@ -126,14 +141,11 @@ export default function PanelClientePage() {
     cargarViaje(viajeId);
     cargarParadas(viajeId);
 
-    const canal = supabase
-      .channel("tracking-cliente")
+    const canal = supabase.channel("tracking-cliente")
       .on("postgres_changes", { event: "*", schema: "public", table: "cargas", filter: `id=eq.${viajeId}` },
-        () => { cargarViaje(viajeId); }
-      )
+        () => { cargarViaje(viajeId); })
       .on("postgres_changes", { event: "*", schema: "public", table: "paradas_viaje", filter: `carga_id=eq.${viajeId}` },
-        () => { cargarParadas(viajeId); }
-      )
+        () => { cargarParadas(viajeId); })
       .subscribe();
 
     const intervalo = setInterval(() => {
@@ -144,7 +156,6 @@ export default function PanelClientePage() {
     return () => { supabase.removeChannel(canal); clearInterval(intervalo); };
   }, []);
 
-  // Paradas para MapaTILA
   const paradasParaMapa: ParadaMapa[] = useMemo(() => {
     if (paradas.length === 0) return [];
     return paradas.map((p) => ({
@@ -157,11 +168,13 @@ export default function PanelClientePage() {
   const viajeId = typeof window !== "undefined" ? localStorage.getItem("viajeActivoId") : null;
   const usuarioChat = typeof window !== "undefined" ? JSON.parse(localStorage.getItem("usuario") || "{}") : {};
 
+  if (!autorizado) return null;
+
   return (
     <main className="min-h-screen bg-black text-white p-6">
       <audio ref={audioRef} src="/sounds/alerta-viaje.mp3" preload="auto" />
 
-      {/* Chat de asistencia */}
+      {/* Chat flotante */}
       {viaje && viajeId && usuarioChat?.id && (
         <ChatAsistencia
           viajeId={viajeId}
@@ -171,6 +184,7 @@ export default function PanelClientePage() {
         />
       )}
 
+      {/* Alerta cambio de estado */}
       {alerta && (
         <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-6">
           <div className="bg-yellow-400 text-black rounded-3xl p-10 text-center border-4 border-white animate-pulse shadow-2xl max-w-xl">
@@ -180,6 +194,7 @@ export default function PanelClientePage() {
         </div>
       )}
 
+      {/* Mapa ampliado */}
       {mapaAmpliado && viaje && (
         <div className="fixed inset-0 z-40 bg-black flex flex-col">
           <div className="flex items-center justify-between p-4 border-b border-zinc-800">
@@ -233,15 +248,50 @@ export default function PanelClientePage() {
         </div>
       ) : (
         <div className="grid gap-6">
+
+          {/* Header viaje */}
           <div className="bg-zinc-900 border-2 border-yellow-400 rounded-3xl p-8 animate-pulse">
             <p className="text-pink-500 font-black text-xl mb-3">🚨 VIAJE EN SEGUIMIENTO 🚨</p>
             <h2 className="text-4xl font-black text-yellow-400">{viaje.origen} → {viaje.destino}</h2>
-            <p className="text-zinc-400 mt-3">
-              Estado actual: <span className="text-green-400 font-black">{viaje.estado || "Chofer asignado"}</span>
-            </p>
+            <p className="text-zinc-400 mt-3">Estado actual: <span className="text-green-400 font-black">{viaje.estado || "Chofer asignado"}</span></p>
           </div>
 
-          {/* Horarios del viaje */}
+          {/* Estado del chofer */}
+          {choferInfo && (
+            <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-6">
+              <h3 className="text-2xl font-black text-yellow-400 mb-4">🚛 Estado del chofer</h3>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                <div className="bg-black rounded-xl p-3 text-center">
+                  <p className="text-zinc-500 text-xs">Chofer</p>
+                  <p className="text-white font-black text-sm mt-1 truncate">{choferInfo.nombre || "Sin nombre"}</p>
+                </div>
+                <div className="bg-black rounded-xl p-3 text-center">
+                  <p className="text-zinc-500 text-xs">Velocidad</p>
+                  <p className="text-yellow-400 font-black text-sm mt-1">
+                    {viaje?.velocidad_kmh != null ? `${viaje.velocidad_kmh} km/h` : "Sin datos"}
+                  </p>
+                </div>
+                <div className="bg-black rounded-xl p-3 text-center">
+                  <p className="text-zinc-500 text-xs">Batería</p>
+                  <p className={`font-black text-sm mt-1 ${
+                    choferInfo.bateria_nivel === null ? "text-zinc-500" :
+                    choferInfo.bateria_nivel < 20 ? "text-red-400" :
+                    choferInfo.bateria_nivel < 50 ? "text-yellow-400" : "text-green-400"
+                  }`}>
+                    {choferInfo.bateria_nivel != null ? `${choferInfo.bateria_nivel}%` : "No disponible"}
+                  </p>
+                </div>
+                <div className="bg-black rounded-xl p-3 text-center">
+                  <p className="text-zinc-500 text-xs">Última señal</p>
+                  <p className="text-blue-400 font-black text-xs mt-1">
+                    {tiempoRelativo(choferInfo.ultima_senal_at) || "Sin datos"}
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Cronología */}
           {(viaje.created_at || viaje.hora_aceptacion || viaje.hora_inicio || viaje.hora_finalizacion) && (
             <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-6">
               <h3 className="text-2xl font-black text-yellow-400 mb-4">🕐 Cronología</h3>
@@ -261,7 +311,7 @@ export default function PanelClientePage() {
             </div>
           )}
 
-          {/* Ruta multietapa si hay paradas */}
+          {/* Ruta multietapa */}
           {paradas.length > 0 && (
             <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-6">
               <h3 className="text-2xl font-black text-yellow-400 mb-4">Ruta del viaje</h3>
@@ -274,11 +324,8 @@ export default function PanelClientePage() {
                   }`}>
                     <span className={`w-8 h-8 rounded-full flex items-center justify-center font-black text-sm flex-shrink-0 ${
                       parada.estado === "completada" ? "bg-green-500 text-white" :
-                      parada.estado === "en_curso" ? "bg-yellow-400 text-black" :
-                      "bg-zinc-600 text-zinc-400"
-                    }`}>
-                      {LABELS[index] || index}
-                    </span>
+                      parada.estado === "en_curso" ? "bg-yellow-400 text-black" : "bg-zinc-600 text-zinc-400"
+                    }`}>{LABELS[index] || index}</span>
                     <div className="flex-1 min-w-0">
                       <p className="text-zinc-400 text-xs font-black">{getTipoParadaLabel(parada.tipo)}</p>
                       <p className={`font-black text-sm truncate ${
@@ -287,15 +334,14 @@ export default function PanelClientePage() {
                       }`}>{parada.direccion}</p>
                       {parada.completada_at && <p className="text-zinc-500 text-xs">{formatearFecha(parada.completada_at)}</p>}
                     </div>
-                    <span className="text-xs flex-shrink-0 text-zinc-400">
-                      {getEstadoParadaLabel(parada.estado)}
-                    </span>
+                    <span className="text-xs flex-shrink-0 text-zinc-400">{getEstadoParadaLabel(parada.estado)}</span>
                   </div>
                 ))}
               </div>
             </div>
           )}
 
+          {/* Datos del viaje */}
           <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-8">
             <h3 className="text-3xl font-black text-yellow-400 mb-4">Datos del viaje</h3>
             <div className="space-y-3 text-xl">
@@ -308,6 +354,7 @@ export default function PanelClientePage() {
             </div>
           </div>
 
+          {/* Mapa y tracking */}
           <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-6">
             <h3 className="text-3xl font-black text-yellow-400 mb-4">Tracking de carga</h3>
 
@@ -346,6 +393,7 @@ export default function PanelClientePage() {
               })}
             </div>
           </div>
+
         </div>
       )}
     </main>
