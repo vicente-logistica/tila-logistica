@@ -158,22 +158,18 @@ export default function MapaTILA({
     );
   }, [isLoaded, paradaActivaDireccion, lat, lng, soloLectura, tieneParadas]);
 
-  // Ruta multietapa A→B→C→D con waypoints
+  // Ruta multietapa A→B→C→D con waypoints — usa direcciones de texto directamente
   useEffect(() => {
-    if (!isLoaded || !tieneParadas || paradasCoords.length < 2) return;
-
-    // Esperar a que todas las coords estén disponibles
-    if (paradasCoords.some((c) => c === null)) return;
+    if (!isLoaded || !tieneParadas) return;
 
     if (!directionsServiceRef.current) {
       directionsServiceRef.current = new google.maps.DirectionsService();
     }
 
-    const validCoords = paradasCoords as google.maps.LatLngLiteral[];
-    const origin = validCoords[0];
-    const destination = validCoords[validCoords.length - 1];
-    const waypoints = validCoords.slice(1, -1).map((coord) => ({
-      location: new google.maps.LatLng(coord.lat, coord.lng),
+    const origin = `${paradas![0].direccion}, Argentina`;
+    const destination = `${paradas![paradas!.length - 1].direccion}, Argentina`;
+    const waypoints = paradas!.slice(1, -1).map((p) => ({
+      location: `${p.direccion}, Argentina`,
       stopover: true,
     }));
 
@@ -189,7 +185,7 @@ export default function MapaTILA({
         if (status === "OK" && result) setDirections(result);
       }
     );
-  }, [isLoaded, tieneParadas, paradasCoords]);
+  }, [isLoaded, tieneParadas, paradas]);
 
   // ─── Marcador del chofer ──────────────────────────────────────────────────
 
