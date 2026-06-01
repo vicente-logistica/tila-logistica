@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "../lib/supabase";
 import BotonCerrarSesion from "../components/BotonCerrarSesion";
 import { useProtegerRuta } from "../hooks/useProtegerRuta";
+import ChatAsistencia from "../components/ChatAsistencia";
 
 const ESTADOS_VIAJE = [
   "Chofer asignado", "En camino", "Carga retirada",
@@ -282,8 +283,25 @@ export default function AdminPage() {
   const [busqueda, setBusqueda] = useState("");
   const [filtroRol, setFiltroRol] = useState("todos");
   const [mostrarEliminados, setMostrarEliminados] = useState(false);
+  const [chatViajeId, setChatViajeId] = useState<string | null>(null);
+  const [mensajesResumen, setMensajesResumen] = useState<Record<string, number>>({});
 
   const usuarioActual = typeof window !== "undefined" ? JSON.parse(localStorage.getItem("usuario") || "{}") : {};
+
+  const cargarResumenMensajes = useCallback(async () => {
+    const { data } = await supabase
+      .from("mensajes_viaje")
+      .select("viaje_id, leido, remitente_id")
+      .eq("leido", false);
+    if (data) {
+      const resumen: Record<string, number> = {};
+      data.forEach((m: any) => {
+        const key = String(m.viaje_id);
+        resumen[key] = (resumen[key] || 0) + 1;
+      });
+      setMensajesResumen(resumen);
+    }
+  }, []);
 
   const cargarViajes = useCallback(async () => {
     const { data, error } = await supabase.from("cargas").select("*").order("created_at", { ascending: false });
@@ -317,7 +335,7 @@ export default function AdminPage() {
   useEffect(() => {
     const iniciar = async () => {
       setCargando(true);
-      try { await Promise.all([cargarViajes(), cargarUsuarios()]); }
+      try { await Promise.all([cargarViajes(), cargarUsuarios(), cargarResumenMensajes()]); }
       catch (e) { console.error(e); }
       finally { setCargando(false); }
     };
@@ -327,11 +345,12 @@ export default function AdminPage() {
       .on("postgres_changes", { event: "*", schema: "public", table: "cargas" }, () => cargarViajes())
       .on("postgres_changes", { event: "*", schema: "public", table: "usuarios" }, () => cargarUsuarios())
       .on("postgres_changes", { event: "*", schema: "public", table: "paradas_viaje" }, () => cargarViajes())
+      .on("postgres_changes", { event: "*", schema: "public", table: "mensajes_viaje" }, () => cargarResumenMensajes())
       .subscribe();
 
-    const intervalo = setInterval(() => { cargarViajes(); cargarUsuarios(); }, 5000);
+    const intervalo = setInterval(() => { cargarViajes(); cargarUsuarios(); cargarResumenMensajes(); }, 5000);
     return () => { supabase.removeChannel(channel); clearInterval(intervalo); };
-  }, [cargarViajes, cargarUsuarios]);
+  }, [cargarViajes, cargarUsuarios, cargarResumenMensajes]);
 
   const pendientes = useMemo(() => cargas.filter((c) => !c.estado || c.estado.toLowerCase() === "pendiente"), [cargas]);
   const activos = useMemo(() => cargas.filter((c) => ESTADOS_ACTIVOS.includes(c.estado)), [cargas]);
@@ -524,6 +543,50 @@ export default function AdminPage() {
               </div>
             ))}
         </div>
+      </section>
+
+      {/* Central de Asistencia */}
+      <section className="bg-zinc-900 border border-blue-400 rounded-3xl p-6 mb-8">
+        <h2 className="text-3xl font-black text-blue-400 mb-2">💬 Central de Asistencia</h2>
+        <p className="text-zinc-500 text-sm mb-6">Chats activos por viaje. Seleccioná un viaje para ver la conversación.</p>
+
+        {activos.length === 0 ? (
+          <p className="text-zinc-500">No hay viajes activos con chat disponible.</p>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+            {activos.map((carga) => {
+              const noLeidos = mensajesResumen[String(carga.id)] || 0;
+              const seleccionado = chatViajeId === String(carga.id);
+              return (
+                <div key={carga.id} className={`rounded-2xl border p-4 cursor-pointer transition ${seleccionado ? "border-blue-400 bg-blue-900/20" : "border-zinc-700 bg-black hover:border-zinc-500"}`}
+                  onClick={() => setChatViajeId(seleccionado ? null : String(carga.id))}>
+                  <div className="flex items-center justify-between mb-2">
+                    <p className="text-yellow-400 font-black text-sm truncate">{carga.origen} → {carga.destino}</p>
+                    {noLeidos > 0 && (
+                      <span className="bg-red-500 text-white text-xs font-black rounded-full w-6 h-6 flex items-center justify-center flex-shrink-0">
+                        {noLeidos}
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-zinc-500 text-xs">{carga.estado}</p>
+                  <p className="text-blue-400 text-xs mt-1">{seleccionado ? "▲ Cerrar chat" : "▼ Ver chat"}</p>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Chat expandido */}
+        {chatViajeId && usuarioActual?.id && (
+          <div className="mt-6 border border-blue-400 rounded-2xl overflow-hidden">
+            <ChatAsistencia
+              viajeId={chatViajeId}
+              usuarioId={usuarioActual.id}
+              usuarioRol="admin"
+              usuarioNombre={usuarioActual.nombre || "Admin"}
+            />
+          </div>
+        )}
       </section>
 
       {/* Viajes */}
