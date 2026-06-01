@@ -16,6 +16,18 @@ const estados = [
 
 const LABELS = ["A", "B", "C", "D", "E", "F"];
 
+const getTipoParadaLabel = (tipo: string) => {
+  if (tipo === "retiro") return "📦 Carga / Retiro";
+  if (tipo === "entrega") return "🏁 Descarga / Entrega final";
+  return "📍 Parada intermedia";
+};
+
+const getEstadoParadaLabel = (estado: string) => {
+  if (estado === "completada") return "✅ Completada";
+  if (estado === "en_curso") return "🔵 En curso";
+  return "⬜ Pendiente";
+};
+
 const esUuidValido = (valor: any) => {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
     String(valor || "")
@@ -437,15 +449,15 @@ export default function ViajeActivoPage() {
                       {LABELS[index] || index}
                     </span>
                     <div className="flex-1 min-w-0">
+                      <p className="text-zinc-400 text-xs font-black">{getTipoParadaLabel(parada.tipo)}</p>
                       <p className={`font-black text-sm truncate ${
                         esActiva ? "text-yellow-400" : esCompletada ? "text-green-400" : "text-zinc-400"
                       }`}>
                         {parada.direccion}
                       </p>
-                      <p className="text-zinc-500 text-xs capitalize">{parada.tipo}</p>
                     </div>
-                    <span className="text-lg flex-shrink-0">
-                      {esCompletada ? "✅" : esActiva ? "🔵" : "⬜"}
+                    <span className="text-xs flex-shrink-0 text-zinc-500">
+                      {getEstadoParadaLabel(esCompletada ? "completada" : esActiva ? "en_curso" : "pendiente")}
                     </span>
                   </div>
                 );
