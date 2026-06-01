@@ -4,7 +4,13 @@ import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../lib/supabase";
 import { useProtegerRuta } from "../hooks/useProtegerRuta";
-import MapaTILA, { ParadaMapa } from "../components/MapaTILA";
+import MapaTILA from "../components/MapaTILA";
+
+type ParadaMapa = {
+  direccion: string;
+  tipo: "retiro" | "entrega" | "parada";
+  estado: "pendiente" | "en_curso" | "completada";
+};
 
 const estadosTracking = [
   { nombre: "Chofer asignado", color: "bg-green-700 text-white border-green-400" },
