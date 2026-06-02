@@ -6,7 +6,7 @@ import { useProtegerRuta } from "../hooks/useProtegerRuta";
 
 const LABELS = ["A", "B", "C", "D", "E", "F"];
 const SOPORTE_WHATSAPP = "5491158689383";
-const SOPORTE_EMAIL = "martinvicente46@gmail.com";
+const SOPORTE_EMAIL = "logisticatila@gmail.com";
 
 export default function PanelChoferPage() {
   const { autorizado } = useProtegerRuta("chofer");
