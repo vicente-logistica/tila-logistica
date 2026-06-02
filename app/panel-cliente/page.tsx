@@ -6,6 +6,7 @@ import { supabase } from "../lib/supabase";
 import { useProtegerRuta } from "../hooks/useProtegerRuta";
 import MapaTILA from "../components/MapaTILA";
 import ChatAsistencia from "../components/ChatAsistencia";
+import BotonCerrarSesion from "../components/BotonCerrarSesion";
 
 type ParadaMapa = {
   direccion: string;
@@ -217,9 +218,7 @@ export default function PanelClientePage() {
           <div className="bg-zinc-900 border border-zinc-800 rounded-2xl px-5 py-3">
             <span className="text-green-400 font-bold animate-pulse">Cliente conectado</span>
           </div>
-          <button onClick={cerrarSesion} className="bg-red-700 hover:bg-red-600 text-white font-black px-4 py-3 rounded-2xl text-sm">
-            ⛔ Salir
-          </button>
+          <BotonCerrarSesion />
         </div>
       </div>
 
