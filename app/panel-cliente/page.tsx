@@ -56,6 +56,10 @@ const tiempoRelativo = (iso: string | null | undefined) => {
   return `hace ${Math.floor(diff / 3600)} horas`;
 };
 
+// ─── Soporte TILA ─────────────────────────────────────────────────────────────
+const SOPORTE_WHATSAPP = "5491158689383";
+const SOPORTE_EMAIL = "martinvicente46@gmail.com";
+
 export default function PanelClientePage() {
   const { autorizado } = useProtegerRuta("cliente");
 
@@ -69,11 +73,15 @@ export default function PanelClientePage() {
   const ultimoEstadoRef = useRef<string | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
-  // Actualizar "hace X segundos" cada 10 segundos
   useEffect(() => {
     const t = setInterval(() => setAhora(Date.now()), 10000);
     return () => clearInterval(t);
   }, []);
+
+  const cerrarSesion = () => {
+    localStorage.clear();
+    window.location.href = "/login";
+  };
 
   const dispararAlerta = (estado: string) => {
     setAlerta(estado);
@@ -107,8 +115,6 @@ export default function PanelClientePage() {
       return;
     }
     procesarViaje(data);
-
-    // Cargar info del chofer si está asignado
     if (data?.chofer_id) {
       const { data: chofer } = await supabase
         .from("usuarios")
@@ -137,34 +143,15 @@ export default function PanelClientePage() {
   useEffect(() => {
     const viajeId = localStorage.getItem("viajeActivoId");
     if (!viajeId) return;
-
     cargarViaje(viajeId);
     cargarParadas(viajeId);
-
     const canal = supabase.channel(`tracking-cliente-${viajeId}`)
-      .on("postgres_changes", {
-        event: "*", schema: "public", table: "cargas",
-        filter: `id=eq.${viajeId}`,
-      }, (payload) => {
-        console.log("Realtime carga actualizada", payload);
-        cargarViaje(viajeId);
-      })
-      .on("postgres_changes", {
-        event: "*", schema: "public", table: "paradas_viaje",
-        filter: `carga_id=eq.${viajeId}`,
-      }, (payload) => {
-        console.log("Realtime parada actualizada", payload);
-        cargarParadas(viajeId);
-      })
-      .subscribe((status) => {
-        console.log("Panel cliente realtime status:", status);
-      });
-
-    const intervalo = setInterval(() => {
-      cargarViaje(viajeId);
-      cargarParadas(viajeId);
-    }, 5000);
-
+      .on("postgres_changes", { event: "*", schema: "public", table: "cargas", filter: `id=eq.${viajeId}` },
+        (payload) => { console.log("Realtime carga actualizada", payload); cargarViaje(viajeId); })
+      .on("postgres_changes", { event: "*", schema: "public", table: "paradas_viaje", filter: `carga_id=eq.${viajeId}` },
+        (payload) => { console.log("Realtime parada actualizada", payload); cargarParadas(viajeId); })
+      .subscribe((status) => { console.log("Panel cliente realtime status:", status); });
+    const intervalo = setInterval(() => { cargarViaje(viajeId); cargarParadas(viajeId); }, 5000);
     return () => { supabase.removeChannel(canal); clearInterval(intervalo); };
   }, []);
 
@@ -216,30 +203,46 @@ export default function PanelClientePage() {
             </button>
           </div>
           <div className="flex-1">
-            <MapaTILA
-              lat={viaje?.lat} lng={viaje?.lng}
-              origen={viaje.origen} destino={viaje.destino}
+            <MapaTILA lat={viaje?.lat} lng={viaje?.lng} origen={viaje.origen} destino={viaje.destino}
               soloLectura={true} altura="100%"
-              paradas={paradasParaMapa.length >= 2 ? paradasParaMapa : undefined}
-            />
+              paradas={paradasParaMapa.length >= 2 ? paradasParaMapa : undefined} />
           </div>
         </div>
       )}
 
+      {/* Header */}
       <div className="flex items-center justify-between mb-8">
         <Link href="/" className="text-zinc-400 hover:text-white">← Volver</Link>
-        <div className="bg-zinc-900 border border-zinc-800 rounded-2xl px-5 py-3">
-          <span className="text-green-400 font-bold animate-pulse">Cliente conectado</span>
+        <div className="flex items-center gap-3">
+          <div className="bg-zinc-900 border border-zinc-800 rounded-2xl px-5 py-3">
+            <span className="text-green-400 font-bold animate-pulse">Cliente conectado</span>
+          </div>
+          <button onClick={cerrarSesion} className="bg-red-700 hover:bg-red-600 text-white font-black px-4 py-3 rounded-2xl text-sm">
+            ⛔ Salir
+          </button>
         </div>
       </div>
 
       <h1 className="text-5xl font-black text-yellow-400 mb-2">Panel Cliente</h1>
       <p className="text-zinc-400 mb-8">Seguimiento de tu carga en tiempo real.</p>
 
+      {/* Soporte TILA */}
+      <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4 mb-8 flex flex-col md:flex-row items-center gap-3">
+        <p className="text-zinc-400 text-sm font-black">🆘 Soporte TILA:</p>
+        <a href={`https://wa.me/${SOPORTE_WHATSAPP}`} target="_blank" rel="noreferrer"
+          className="bg-green-600 hover:bg-green-500 text-white font-black px-4 py-2 rounded-xl text-sm">
+          💬 WhatsApp
+        </a>
+        <a href={`mailto:${SOPORTE_EMAIL}`}
+          className="bg-zinc-700 hover:bg-zinc-600 text-white font-black px-4 py-2 rounded-xl text-sm">
+          📧 {SOPORTE_EMAIL}
+        </a>
+      </div>
+
       {viajeEliminado ? (
         <div className="bg-zinc-900 border border-red-600 rounded-3xl p-10 text-center">
           <h2 className="text-3xl font-black text-red-400 mb-3">Este viaje ya no está disponible</h2>
-          <p className="text-zinc-500 mb-6">El viaje fue cancelado o eliminado. Podés publicar uno nuevo.</p>
+          <p className="text-zinc-500 mb-6">El viaje fue cancelado o eliminado.</p>
           <Link href="/publicar" className="inline-block bg-yellow-400 hover:bg-yellow-500 text-black font-black px-8 py-4 rounded-2xl">Publicar carga</Link>
         </div>
       ) : !viaje ? (
@@ -260,15 +263,12 @@ export default function PanelClientePage() {
         </div>
       ) : (
         <div className="grid gap-6">
-
-          {/* Header viaje */}
           <div className="bg-zinc-900 border-2 border-yellow-400 rounded-3xl p-8 animate-pulse">
             <p className="text-pink-500 font-black text-xl mb-3">🚨 VIAJE EN SEGUIMIENTO 🚨</p>
             <h2 className="text-4xl font-black text-yellow-400">{viaje.origen} → {viaje.destino}</h2>
             <p className="text-zinc-400 mt-3">Estado actual: <span className="text-green-400 font-black">{viaje.estado || "Chofer asignado"}</span></p>
           </div>
 
-          {/* Estado del chofer */}
           {choferInfo && (
             <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-6">
               <h3 className="text-2xl font-black text-yellow-400 mb-4">🚛 Estado del chofer</h3>
@@ -279,9 +279,7 @@ export default function PanelClientePage() {
                 </div>
                 <div className="bg-black rounded-xl p-3 text-center">
                   <p className="text-zinc-500 text-xs">Velocidad</p>
-                  <p className="text-yellow-400 font-black text-sm mt-1">
-                    {viaje?.velocidad_kmh != null ? `${viaje.velocidad_kmh} km/h` : "Sin datos"}
-                  </p>
+                  <p className="text-yellow-400 font-black text-sm mt-1">{viaje?.velocidad_kmh != null ? `${viaje.velocidad_kmh} km/h` : "Sin datos"}</p>
                 </div>
                 <div className="bg-black rounded-xl p-3 text-center">
                   <p className="text-zinc-500 text-xs">Batería</p>
@@ -289,21 +287,16 @@ export default function PanelClientePage() {
                     choferInfo.bateria_nivel === null ? "text-zinc-500" :
                     choferInfo.bateria_nivel < 20 ? "text-red-400" :
                     choferInfo.bateria_nivel < 50 ? "text-yellow-400" : "text-green-400"
-                  }`}>
-                    {choferInfo.bateria_nivel != null ? `${choferInfo.bateria_nivel}%` : "No disponible"}
-                  </p>
+                  }`}>{choferInfo.bateria_nivel != null ? `${choferInfo.bateria_nivel}%` : "No disponible"}</p>
                 </div>
                 <div className="bg-black rounded-xl p-3 text-center">
                   <p className="text-zinc-500 text-xs">Última señal</p>
-                  <p className="text-blue-400 font-black text-xs mt-1">
-                    {tiempoRelativo(choferInfo.ultima_senal_at) || "Sin datos"}
-                  </p>
+                  <p className="text-blue-400 font-black text-xs mt-1">{tiempoRelativo(choferInfo.ultima_senal_at) || "Sin datos"}</p>
                 </div>
               </div>
             </div>
           )}
 
-          {/* Cronología */}
           {(viaje.created_at || viaje.hora_aceptacion || viaje.hora_inicio || viaje.hora_finalizacion) && (
             <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-6">
               <h3 className="text-2xl font-black text-yellow-400 mb-4">🕐 Cronología</h3>
@@ -312,8 +305,7 @@ export default function PanelClientePage() {
                 {viaje.hora_aceptacion && <p>✅ <strong>Aceptado:</strong> <span className="text-green-400">{formatearFecha(viaje.hora_aceptacion)}</span></p>}
                 {viaje.hora_inicio && <p>🚛 <strong>En camino:</strong> <span className="text-yellow-400">{formatearFecha(viaje.hora_inicio)}</span></p>}
                 {paradas.filter(p => p.completada_at).map((p, i) => (
-                  <p key={p.id}>
-                    {p.tipo === "retiro" ? "📦" : p.tipo === "entrega" ? "🏁" : "📍"}{" "}
+                  <p key={p.id}>{p.tipo === "retiro" ? "📦" : p.tipo === "entrega" ? "🏁" : "📍"}{" "}
                     <strong>{LABELS[i]} completada:</strong>{" "}
                     <span className="text-green-400">{formatearFecha(p.completada_at)}</span>
                   </p>
@@ -323,7 +315,6 @@ export default function PanelClientePage() {
             </div>
           )}
 
-          {/* Ruta multietapa */}
           {paradas.length > 0 && (
             <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-6">
               <h3 className="text-2xl font-black text-yellow-400 mb-4">Ruta del viaje</h3>
@@ -331,8 +322,7 @@ export default function PanelClientePage() {
                 {paradas.map((parada, index) => (
                   <div key={parada.id} className={`flex items-center gap-3 p-3 rounded-xl border ${
                     parada.estado === "completada" ? "bg-green-900/30 border-green-700" :
-                    parada.estado === "en_curso" ? "bg-yellow-400/10 border-yellow-400" :
-                    "bg-zinc-800/30 border-zinc-700"
+                    parada.estado === "en_curso" ? "bg-yellow-400/10 border-yellow-400" : "bg-zinc-800/30 border-zinc-700"
                   }`}>
                     <span className={`w-8 h-8 rounded-full flex items-center justify-center font-black text-sm flex-shrink-0 ${
                       parada.estado === "completada" ? "bg-green-500 text-white" :
@@ -353,7 +343,6 @@ export default function PanelClientePage() {
             </div>
           )}
 
-          {/* Datos del viaje */}
           <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-8">
             <h3 className="text-3xl font-black text-yellow-400 mb-4">Datos del viaje</h3>
             <div className="space-y-3 text-xl">
@@ -366,34 +355,22 @@ export default function PanelClientePage() {
             </div>
           </div>
 
-          {/* Mapa y tracking */}
           <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-6">
             <h3 className="text-3xl font-black text-yellow-400 mb-4">Tracking de carga</h3>
-
             {!viaje?.lat || !viaje?.lng ? (
               <div className="bg-zinc-800 rounded-2xl p-5 text-center mb-4">
                 <p className="text-zinc-400 text-lg">📡 Esperando ubicación del chofer...</p>
               </div>
             ) : null}
-
             <div className="rounded-2xl overflow-hidden border-2 border-yellow-400 mb-4">
-              <MapaTILA
-                lat={viaje?.lat} lng={viaje?.lng}
-                origen={viaje.origen} destino={viaje.destino}
+              <MapaTILA lat={viaje?.lat} lng={viaje?.lng} origen={viaje.origen} destino={viaje.destino}
                 soloLectura={true} altura="360px"
-                paradas={paradasParaMapa.length >= 2 ? paradasParaMapa : undefined}
-              />
+                paradas={paradasParaMapa.length >= 2 ? paradasParaMapa : undefined} />
             </div>
-
             <div className="grid grid-cols-2 gap-3 mb-6">
-              <button onClick={() => setMapaAmpliado(true)} className="bg-zinc-800 hover:bg-zinc-700 border border-yellow-400 text-yellow-400 font-black py-3 rounded-2xl">
-                🔍 Ampliar mapa
-              </button>
-              <button onClick={() => { if (viaje?.lat && viaje?.lng) setViaje({ ...viaje }); }} className="bg-zinc-800 hover:bg-zinc-700 border border-green-400 text-green-400 font-black py-3 rounded-2xl">
-                🚛 Seguir chofer
-              </button>
+              <button onClick={() => setMapaAmpliado(true)} className="bg-zinc-800 hover:bg-zinc-700 border border-yellow-400 text-yellow-400 font-black py-3 rounded-2xl">🔍 Ampliar mapa</button>
+              <button onClick={() => { if (viaje?.lat && viaje?.lng) setViaje({ ...viaje }); }} className="bg-zinc-800 hover:bg-zinc-700 border border-green-400 text-green-400 font-black py-3 rounded-2xl">🚛 Seguir chofer</button>
             </div>
-
             <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-4">
               {estadosTracking.map((estado) => {
                 const activo = viaje.estado === estado.nombre;
@@ -405,7 +382,6 @@ export default function PanelClientePage() {
               })}
             </div>
           </div>
-
         </div>
       )}
     </main>
