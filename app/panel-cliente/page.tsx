@@ -141,12 +141,24 @@ export default function PanelClientePage() {
     cargarViaje(viajeId);
     cargarParadas(viajeId);
 
-    const canal = supabase.channel("tracking-cliente")
-      .on("postgres_changes", { event: "*", schema: "public", table: "cargas", filter: `id=eq.${viajeId}` },
-        () => { cargarViaje(viajeId); })
-      .on("postgres_changes", { event: "*", schema: "public", table: "paradas_viaje", filter: `carga_id=eq.${viajeId}` },
-        () => { cargarParadas(viajeId); })
-      .subscribe();
+    const canal = supabase.channel(`tracking-cliente-${viajeId}`)
+      .on("postgres_changes", {
+        event: "*", schema: "public", table: "cargas",
+        filter: `id=eq.${viajeId}`,
+      }, (payload) => {
+        console.log("Realtime carga actualizada", payload);
+        cargarViaje(viajeId);
+      })
+      .on("postgres_changes", {
+        event: "*", schema: "public", table: "paradas_viaje",
+        filter: `carga_id=eq.${viajeId}`,
+      }, (payload) => {
+        console.log("Realtime parada actualizada", payload);
+        cargarParadas(viajeId);
+      })
+      .subscribe((status) => {
+        console.log("Panel cliente realtime status:", status);
+      });
 
     const intervalo = setInterval(() => {
       cargarViaje(viajeId);
