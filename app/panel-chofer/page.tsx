@@ -5,6 +5,8 @@ import { supabase } from "../lib/supabase";
 import { useProtegerRuta } from "../hooks/useProtegerRuta";
 
 const LABELS = ["A", "B", "C", "D", "E", "F"];
+const SOPORTE_WHATSAPP = "5491158689383";
+const SOPORTE_EMAIL = "martinvicente46@gmail.com";
 
 export default function PanelChoferPage() {
   const { autorizado } = useProtegerRuta("chofer");
@@ -83,7 +85,6 @@ export default function PanelChoferPage() {
       setCargas(cargasFiltradas);
       setIndice(0);
 
-      // Cargar paradas para cada carga filtrada
       if (cargasFiltradas.length > 0) {
         const ids = cargasFiltradas.map((c) => c.id);
         const { data: dataParadas } = await supabase
@@ -153,7 +154,7 @@ export default function PanelChoferPage() {
       .select()
       .single();
     if (error) { console.log(error); alert("Este viaje ya fue tomado por otro chofer"); cargarCargas(); return; }
-    localStorage.setItem("viajeActivoId", data.id);
+    localStorage.setItem("viajeActivoId", String(data.id));
     window.location.href = "/viaje-activo";
   };
 
@@ -179,7 +180,29 @@ export default function PanelChoferPage() {
     </div>
   );
 
-  if (!autorizado) return null;
+  const BloquesSoporte = () => (
+    <div className="mt-5 bg-zinc-800 border border-zinc-700 rounded-2xl p-4">
+      <p className="text-zinc-500 text-xs font-black mb-3 text-center">🆘 SOPORTE TILA</p>
+      <div className="flex gap-3 justify-center">
+        <a href={`https://wa.me/${SOPORTE_WHATSAPP}`} target="_blank" rel="noreferrer"
+          className="bg-green-600 hover:bg-green-500 text-white font-black px-4 py-2 rounded-xl text-sm">
+          💬 WhatsApp
+        </a>
+        <a href={`mailto:${SOPORTE_EMAIL}`}
+          className="bg-zinc-700 hover:bg-zinc-600 text-white font-black px-4 py-2 rounded-xl text-sm">
+          📧 Email
+        </a>
+      </div>
+    </div>
+  );
+
+  if (!autorizado) {
+    return (
+      <main className="min-h-screen bg-black text-white flex items-center justify-center">
+        <h1 className="text-3xl font-black text-yellow-400 animate-pulse">Cargando...</h1>
+      </main>
+    );
+  }
 
   return (
     <main className="min-h-screen bg-black text-white px-4 py-6 flex items-center justify-center">
@@ -201,8 +224,9 @@ export default function PanelChoferPage() {
           <button onClick={() => { window.location.href = "/billetera-chofer"; }} className="w-full max-w-md bg-zinc-800 border-2 border-yellow-400 hover:bg-zinc-700 text-yellow-400 font-black text-xl py-5 rounded-3xl">
             💼 MI BILLETERA
           </button>
+          <BloquesSoporte />
           <div className="mt-5 flex justify-center">
-            <button onClick={cerrarSesion} className="bg-red-700 hover:bg-red-600 border border-red-500 text-white font-black text-lg px-8 py-3 rounded-2xl">
+            <button onClick={cerrarSesion} className="bg-red-700 hover:bg-red-600 border border-red-500 hover:border-red-400 text-white font-black text-lg px-8 py-3 rounded-2xl shadow-xl transition-all duration-200">
               ⛔ CERRAR SESIÓN
             </button>
           </div>
@@ -213,19 +237,15 @@ export default function PanelChoferPage() {
           <p className="text-pink-500 font-black text-xl md:text-2xl mb-4">🚨 NUEVO VIAJE DISPONIBLE 🚨</p>
           <p className="text-green-400 font-black text-lg md:text-xl mb-6">Vehículo habilitado: {vehiculoChofer || "No definido"}</p>
 
-          {/* Ruta multietapa si hay paradas, sino origen → destino */}
           {paradasActuales.length > 0 ? (
             <div className="mb-6">
-              <h1 className="text-2xl md:text-4xl font-black text-yellow-400 mb-4 leading-tight">
-                Ruta del viaje
-              </h1>
+              <h1 className="text-2xl md:text-4xl font-black text-yellow-400 mb-4 leading-tight">Ruta del viaje</h1>
               <div className="flex flex-col gap-2 text-left">
                 {paradasActuales.map((parada, index) => (
                   <div key={parada.id} className="flex items-center gap-3">
                     <span className={`w-8 h-8 rounded-full flex items-center justify-center font-black text-sm flex-shrink-0 ${
                       parada.tipo === "retiro" ? "bg-blue-600 text-white" :
-                      parada.tipo === "entrega" ? "bg-green-600 text-white" :
-                      "bg-zinc-600 text-white"
+                      parada.tipo === "entrega" ? "bg-green-600 text-white" : "bg-zinc-600 text-white"
                     }`}>
                       {LABELS[index] || index}
                     </span>
@@ -233,9 +253,7 @@ export default function PanelChoferPage() {
                       <p className="text-xs font-black text-zinc-400">{getTipoParadaLabel(parada.tipo)}</p>
                       <p className="text-white text-base font-black">{parada.direccion}</p>
                     </div>
-                    {index < paradasActuales.length - 1 && (
-                      <span className="text-yellow-400 ml-auto">↓</span>
-                    )}
+                    {index < paradasActuales.length - 1 && <span className="text-yellow-400 ml-auto">↓</span>}
                   </div>
                 ))}
               </div>
@@ -267,8 +285,9 @@ export default function PanelChoferPage() {
           <button onClick={() => { window.location.href = "/billetera-chofer"; }} className="w-full mt-5 bg-zinc-800 border-2 border-yellow-400 hover:bg-zinc-700 text-yellow-400 font-black text-xl md:text-2xl py-5 rounded-3xl">
             💼 MI BILLETERA
           </button>
+          <BloquesSoporte />
           <div className="mt-5 flex justify-center">
-            <button onClick={cerrarSesion} className="bg-red-700 hover:bg-red-600 border border-red-500 text-white font-black text-lg px-8 py-3 rounded-2xl">
+            <button onClick={cerrarSesion} className="bg-red-700 hover:bg-red-600 border border-red-500 hover:border-red-400 text-white font-black text-lg px-8 py-3 rounded-2xl shadow-xl transition-all duration-200">
               ⛔ CERRAR SESIÓN
             </button>
           </div>
