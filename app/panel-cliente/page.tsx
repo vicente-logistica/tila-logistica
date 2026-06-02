@@ -58,7 +58,7 @@ const tiempoRelativo = (iso: string | null | undefined) => {
 
 // ─── Soporte TILA ─────────────────────────────────────────────────────────────
 const SOPORTE_WHATSAPP = "5491158689383";
-const SOPORTE_EMAIL = "martinvicente46@gmail.com";
+const SOPORTE_EMAIL = "logisticatila@gmail.com";
 
 export default function PanelClientePage() {
   const { autorizado } = useProtegerRuta("cliente");
