@@ -9,7 +9,7 @@ export default function BotonCerrarSesion() {
   return (
     <button
       onClick={cerrarSesion}
-      className="bg-transparent hover:bg-red-700 border border-red-600 hover:border-red-500 text-red-500 hover:text-white font-black text-sm px-4 py-2 rounded-xl transition"
+      className="bg-transparent hover:bg-transparent border border-zinc-600 hover:border-red-500 text-zinc-400 hover:text-red-500 font-black text-sm px-4 py-2 rounded-xl transition"
     >
       Cerrar sesión
     </button>
