@@ -34,6 +34,8 @@ const calcularKmAutomatico = (origen: string, destino: string) => {
 };
 
 const MAX_PARADAS = 4;
+const SOPORTE_WHATSAPP = "5491158689383";
+const SOPORTE_EMAIL = "martinvicente46@gmail.com";
 
 export default function PublicarPage() {
   const { autorizado } = useProtegerRuta("cliente");
@@ -266,9 +268,17 @@ export default function PublicarPage() {
 
   return (
     <main className="min-h-screen bg-black text-white p-6 md:p-10">
-      <h1 className="text-4xl md:text-5xl font-bold text-yellow-400 mb-8">
-        Publicar carga
-      </h1>
+
+      {/* Header */}
+      <div className="flex items-center justify-between mb-8">
+        <h1 className="text-4xl md:text-5xl font-bold text-yellow-400">Publicar carga</h1>
+        <button
+          onClick={() => { localStorage.clear(); window.location.href = "/login"; }}
+          className="bg-red-700 hover:bg-red-600 text-white font-black px-4 py-3 rounded-2xl text-sm"
+        >
+          ⛔ Salir
+        </button>
+      </div>
 
       <div className="grid gap-6 max-w-3xl">
 
@@ -388,6 +398,21 @@ export default function PublicarPage() {
         >
           {publicando ? "Publicando..." : "Publicar carga"}
         </button>
+
+        {/* Soporte TILA */}
+        <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4">
+          <p className="text-zinc-500 text-xs font-black mb-3 text-center">🆘 SOPORTE TILA</p>
+          <div className="flex gap-3 justify-center">
+            <a href={`https://wa.me/${SOPORTE_WHATSAPP}`} target="_blank" rel="noreferrer"
+              className="bg-green-600 hover:bg-green-500 text-white font-black px-4 py-2 rounded-xl text-sm">
+              💬 WhatsApp
+            </a>
+            <a href={`mailto:${SOPORTE_EMAIL}`}
+              className="bg-zinc-700 hover:bg-zinc-600 text-white font-black px-4 py-2 rounded-xl text-sm">
+              📧 Email
+            </a>
+          </div>
+        </div>
 
       </div>
     </main>
