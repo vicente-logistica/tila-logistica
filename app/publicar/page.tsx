@@ -35,7 +35,7 @@ const calcularKmAutomatico = (origen: string, destino: string) => {
 
 const MAX_PARADAS = 4;
 const SOPORTE_WHATSAPP = "5491158689383";
-const SOPORTE_EMAIL = "martinvicente46@gmail.com";
+const SOPORTE_EMAIL = "logisticatila@gmail.com";
 
 export default function PublicarPage() {
   const { autorizado } = useProtegerRuta("cliente");
