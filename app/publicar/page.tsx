@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "../lib/supabase";
 import { useProtegerRuta } from "../hooks/useProtegerRuta";
+import BotonCerrarSesion from "../components/BotonCerrarSesion";
 
 const vehiculos = [
   { nombre: "Flete chico", litrosKm: 0.8, minimo: 25000 },
@@ -272,12 +273,7 @@ export default function PublicarPage() {
       {/* Header */}
       <div className="flex items-center justify-between mb-8">
         <h1 className="text-4xl md:text-5xl font-bold text-yellow-400">Publicar carga</h1>
-        <button
-          onClick={() => { localStorage.clear(); window.location.href = "/login"; }}
-          className="bg-red-700 hover:bg-red-600 text-white font-black px-4 py-3 rounded-2xl text-sm"
-        >
-          ⛔ Salir
-        </button>
+        <BotonCerrarSesion />
       </div>
 
       <div className="grid gap-6 max-w-3xl">
