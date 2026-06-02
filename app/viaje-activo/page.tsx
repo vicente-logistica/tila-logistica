@@ -142,6 +142,50 @@ export default function ViajeActivoPage() {
 
   // Abrir Google Maps automáticamente cuando carga el viaje con paradas
   const mapaAbierto = useRef(false);
+
+  // Realtime — escuchar cambios en cargas y paradas del viaje activo
+  useEffect(() => {
+    const viajeId = localStorage.getItem("viajeActivoId");
+    if (!viajeId) return;
+
+    const canal = supabase
+      .channel(`viaje-activo-rt-${viajeId}`)
+      .on("postgres_changes", {
+        event: "*",
+        schema: "public",
+        table: "cargas",
+        filter: `id=eq.${viajeId}`,
+      }, (payload) => {
+        console.log("Realtime carga actualizada", payload);
+        if (payload.new) setViaje(payload.new);
+      })
+      .on("postgres_changes", {
+        event: "*",
+        schema: "public",
+        table: "paradas_viaje",
+        filter: `carga_id=eq.${viajeId}`,
+      }, (payload) => {
+        console.log("Realtime parada actualizada", payload);
+        // Recargar paradas completas para mantener orden correcto
+        supabase
+          .from("paradas_viaje")
+          .select("*")
+          .eq("carga_id", Number(viajeId))
+          .order("orden", { ascending: true })
+          .then(({ data }) => {
+            if (data && data.length > 0) {
+              setParadas(data);
+              const primerNoCompletado = data.findIndex(p => p.estado !== "completada");
+              setParadaActivaIndex(primerNoCompletado === -1 ? data.length : primerNoCompletado);
+            }
+          });
+      })
+      .subscribe((status) => {
+        console.log("Viaje activo realtime status:", status);
+      });
+
+    return () => { supabase.removeChannel(canal); };
+  }, []);
   useEffect(() => {
     if (mapaAbierto.current) return;
     if (!viaje || cargando) return;
