@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { supabase } from "@/app/lib/supabase";
 
 const SOPORTE_WHATSAPP = "5491158689383";
-const SOPORTE_EMAIL = "martinvicente46@gmail.com";
+const SOPORTE_EMAIL = "logisticatila@gmail.com";
 
 export default function LoginPage() {
   const router = useRouter();
