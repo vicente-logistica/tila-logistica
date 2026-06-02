@@ -38,11 +38,17 @@ export default function ChatAsistencia({
   const [texto, setTexto] = useState("");
   const [enviando, setEnviando] = useState(false);
   const [noLeidos, setNoLeidos] = useState(0);
+  const [flashNuevo, setFlashNuevo] = useState(false);
   const bottomRef = useRef<HTMLDivElement | null>(null);
-  const abieroRef = useRef(false);
+  const abiertoRef = useRef(false);
+  const mensajesRef = useRef<any[]>([]);
 
-  // Sincronizar ref con estado para usar en callbacks
-  useEffect(() => { abieroRef.current = abierto; }, [abierto]);
+  useEffect(() => { abiertoRef.current = abierto; }, [abierto]);
+  useEffect(() => { mensajesRef.current = mensajes; }, [mensajes]);
+
+  const calcularNoLeidos = (todos: any[]) => {
+    return todos.filter(m => !m.leido && m.remitente_id !== usuarioId).length;
+  };
 
   const cargarMensajes = async () => {
     const { data, error } = await supabase
@@ -55,29 +61,53 @@ export default function ChatAsistencia({
 
     const todos = data || [];
     setMensajes(todos);
-
-    // Actualizar badge siempre, independiente de si está abierto
-    const sinLeer = todos.filter(
-      (m) => !m.leido && m.remitente_id !== usuarioId
-    ).length;
+    const sinLeer = calcularNoLeidos(todos);
     setNoLeidos(sinLeer);
 
-    // Si está abierto, marcar como leídos y hacer scroll
-    if (abieroRef.current) {
+    if (abiertoRef.current) {
       marcarLeidos();
       setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: "smooth" }), 100);
     }
   };
 
   const marcarLeidos = async () => {
-    const { error } = await supabase
+    await supabase
       .from("mensajes_viaje")
       .update({ leido: true })
       .eq("viaje_id", Number(viajeId))
       .neq("remitente_id", usuarioId)
       .eq("leido", false);
+    setNoLeidos(0);
+  };
 
-    if (!error) setNoLeidos(0);
+  const manejarNuevoMensaje = (payload: any) => {
+    console.log("Realtime mensaje recibido", payload);
+    const nuevo = payload.new;
+    if (!nuevo) return;
+
+    setMensajes(prev => {
+      // Evitar duplicados
+      if (prev.find(m => m.id === nuevo.id)) return prev;
+      const actualizados = [...prev, nuevo];
+      mensajesRef.current = actualizados;
+      return actualizados;
+    });
+
+    // Badge y flash solo si no es mío y chat cerrado
+    if (nuevo.remitente_id !== usuarioId) {
+      if (!abiertoRef.current) {
+        setNoLeidos(prev => prev + 1);
+        setFlashNuevo(true);
+        setTimeout(() => setFlashNuevo(false), 2000);
+      } else {
+        // Si está abierto, marcar leído inmediatamente
+        marcarLeidos();
+      }
+    }
+
+    if (abiertoRef.current) {
+      setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: "smooth" }), 100);
+    }
   };
 
   useEffect(() => {
@@ -85,19 +115,19 @@ export default function ChatAsistencia({
     cargarMensajes();
 
     const canal = supabase
-      .channel(`chat-viaje-${viajeId}-${usuarioId}`)
+      .channel(`chat-${viajeId}-${usuarioId}-${Date.now()}`)
       .on("postgres_changes", {
         event: "INSERT",
         schema: "public",
         table: "mensajes_viaje",
         filter: `viaje_id=eq.${viajeId}`,
-      }, () => {
-        cargarMensajes();
-      })
-      .subscribe();
+      }, manejarNuevoMensaje)
+      .subscribe((status) => {
+        console.log("Chat realtime status:", status);
+      });
 
-    // Polling cada 10s como fallback
-    const intervalo = setInterval(cargarMensajes, 10000);
+    // Polling cada 5s como fallback
+    const intervalo = setInterval(cargarMensajes, 5000);
 
     return () => {
       supabase.removeChannel(canal);
@@ -105,7 +135,6 @@ export default function ChatAsistencia({
     };
   }, [viajeId, usuarioId]);
 
-  // Al abrir: marcar leídos y scroll
   useEffect(() => {
     if (abierto) {
       marcarLeidos();
@@ -113,17 +142,15 @@ export default function ChatAsistencia({
     }
   }, [abierto]);
 
-  // Scroll cuando llegan mensajes nuevos y está abierto
   useEffect(() => {
     if (abierto && mensajes.length > 0) {
       setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: "smooth" }), 100);
     }
-  }, [mensajes]);
+  }, [mensajes, abierto]);
 
   const enviarMensaje = async () => {
     if (!texto.trim() || enviando) return;
     setEnviando(true);
-
     const { error } = await supabase.from("mensajes_viaje").insert([{
       viaje_id: Number(viajeId),
       remitente_id: usuarioId,
@@ -132,12 +159,8 @@ export default function ChatAsistencia({
       mensaje: texto.trim(),
       leido: false,
     }]);
-
-    if (error) {
-      alert("Error al enviar: " + error.message);
-    } else {
-      setTexto("");
-    }
+    if (error) { alert("Error al enviar: " + error.message); }
+    else { setTexto(""); }
     setEnviando(false);
   };
 
@@ -147,10 +170,12 @@ export default function ChatAsistencia({
 
   return (
     <>
-      {/* Botón flotante con badge */}
+      {/* Botón flotante */}
       <button
         onClick={() => setAbierto(!abierto)}
-        className="fixed bottom-6 right-6 z-50 bg-yellow-400 hover:bg-yellow-500 text-black font-black rounded-full w-16 h-16 flex items-center justify-center shadow-2xl transition"
+        className={`fixed bottom-6 right-6 z-50 font-black rounded-full w-16 h-16 flex items-center justify-center shadow-2xl transition ${
+          flashNuevo ? "bg-red-500 scale-110" : "bg-yellow-400 hover:bg-yellow-500"
+        } text-black`}
       >
         <span className="relative flex items-center justify-center">
           <span className="text-2xl">💬</span>
@@ -164,10 +189,7 @@ export default function ChatAsistencia({
 
       {/* Panel de chat */}
       {abierto && (
-        <div
-          className="fixed bottom-24 right-6 z-50 w-80 md:w-96 bg-zinc-900 border-2 border-yellow-400 rounded-3xl shadow-2xl flex flex-col"
-          style={{ maxHeight: "70vh" }}
-        >
+        <div className="fixed bottom-24 right-6 z-50 w-80 md:w-96 bg-zinc-900 border-2 border-yellow-400 rounded-3xl shadow-2xl flex flex-col" style={{ maxHeight: "70vh" }}>
           {/* Header */}
           <div className="flex items-center justify-between p-4 border-b border-zinc-800 flex-shrink-0">
             <div>
@@ -179,41 +201,27 @@ export default function ChatAsistencia({
                 <span className="text-zinc-500 text-xs truncate">{usuarioNombre}</span>
               </div>
             </div>
-            <button
-              onClick={() => setAbierto(false)}
-              className="text-zinc-400 hover:text-white font-black text-xl w-8 h-8 flex items-center justify-center"
-            >
-              ✕
-            </button>
+            <button onClick={() => setAbierto(false)} className="text-zinc-400 hover:text-white font-black text-xl w-8 h-8 flex items-center justify-center">✕</button>
           </div>
 
           {/* Mensajes */}
-          <div
-            className="flex-1 overflow-y-auto p-4 space-y-3"
-            style={{ minHeight: "200px", maxHeight: "calc(70vh - 140px)" }}
-          >
+          <div className="flex-1 overflow-y-auto p-4 space-y-3" style={{ minHeight: "200px", maxHeight: "calc(70vh - 140px)" }}>
             {mensajes.length === 0 ? (
-              <p className="text-zinc-500 text-sm text-center mt-8">
-                Sin mensajes todavía.<br />Escribí algo para empezar.
-              </p>
+              <p className="text-zinc-500 text-sm text-center mt-8">Sin mensajes todavía.<br />Escribí algo para empezar.</p>
             ) : (
               mensajes.map((m) => {
                 const esMio = m.remitente_id === usuarioId;
                 return (
                   <div key={m.id} className={`flex ${esMio ? "justify-end" : "justify-start"}`}>
                     <div className={`max-w-[82%] flex flex-col gap-1 ${esMio ? "items-end" : "items-start"}`}>
-                      {/* Badge de rol — siempre visible */}
                       <div className="flex items-center gap-1">
                         <span className={`px-2 py-0.5 rounded-lg text-xs font-black ${colorRol(m.remitente_rol)}`}>
                           {labelRol(m.remitente_rol)}
                         </span>
                         <span className="text-zinc-500 text-xs">{m.remitente_nombre}</span>
                       </div>
-                      {/* Burbuja */}
                       <div className={`px-3 py-2 rounded-2xl text-sm break-words ${
-                        esMio
-                          ? "bg-yellow-400 text-black font-black rounded-tr-sm"
-                          : "bg-zinc-800 text-white rounded-tl-sm"
+                        esMio ? "bg-yellow-400 text-black font-black rounded-tr-sm" : "bg-zinc-800 text-white rounded-tl-sm"
                       }`}>
                         {m.mensaje}
                       </div>
@@ -240,9 +248,7 @@ export default function ChatAsistencia({
               onClick={enviarMensaje}
               disabled={enviando || !texto.trim()}
               className={`px-4 py-3 rounded-xl font-black text-sm transition ${
-                enviando || !texto.trim()
-                  ? "bg-zinc-700 text-zinc-500 cursor-not-allowed"
-                  : "bg-yellow-400 hover:bg-yellow-500 text-black"
+                enviando || !texto.trim() ? "bg-zinc-700 text-zinc-500 cursor-not-allowed" : "bg-yellow-400 hover:bg-yellow-500 text-black"
               }`}
             >
               ➤
