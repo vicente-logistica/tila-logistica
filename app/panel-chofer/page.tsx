@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { supabase } from "../lib/supabase";
 import { useProtegerRuta } from "../hooks/useProtegerRuta";
+import BotonCerrarSesion from "../components/BotonCerrarSesion";
 
 const LABELS = ["A", "B", "C", "D", "E", "F"];
 const SOPORTE_WHATSAPP = "5491158689383";
@@ -226,9 +227,7 @@ export default function PanelChoferPage() {
           </button>
           <BloquesSoporte />
           <div className="mt-5 flex justify-center">
-            <button onClick={cerrarSesion} className="bg-red-700 hover:bg-red-600 border border-red-500 hover:border-red-400 text-white font-black text-lg px-8 py-3 rounded-2xl shadow-xl transition-all duration-200">
-              ⛔ CERRAR SESIÓN
-            </button>
+            <BotonCerrarSesion />
           </div>
         </section>
       ) : (
@@ -287,9 +286,7 @@ export default function PanelChoferPage() {
           </button>
           <BloquesSoporte />
           <div className="mt-5 flex justify-center">
-            <button onClick={cerrarSesion} className="bg-red-700 hover:bg-red-600 border border-red-500 hover:border-red-400 text-white font-black text-lg px-8 py-3 rounded-2xl shadow-xl transition-all duration-200">
-              ⛔ CERRAR SESIÓN
-            </button>
+            <BotonCerrarSesion />
           </div>
           <p className="text-zinc-500 text-center mt-6">Viaje {indice + 1} de {cargas.length}</p>
         </section>
