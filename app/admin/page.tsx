@@ -222,7 +222,37 @@ const TarjetaUsuario = ({
 
 // ─── TarjetaChofer para sección aprobación ───────────────────────────────────
 
-const TarjetaChofer = ({ chofer, onActualizarAprobacion }: { chofer: any; onActualizarAprobacion: (id: string, estado: string) => void }) => (
+const TIPOS_DOC_LABELS: Record<string, string> = {
+  dni_frente: "DNI Frente", dni_dorso: "DNI Dorso",
+  licencia: "Licencia", seguro: "Seguro", cedula: "Cédula",
+  foto_frente: "Frente", foto_lateral_izq: "Lat. Izq",
+  foto_lateral_der: "Lat. Der", foto_trasera: "Trasera",
+};
+const DOCS_REQUERIDOS_ADMIN = ["dni_frente", "dni_dorso", "licencia", "seguro", "cedula", "foto_frente", "foto_lateral_izq", "foto_lateral_der", "foto_trasera"];
+
+const TarjetaChofer = ({ chofer, onActualizarAprobacion }: { chofer: any; onActualizarAprobacion: (id: string, estado: string) => void }) => {
+  const [documentos, setDocumentos] = useState<Record<string, string>>({});
+  const [mostrarDocs, setMostrarDocs] = useState(false);
+  const [cargandoDocs, setCargandoDocs] = useState(false);
+
+  const cargarDocs = async () => {
+    if (cargandoDocs) return;
+    setCargandoDocs(true);
+    const { data } = await supabase.from("documentacion_chofer").select("tipo, url").eq("chofer_id", chofer.id);
+    if (data) {
+      const mapa: Record<string, string> = {};
+      data.forEach((d: any) => { mapa[d.tipo] = d.url; });
+      setDocumentos(mapa);
+    }
+    setCargandoDocs(false);
+    setMostrarDocs(true);
+  };
+
+  const docsCompletos = DOCS_REQUERIDOS_ADMIN.filter(t => documentos[t]).length;
+  const totalDocs = DOCS_REQUERIDOS_ADMIN.length;
+  const puedeAprobar = docsCompletos === totalDocs;
+
+  return (
   <div className="bg-black border border-zinc-800 rounded-2xl p-5">
     <div className="flex items-center justify-between mb-3 gap-3 flex-wrap">
       <h3 className="text-xl font-black text-yellow-400">{chofer.nombre || "Chofer"}</h3>
@@ -241,7 +271,8 @@ const TarjetaChofer = ({ chofer, onActualizarAprobacion }: { chofer: any; onActu
       <p>📧 <strong>Email:</strong> {chofer.email || "Sin dato"}</p>
       <p>🪪 <strong>DNI:</strong> {chofer.dni || "Sin dato"}</p>
     </div>
-    {/* Clasificación profesional */}
+
+    {/* Clasificación */}
     {(chofer.categoria_legal || chofer.tipo_vehiculo || chofer.tipo_carroceria) && (
       <div className="bg-zinc-900 rounded-xl p-3 mb-3">
         <p className="text-zinc-500 text-xs font-black mb-2">CLASIFICACIÓN VEHICULAR</p>
@@ -252,14 +283,54 @@ const TarjetaChofer = ({ chofer, onActualizarAprobacion }: { chofer: any; onActu
         </div>
       </div>
     )}
+
+    {/* Documentación */}
+    <button onClick={cargarDocs} disabled={cargandoDocs}
+      className="w-full bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-black py-2 rounded-xl text-sm mb-3">
+      {cargandoDocs ? "Cargando..." : mostrarDocs ? "🗂️ Actualizar docs" : "🗂️ Ver documentación"}
+    </button>
+
+    {mostrarDocs && (
+      <div className="mb-3">
+        <div className="flex items-center justify-between mb-2">
+          <p className="text-zinc-500 text-xs font-black">DOCUMENTACIÓN</p>
+          <span className={`text-xs font-black ${puedeAprobar ? "text-green-400" : "text-red-400"}`}>
+            {docsCompletos}/{totalDocs} {puedeAprobar ? "✅ Completa" : "⚠️ Incompleta"}
+          </span>
+        </div>
+        <div className="grid grid-cols-3 gap-2">
+          {DOCS_REQUERIDOS_ADMIN.map(tipo => (
+            <div key={tipo} className={`rounded-xl overflow-hidden border ${documentos[tipo] ? "border-green-600" : "border-zinc-700"}`}>
+              {documentos[tipo] ? (
+                <a href={documentos[tipo]} target="_blank" rel="noreferrer">
+                  <img src={documentos[tipo]} alt={TIPOS_DOC_LABELS[tipo]} className="w-full h-16 object-cover" />
+                </a>
+              ) : (
+                <div className="h-16 bg-zinc-900 flex items-center justify-center text-zinc-600 text-xs">Sin subir</div>
+              )}
+              <p className="text-xs text-center py-1 font-black text-zinc-400 truncate px-1">{TIPOS_DOC_LABELS[tipo]}</p>
+            </div>
+          ))}
+        </div>
+        {!puedeAprobar && (
+          <p className="text-red-400 text-xs font-black mt-2">⚠️ Falta documentación — no se puede aprobar</p>
+        )}
+      </div>
+    )}
+
     <div className="grid grid-cols-2 gap-2">
-      <button onClick={() => onActualizarAprobacion(chofer.id, "aprobado")} className="bg-green-600 text-white font-black py-2 rounded-xl text-sm">✅ Aprobar</button>
+      <button
+        onClick={() => puedeAprobar ? onActualizarAprobacion(chofer.id, "aprobado") : alert("El chofer no tiene documentación completa. No se puede aprobar.")}
+        className={`font-black py-2 rounded-xl text-sm ${puedeAprobar ? "bg-green-600 text-white" : "bg-zinc-700 text-zinc-500 cursor-not-allowed"}`}>
+        ✅ Aprobar
+      </button>
       <button onClick={() => onActualizarAprobacion(chofer.id, "rechazado")} className="bg-red-700 text-white font-black py-2 rounded-xl text-sm">❌ Rechazar</button>
       <button onClick={() => onActualizarAprobacion(chofer.id, "suspendido")} className="bg-orange-600 text-white font-black py-2 rounded-xl text-sm">⛔ Suspender</button>
       <button onClick={() => onActualizarAprobacion(chofer.id, "pendiente")} className="bg-yellow-400 text-black font-black py-2 rounded-xl text-sm">🔄 Reactivar</button>
     </div>
   </div>
-);
+  );
+};
 
 const TarjetaCliente = ({ cliente }: { cliente: any }) => (
   <div className="bg-black border border-zinc-800 rounded-2xl p-5">
