@@ -5,6 +5,32 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/app/lib/supabase";
 
+const CATEGORIAS_LEGALES = ["N1", "N2", "N3"];
+
+const TIPOS_VEHICULO = [
+  "Moto",
+  "Utilitario",
+  "Furgón",
+  "Pick-up",
+  "Camión rígido",
+  "Camión tractor",
+  "Bitrén",
+];
+
+const TIPOS_CARROCERIA = [
+  "Furgón",
+  "Furgón térmico",
+  "Plataforma",
+  "Baranda volcable",
+  "Cisterna",
+  "Jaula",
+  "Tolva",
+  "Batea",
+  "Portacontenedor",
+  "Mosquito",
+  "Grúa plancha",
+];
+
 export default function RegistroChoferPage() {
   const router = useRouter();
 
@@ -21,6 +47,9 @@ export default function RegistroChoferPage() {
 
   const [patente, setPatente] = useState("");
   const [vehiculo, setVehiculo] = useState("");
+  const [categoriaLegal, setCategoriaLegal] = useState("");
+  const [tipoVehiculo, setTipoVehiculo] = useState("");
+  const [tipoCarroceria, setTipoCarroceria] = useState("");
   const [zonaOperativa, setZonaOperativa] = useState("");
   const [capacidadCarga, setCapacidadCarga] = useState("");
   const [seguroVehiculo, setSeguroVehiculo] = useState("");
@@ -35,280 +64,189 @@ export default function RegistroChoferPage() {
   const [loading, setLoading] = useState(false);
 
   const registrarChofer = async () => {
-    if (
-      !nombre ||
-      !telefono ||
-      !email ||
-      !password ||
-      !vehiculo ||
-      !patente
-    ) {
-      alert(
-        "Completá nombre, teléfono, email, contraseña, vehículo y patente"
-      );
+    if (!nombre || !telefono || !email || !password || !patente) {
+      alert("Completá nombre, teléfono, email, contraseña y patente");
+      return;
+    }
+    if (!categoriaLegal || !tipoVehiculo) {
+      alert("Seleccioná categoría legal y tipo de vehículo");
       return;
     }
 
     setLoading(true);
 
-    const { error } = await supabase.from("usuarios").insert([
-      {
-        nombre,
-        email,
-        password,
-        telefono,
-        rol: "chofer",
-        acepta_terminos: true,
-
-        dni,
-        cuit_cuil: cuitCuil,
-        licencia,
-        cnrt_ruta: cnrtRuta,
-        antecedentes,
-
-        patente,
-        vehiculo,
-        zona_operativa: zonaOperativa,
-        capacidad_carga: capacidadCarga,
-        seguro_vehiculo: seguroVehiculo,
-        seguro_carga: seguroCarga,
-        vtv_rto: vtvRto,
-
-        metodo_cobro: metodoCobro,
-        alias_cbu_cvu: aliasCbuCvu,
-        titular_cuenta: titularCuenta,
-        banco_billetera: bancoBilletera,
-
-        estado_validacion: "pendiente",
-      },
-    ]);
+    // vehiculo = tipo_vehiculo para compatibilidad con matching existente
+    const { error } = await supabase.from("usuarios").insert([{
+      nombre,
+      email,
+      password,
+      telefono,
+      rol: "chofer",
+      acepta_terminos: true,
+      dni,
+      cuit_cuil: cuitCuil,
+      licencia,
+      cnrt_ruta: cnrtRuta,
+      antecedentes,
+      patente,
+      vehiculo: tipoVehiculo, // compatibilidad matching
+      categoria_legal: categoriaLegal,
+      tipo_vehiculo: tipoVehiculo,
+      tipo_carroceria: tipoCarroceria,
+      zona_operativa: zonaOperativa,
+      capacidad_carga: capacidadCarga,
+      seguro_vehiculo: seguroVehiculo,
+      seguro_carga: seguroCarga,
+      vtv_rto: vtvRto,
+      metodo_cobro: metodoCobro,
+      alias_cbu_cvu: aliasCbuCvu,
+      titular_cuenta: titularCuenta,
+      banco_billetera: bancoBilletera,
+      estado_validacion: "pendiente",
+      estado_aprobacion: "pendiente",
+    }]);
 
     setLoading(false);
 
-    if (error) {
-      alert("Error: " + error.message);
-      return;
-    }
+    if (error) { alert("Error: " + error.message); return; }
 
-    alert("Solicitud de chofer enviada correctamente");
+    alert("Solicitud de chofer enviada correctamente. El administrador revisará tu documentación.");
     router.push("/login");
   };
 
   return (
     <main className="min-h-screen bg-black text-white p-4 md:p-8">
       <div className="max-w-4xl mx-auto">
-        <Link href="/login" className="text-zinc-400 hover:text-white">
-          ← Volver
-        </Link>
+        <Link href="/login" className="text-zinc-400 hover:text-white">← Volver</Link>
 
-        <h1 className="text-4xl font-black text-yellow-400 mt-8">
-          Registro de chofer
-        </h1>
-
-        <p className="text-zinc-400 mt-3 mb-8">
-          Completá tus datos. La cuenta queda pendiente hasta validar
-          documentación.
-        </p>
+        <h1 className="text-4xl font-black text-yellow-400 mt-8">Registro de chofer</h1>
+        <p className="text-zinc-400 mt-3 mb-8">Completá tus datos. La cuenta queda pendiente hasta validar documentación.</p>
 
         <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-6 space-y-5">
-          <h2 className="text-2xl font-bold text-yellow-400">
-            Datos personales
-          </h2>
 
-          <input
-            value={nombre}
-            onChange={(e) => setNombre(e.target.value)}
-            className="w-full p-4 rounded-xl bg-black border border-zinc-700"
-            placeholder="Nombre y apellido"
-          />
+          {/* Datos personales */}
+          <h2 className="text-2xl font-bold text-yellow-400">Datos personales</h2>
+          <input value={nombre} onChange={e => setNombre(e.target.value)} className="w-full p-4 rounded-xl bg-black border border-zinc-700" placeholder="Nombre y apellido" />
+          <input value={dni} onChange={e => setDni(e.target.value)} className="w-full p-4 rounded-xl bg-black border border-zinc-700" placeholder="DNI" />
+          <input value={cuitCuil} onChange={e => setCuitCuil(e.target.value)} className="w-full p-4 rounded-xl bg-black border border-zinc-700" placeholder="CUIT / CUIL" />
+          <input value={telefono} onChange={e => setTelefono(e.target.value)} className="w-full p-4 rounded-xl bg-black border border-zinc-700" placeholder="Teléfono" />
+          <input value={email} onChange={e => setEmail(e.target.value)} className="w-full p-4 rounded-xl bg-black border border-zinc-700" placeholder="Email" />
+          <input type="password" value={password} onChange={e => setPassword(e.target.value)} className="w-full p-4 rounded-xl bg-black border border-zinc-700" placeholder="Contraseña" />
 
-          <input
-            value={dni}
-            onChange={(e) => setDni(e.target.value)}
-            className="w-full p-4 rounded-xl bg-black border border-zinc-700"
-            placeholder="DNI"
-          />
+          {/* Documentación */}
+          <h2 className="text-2xl font-bold text-yellow-400 pt-4">Documentación obligatoria</h2>
+          <input value={licencia} onChange={e => setLicencia(e.target.value)} className="w-full p-4 rounded-xl bg-black border border-zinc-700" placeholder="Licencia / registro profesional" />
+          <input value={cnrtRuta} onChange={e => setCnrtRuta(e.target.value)} className="w-full p-4 rounded-xl bg-black border border-zinc-700" placeholder="CNRT / RUTA" />
+          <input value={antecedentes} onChange={e => setAntecedentes(e.target.value)} className="w-full p-4 rounded-xl bg-black border border-zinc-700" placeholder="Número de gestión certificado antecedentes" />
 
-          <input
-            value={cuitCuil}
-            onChange={(e) => setCuitCuil(e.target.value)}
-            className="w-full p-4 rounded-xl bg-black border border-zinc-700"
-            placeholder="CUIT / CUIL"
-          />
+          {/* Vehículo */}
+          <h2 className="text-2xl font-bold text-yellow-400 pt-4">Vehículo</h2>
 
-          <input
-            value={telefono}
-            onChange={(e) => setTelefono(e.target.value)}
-            className="w-full p-4 rounded-xl bg-black border border-zinc-700"
-            placeholder="Teléfono"
-          />
+          <input value={patente} onChange={e => setPatente(e.target.value)} className="w-full p-4 rounded-xl bg-black border border-zinc-700" placeholder="Patente" />
 
-          <input
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            className="w-full p-4 rounded-xl bg-black border border-zinc-700"
-            placeholder="Email"
-          />
-
-          <input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            className="w-full p-4 rounded-xl bg-black border border-zinc-700"
-            placeholder="Contraseña"
-          />
-
-          <h2 className="text-2xl font-bold text-yellow-400 pt-4">
-            Documentación obligatoria
-          </h2>
-
-          <input
-            value={licencia}
-            onChange={(e) => setLicencia(e.target.value)}
-            className="w-full p-4 rounded-xl bg-black border border-zinc-700"
-            placeholder="Licencia / registro profesional"
-          />
-
-          <input
-            value={cnrtRuta}
-            onChange={(e) => setCnrtRuta(e.target.value)}
-            className="w-full p-4 rounded-xl bg-black border border-zinc-700"
-            placeholder="CNRT / RUTA"
-          />
-
-          <input
-            value={antecedentes}
-            onChange={(e) => setAntecedentes(e.target.value)}
-            className="w-full p-4 rounded-xl bg-black border border-zinc-700"
-            placeholder="Número de gestión certificado antecedentes"
-          />
-
-          <div className="bg-zinc-950 border border-zinc-800 rounded-2xl p-4">
-            <p className="text-zinc-400 text-sm">
-              Estado validación antecedentes
-            </p>
-
-            <p className="text-yellow-400 font-bold mt-2">
-              Pendiente de validación
-            </p>
+          {/* Categoría legal */}
+          <div>
+            <label className="text-zinc-400 text-sm font-black mb-2 block">Categoría legal *</label>
+            <div className="flex gap-3">
+              {CATEGORIAS_LEGALES.map(cat => (
+                <button
+                  key={cat}
+                  type="button"
+                  onClick={() => setCategoriaLegal(cat)}
+                  className={`flex-1 py-3 rounded-xl font-black text-lg transition ${
+                    categoriaLegal === cat
+                      ? "bg-yellow-400 text-black"
+                      : "bg-black border border-zinc-700 text-zinc-400"
+                  }`}
+                >
+                  {cat}
+                </button>
+              ))}
+            </div>
           </div>
 
-          <h2 className="text-2xl font-bold text-yellow-400 pt-4">
-            Vehículo
-          </h2>
-
-          <input
-            value={patente}
-            onChange={(e) => setPatente(e.target.value)}
-            className="w-full p-4 rounded-xl bg-black border border-zinc-700"
-            placeholder="Patente"
-          />
-
-          <input
-            value={vehiculo}
-            onChange={(e) => setVehiculo(e.target.value)}
-            className="w-full p-4 rounded-xl bg-black border border-zinc-700"
-            placeholder="Tipo de vehículo"
-          />
-
-          <input
-            value={zonaOperativa}
-            onChange={(e) => setZonaOperativa(e.target.value)}
-            className="w-full p-4 rounded-xl bg-black border border-zinc-700"
-            placeholder="Zona operativa"
-          />
-
-          <input
-            value={capacidadCarga}
-            onChange={(e) => setCapacidadCarga(e.target.value)}
-            className="w-full p-4 rounded-xl bg-black border border-zinc-700"
-            placeholder="Capacidad de carga"
-          />
-
-          <input
-            value={seguroVehiculo}
-            onChange={(e) => setSeguroVehiculo(e.target.value)}
-            className="w-full p-4 rounded-xl bg-black border border-zinc-700"
-            placeholder="Seguro del vehículo"
-          />
-
-          <input
-            value={seguroCarga}
-            onChange={(e) => setSeguroCarga(e.target.value)}
-            className="w-full p-4 rounded-xl bg-black border border-zinc-700"
-            placeholder="Seguro de carga"
-          />
-
-          <h2 className="text-2xl font-bold text-yellow-400 pt-4">
-            Fotos del vehículo
-          </h2>
-
-          <div className="bg-black border border-dashed border-zinc-700 rounded-2xl p-6 text-center text-zinc-400">
-            Frente del vehículo
+          {/* Tipo de vehículo */}
+          <div>
+            <label className="text-zinc-400 text-sm font-black mb-2 block">Tipo de vehículo *</label>
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+              {TIPOS_VEHICULO.map(tipo => (
+                <button
+                  key={tipo}
+                  type="button"
+                  onClick={() => setTipoVehiculo(tipo)}
+                  className={`py-3 px-2 rounded-xl font-black text-sm transition ${
+                    tipoVehiculo === tipo
+                      ? "bg-yellow-400 text-black"
+                      : "bg-black border border-zinc-700 text-zinc-400"
+                  }`}
+                >
+                  {tipo}
+                </button>
+              ))}
+            </div>
           </div>
 
-          <div className="bg-black border border-dashed border-zinc-700 rounded-2xl p-6 text-center text-zinc-400">
-            Laterales
+          {/* Tipo de carrocería */}
+          <div>
+            <label className="text-zinc-400 text-sm font-black mb-2 block">Tipo de carrocería</label>
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+              {TIPOS_CARROCERIA.map(tipo => (
+                <button
+                  key={tipo}
+                  type="button"
+                  onClick={() => setTipoCarroceria(tipo)}
+                  className={`py-3 px-2 rounded-xl font-black text-sm transition ${
+                    tipoCarroceria === tipo
+                      ? "bg-blue-600 text-white"
+                      : "bg-black border border-zinc-700 text-zinc-400"
+                  }`}
+                >
+                  {tipo}
+                </button>
+              ))}
+            </div>
           </div>
 
-          <div className="bg-black border border-dashed border-zinc-700 rounded-2xl p-6 text-center text-zinc-400">
-            Caja / acoplado / semi
+          <input value={zonaOperativa} onChange={e => setZonaOperativa(e.target.value)} className="w-full p-4 rounded-xl bg-black border border-zinc-700" placeholder="Zona operativa" />
+          <input value={capacidadCarga} onChange={e => setCapacidadCarga(e.target.value)} className="w-full p-4 rounded-xl bg-black border border-zinc-700" placeholder="Capacidad de carga" />
+          <input value={seguroVehiculo} onChange={e => setSeguroVehiculo(e.target.value)} className="w-full p-4 rounded-xl bg-black border border-zinc-700" placeholder="Seguro del vehículo" />
+          <input value={seguroCarga} onChange={e => setSeguroCarga(e.target.value)} className="w-full p-4 rounded-xl bg-black border border-zinc-700" placeholder="Seguro de carga" />
+          <input value={vtvRto} onChange={e => setVtvRto(e.target.value)} className="w-full p-4 rounded-xl bg-black border border-zinc-700" placeholder="VTV / RTO" />
+
+          {/* Resumen clasificación */}
+          {(categoriaLegal || tipoVehiculo || tipoCarroceria) && (
+            <div className="bg-zinc-800 border border-yellow-400/30 rounded-2xl p-4">
+              <p className="text-yellow-400 text-xs font-black mb-2">CLASIFICACIÓN SELECCIONADA</p>
+              <div className="flex flex-wrap gap-2">
+                {categoriaLegal && <span className="bg-yellow-400 text-black px-3 py-1 rounded-lg text-sm font-black">{categoriaLegal}</span>}
+                {tipoVehiculo && <span className="bg-blue-600 text-white px-3 py-1 rounded-lg text-sm font-black">{tipoVehiculo}</span>}
+                {tipoCarroceria && <span className="bg-zinc-600 text-white px-3 py-1 rounded-lg text-sm font-black">{tipoCarroceria}</span>}
+              </div>
+            </div>
+          )}
+
+          {/* Fotos del vehículo — placeholder para próxima etapa */}
+          <h2 className="text-2xl font-bold text-yellow-400 pt-4">Fotos del vehículo</h2>
+          <div className="grid grid-cols-2 gap-3">
+            {["Frente del vehículo", "Lateral izquierda", "Lateral derecha", "Trasera"].map(foto => (
+              <div key={foto} className="bg-black border border-dashed border-zinc-700 rounded-2xl p-6 text-center text-zinc-500 text-sm">
+                📷 {foto}
+                <p className="text-xs text-zinc-600 mt-1">Próximamente</p>
+              </div>
+            ))}
           </div>
 
-          <div className="bg-black border border-dashed border-zinc-700 rounded-2xl p-6 text-center text-zinc-400">
-            Interior / cabina
-          </div>
-
-          <input
-            value={vtvRto}
-            onChange={(e) => setVtvRto(e.target.value)}
-            className="w-full p-4 rounded-xl bg-black border border-zinc-700"
-            placeholder="VTV / RTO"
-          />
-
-          <h2 className="text-2xl font-bold text-yellow-400 pt-4">
-            Cobro del chofer
-          </h2>
-
-          <select
-            value={metodoCobro}
-            onChange={(e) => setMetodoCobro(e.target.value)}
-            className="w-full p-4 rounded-xl bg-black border border-zinc-700"
-          >
+          {/* Cobro */}
+          <h2 className="text-2xl font-bold text-yellow-400 pt-4">Cobro del chofer</h2>
+          <select value={metodoCobro} onChange={e => setMetodoCobro(e.target.value)} className="w-full p-4 rounded-xl bg-black border border-zinc-700">
             <option value="">Método de cobro preferido</option>
             <option>Transferencia bancaria</option>
             <option>Mercado Pago</option>
             <option>Billetera virtual</option>
           </select>
-
-          <input
-            value={aliasCbuCvu}
-            onChange={(e) => setAliasCbuCvu(e.target.value)}
-            className="w-full p-4 rounded-xl bg-black border border-zinc-700"
-            placeholder="Alias / CBU / CVU"
-          />
-
-          <input
-            value={titularCuenta}
-            onChange={(e) => setTitularCuenta(e.target.value)}
-            className="w-full p-4 rounded-xl bg-black border border-zinc-700"
-            placeholder="Titular de la cuenta"
-          />
-
-          <input
-            value={bancoBilletera}
-            onChange={(e) => setBancoBilletera(e.target.value)}
-            className="w-full p-4 rounded-xl bg-black border border-zinc-700"
-            placeholder="Banco / billetera"
-          />
-
-          <h2 className="text-2xl font-bold text-yellow-400 pt-4">
-            Validación facial
-          </h2>
-
-          <div className="bg-black border border-dashed border-zinc-700 rounded-2xl p-6 text-center text-zinc-400">
-            Selfie en vivo / reconocimiento facial
-          </div>
+          <input value={aliasCbuCvu} onChange={e => setAliasCbuCvu(e.target.value)} className="w-full p-4 rounded-xl bg-black border border-zinc-700" placeholder="Alias / CBU / CVU" />
+          <input value={titularCuenta} onChange={e => setTitularCuenta(e.target.value)} className="w-full p-4 rounded-xl bg-black border border-zinc-700" placeholder="Titular de la cuenta" />
+          <input value={bancoBilletera} onChange={e => setBancoBilletera(e.target.value)} className="w-full p-4 rounded-xl bg-black border border-zinc-700" placeholder="Banco / billetera" />
 
           <button
             type="button"
@@ -318,6 +256,7 @@ export default function RegistroChoferPage() {
           >
             {loading ? "Enviando..." : "Enviar solicitud de validación"}
           </button>
+
         </div>
       </div>
     </main>
