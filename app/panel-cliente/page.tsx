@@ -26,8 +26,8 @@ const estadosTracking = [
 const LABELS = ["A", "B", "C", "D", "E", "F"];
 
 const getTipoParadaLabel = (tipo: string) => {
-  if (tipo === "retiro") return "📦 Carga / Retiro";
-  if (tipo === "entrega") return "🏁 Descarga / Entrega final";
+  if (tipo === "retiro") return "📦 Retiro / Carga";
+  if (tipo === "entrega") return "🏁 Entrega final";
   return "📍 Parada intermedia";
 };
 
@@ -57,9 +57,15 @@ const tiempoRelativo = (iso: string | null | undefined) => {
   return `hace ${Math.floor(diff / 3600)} horas`;
 };
 
-// ─── Soporte TILA ─────────────────────────────────────────────────────────────
 const SOPORTE_WHATSAPP = "5491158689383";
 const SOPORTE_EMAIL = "logisticatila@gmail.com";
+
+const Dato = ({ label, valor }: { label: string; valor?: string | null }) => (
+  <div className="bg-black rounded-xl p-3">
+    <p className="text-zinc-500 text-xs font-black mb-1">{label}</p>
+    <p className="text-white font-black text-sm">{valor || "No informado"}</p>
+  </div>
+);
 
 export default function PanelClientePage() {
   const { autorizado } = useProtegerRuta("cliente");
@@ -70,19 +76,13 @@ export default function PanelClientePage() {
   const [alerta, setAlerta] = useState<string | null>(null);
   const [viajeEliminado, setViajeEliminado] = useState(false);
   const [mapaAmpliado, setMapaAmpliado] = useState(false);
-  const [ahora, setAhora] = useState(Date.now());
   const ultimoEstadoRef = useRef<string | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   useEffect(() => {
-    const t = setInterval(() => setAhora(Date.now()), 10000);
+    const t = setInterval(() => {}, 10000);
     return () => clearInterval(t);
   }, []);
-
-  const cerrarSesion = () => {
-    localStorage.clear();
-    window.location.href = "/login";
-  };
 
   const dispararAlerta = (estado: string) => {
     setAlerta(estado);
@@ -109,7 +109,6 @@ export default function PanelClientePage() {
   const cargarViaje = async (viajeId: string) => {
     const { data, error } = await supabase.from("cargas").select("*").eq("id", viajeId).single();
     if (error) {
-      console.log(error);
       localStorage.removeItem("viajeActivoId");
       localStorage.removeItem("viajeActivo");
       setViajeEliminado(true);
@@ -119,7 +118,7 @@ export default function PanelClientePage() {
     if (data?.chofer_id) {
       const { data: chofer } = await supabase
         .from("usuarios")
-        .select("id, nombre, vehiculo, telefono, bateria_nivel, bateria_cargando, ultima_senal_at")
+        .select("id, nombre, vehiculo, telefono, bateria_nivel, bateria_cargando, ultima_senal_at, online, categoria_legal, tipo_vehiculo, tipo_carroceria, zona_operativa")
         .eq("id", data.chofer_id)
         .single();
       if (chofer) setChoferInfo(chofer);
@@ -171,17 +170,12 @@ export default function PanelClientePage() {
   if (!autorizado) return null;
 
   return (
-    <main className="min-h-screen bg-black text-white p-6">
+    <main className="min-h-screen bg-black text-white p-4 md:p-6">
       <audio ref={audioRef} src="/sounds/alerta-viaje.mp3" preload="auto" />
 
       {/* Chat flotante */}
       {viaje && viajeId && usuarioChat?.id && (
-        <ChatAsistencia
-          viajeId={viajeId}
-          usuarioId={usuarioChat.id}
-          usuarioRol="cliente"
-          usuarioNombre={usuarioChat.nombre || "Cliente"}
-        />
+        <ChatAsistencia viajeId={viajeId} usuarioId={usuarioChat.id} usuarioRol="cliente" usuarioNombre={usuarioChat.nombre || "Cliente"} />
       )}
 
       {/* Alerta cambio de estado */}
@@ -199,43 +193,36 @@ export default function PanelClientePage() {
         <div className="fixed inset-0 z-40 bg-black flex flex-col">
           <div className="flex items-center justify-between p-4 border-b border-zinc-800">
             <p className="text-yellow-400 font-black text-lg">🗺️ {viaje.origen} → {viaje.destino}</p>
-            <button onClick={() => setMapaAmpliado(false)} className="bg-red-700 hover:bg-red-600 text-white font-black px-5 py-2 rounded-xl">
-              ✕ Cerrar mapa
-            </button>
+            <button onClick={() => setMapaAmpliado(false)} className="bg-red-700 hover:bg-red-600 text-white font-black px-5 py-2 rounded-xl">✕ Cerrar mapa</button>
           </div>
           <div className="flex-1">
             <MapaTILA lat={viaje?.lat} lng={viaje?.lng} origen={viaje.origen} destino={viaje.destino}
-              soloLectura={true} altura="100%"
-              paradas={paradasParaMapa.length >= 2 ? paradasParaMapa : undefined} />
+              soloLectura={true} altura="100%" paradas={paradasParaMapa.length >= 2 ? paradasParaMapa : undefined} />
           </div>
         </div>
       )}
 
       {/* Header */}
-      <div className="flex items-center justify-between mb-8">
-        <Link href="/" className="text-zinc-400 hover:text-white">← Volver</Link>
+      <div className="flex items-center justify-between mb-6">
+        <Link href="/" className="text-zinc-400 hover:text-white text-sm">← Volver</Link>
         <div className="flex items-center gap-3">
-          <div className="bg-zinc-900 border border-zinc-800 rounded-2xl px-5 py-3">
-            <span className="text-green-400 font-bold animate-pulse">Cliente conectado</span>
+          <div className="bg-zinc-900 border border-zinc-800 rounded-xl px-4 py-2">
+            <span className="text-green-400 font-bold text-sm animate-pulse">● Cliente conectado</span>
           </div>
           <BotonCerrarSesion />
         </div>
       </div>
 
-      <h1 className="text-5xl font-black text-yellow-400 mb-2">Panel Cliente</h1>
-      <p className="text-zinc-400 mb-8">Seguimiento de tu carga en tiempo real.</p>
+      <h1 className="text-4xl md:text-5xl font-black text-yellow-400 mb-2">Panel Cliente</h1>
+      <p className="text-zinc-400 mb-6 text-sm">Seguimiento de tu carga en tiempo real.</p>
 
-      {/* Soporte TILA */}
-      <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4 mb-8 flex flex-col md:flex-row items-center gap-3">
+      {/* Soporte */}
+      <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4 mb-6 flex flex-col md:flex-row items-center gap-3">
         <p className="text-zinc-400 text-sm font-black">🆘 Soporte TILA:</p>
         <a href={`https://wa.me/${SOPORTE_WHATSAPP}`} target="_blank" rel="noreferrer"
-          className="bg-green-600 hover:bg-green-500 text-white font-black px-4 py-2 rounded-xl text-sm">
-          💬 WhatsApp
-        </a>
+          className="bg-green-600 hover:bg-green-500 text-white font-black px-4 py-2 rounded-xl text-sm">💬 WhatsApp</a>
         <a href={`mailto:${SOPORTE_EMAIL}`}
-          className="bg-zinc-700 hover:bg-zinc-600 text-white font-black px-4 py-2 rounded-xl text-sm">
-          📧 {SOPORTE_EMAIL}
-        </a>
+          className="bg-zinc-700 hover:bg-zinc-600 text-white font-black px-4 py-2 rounded-xl text-sm">📧 {SOPORTE_EMAIL}</a>
       </div>
 
       {viajeEliminado ? (
@@ -246,8 +233,8 @@ export default function PanelClientePage() {
         </div>
       ) : !viaje ? (
         <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-10 text-center">
-          <h2 className="text-3xl font-black mb-3">No hay viaje activo cargado</h2>
-          <p className="text-zinc-500 mb-6">Primero el chofer debe aceptar una carga.</p>
+          <h2 className="text-3xl font-black mb-3">No hay viaje activo</h2>
+          <p className="text-zinc-500 mb-6">Publicá una carga para comenzar.</p>
           <Link href="/publicar" className="inline-block bg-yellow-400 hover:bg-yellow-500 text-black font-black px-8 py-4 rounded-2xl">Publicar carga</Link>
         </div>
       ) : viaje.estado === "Viaje finalizado" ? (
@@ -261,77 +248,99 @@ export default function PanelClientePage() {
           </div>
         </div>
       ) : (
-        <div className="grid gap-6">
-          <div className="bg-zinc-900 border-2 border-yellow-400 rounded-3xl p-8 animate-pulse">
-            <p className="text-pink-500 font-black text-xl mb-3">🚨 VIAJE EN SEGUIMIENTO 🚨</p>
-            <h2 className="text-4xl font-black text-yellow-400">{viaje.origen} → {viaje.destino}</h2>
-            <p className="text-zinc-400 mt-3">Estado actual: <span className="text-green-400 font-black">{viaje.estado || "Chofer asignado"}</span></p>
+        <div className="grid gap-5 max-w-4xl mx-auto">
+
+          {/* Header viaje activo */}
+          <div className="bg-zinc-900 border-2 border-yellow-400 rounded-3xl p-6">
+            <p className="text-pink-500 font-black text-sm mb-2">🚨 VIAJE EN SEGUIMIENTO</p>
+            <h2 className="text-3xl md:text-4xl font-black text-yellow-400 leading-tight">{viaje.origen} → {viaje.destino}</h2>
+            <div className="flex flex-wrap gap-2 mt-3">
+              {estadosTracking.map((estado) => {
+                const activo = viaje.estado === estado.nombre;
+                return (
+                  <span key={estado.nombre} className={`px-3 py-1 rounded-xl font-black text-xs border transition ${activo ? `${estado.color} scale-105` : "bg-black border-zinc-800 text-zinc-600"}`}>
+                    {estado.nombre}
+                  </span>
+                );
+              })}
+            </div>
           </div>
 
+          {/* 🚛 El chofer */}
           {choferInfo && (
             <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-6">
-              <h3 className="text-2xl font-black text-yellow-400 mb-4">🚛 Estado del chofer</h3>
+              <h3 className="text-xl font-black text-yellow-400 mb-4">🚛 El chofer</h3>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+                <Dato label="NOMBRE" valor={choferInfo.nombre} />
+                <Dato label="ESTADO" valor={choferInfo.online ? "🟢 Online" : "🔴 Offline"} />
+                <Dato label="TELÉFONO" valor={choferInfo.telefono} />
+                <Dato label="ZONA OPERATIVA" valor={choferInfo.zona_operativa} />
+              </div>
+              <div className="grid grid-cols-3 gap-3">
+                <Dato label="CATEGORÍA LEGAL" valor={choferInfo.categoria_legal} />
+                <Dato label="TIPO DE VEHÍCULO" valor={choferInfo.tipo_vehiculo || choferInfo.vehiculo} />
+                <Dato label="CARROCERÍA" valor={choferInfo.tipo_carroceria} />
+              </div>
+            </div>
+          )}
+
+          {/* 📡 Estado en vivo */}
+          {choferInfo && (
+            <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-6">
+              <h3 className="text-xl font-black text-yellow-400 mb-4">📡 Estado en vivo</h3>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                 <div className="bg-black rounded-xl p-3 text-center">
-                  <p className="text-zinc-500 text-xs">Chofer</p>
-                  <p className="text-white font-black text-sm mt-1 truncate">{choferInfo.nombre || "Sin nombre"}</p>
+                  <p className="text-zinc-500 text-xs font-black">VELOCIDAD</p>
+                  <p className="text-yellow-400 font-black text-lg mt-1">
+                    {viaje?.velocidad_kmh != null ? `${viaje.velocidad_kmh} km/h` : "—"}
+                  </p>
                 </div>
                 <div className="bg-black rounded-xl p-3 text-center">
-                  <p className="text-zinc-500 text-xs">Velocidad</p>
-                  <p className="text-yellow-400 font-black text-sm mt-1">{viaje?.velocidad_kmh != null ? `${viaje.velocidad_kmh} km/h` : "Sin datos"}</p>
-                </div>
-                <div className="bg-black rounded-xl p-3 text-center">
-                  <p className="text-zinc-500 text-xs">Batería</p>
-                  <p className={`font-black text-sm mt-1 ${
-                    choferInfo.bateria_nivel === null ? "text-zinc-500" :
+                  <p className="text-zinc-500 text-xs font-black">BATERÍA</p>
+                  <p className={`font-black text-lg mt-1 ${
+                    choferInfo.bateria_nivel == null ? "text-zinc-500" :
                     choferInfo.bateria_nivel < 20 ? "text-red-400" :
                     choferInfo.bateria_nivel < 50 ? "text-yellow-400" : "text-green-400"
-                  }`}>{choferInfo.bateria_nivel != null ? `${choferInfo.bateria_nivel}%` : "No disponible"}</p>
+                  }`}>
+                    {choferInfo.bateria_nivel != null ? `${choferInfo.bateria_nivel}%` : "—"}
+                  </p>
                 </div>
                 <div className="bg-black rounded-xl p-3 text-center">
-                  <p className="text-zinc-500 text-xs">Última señal</p>
-                  <p className="text-blue-400 font-black text-xs mt-1">{tiempoRelativo(choferInfo.ultima_senal_at) || "Sin datos"}</p>
+                  <p className="text-zinc-500 text-xs font-black">CARGANDO</p>
+                  <p className={`font-black text-lg mt-1 ${choferInfo.bateria_cargando ? "text-green-400" : "text-zinc-400"}`}>
+                    {choferInfo.bateria_nivel != null ? (choferInfo.bateria_cargando ? "⚡ Sí" : "No") : "—"}
+                  </p>
+                </div>
+                <div className="bg-black rounded-xl p-3 text-center">
+                  <p className="text-zinc-500 text-xs font-black">ÚLTIMA SEÑAL</p>
+                  <p className="text-blue-400 font-black text-xs mt-1">
+                    {tiempoRelativo(choferInfo.ultima_senal_at) || "—"}
+                  </p>
                 </div>
               </div>
             </div>
           )}
 
-          {(viaje.created_at || viaje.hora_aceptacion || viaje.hora_inicio || viaje.hora_finalizacion) && (
-            <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-6">
-              <h3 className="text-2xl font-black text-yellow-400 mb-4">🕐 Cronología</h3>
-              <div className="space-y-2 text-sm">
-                {viaje.created_at && <p>📋 <strong>Publicado:</strong> <span className="text-zinc-300">{formatearFecha(viaje.created_at)}</span></p>}
-                {viaje.hora_aceptacion && <p>✅ <strong>Aceptado:</strong> <span className="text-green-400">{formatearFecha(viaje.hora_aceptacion)}</span></p>}
-                {viaje.hora_inicio && <p>🚛 <strong>En camino:</strong> <span className="text-yellow-400">{formatearFecha(viaje.hora_inicio)}</span></p>}
-                {paradas.filter(p => p.completada_at).map((p, i) => (
-                  <p key={p.id}>{p.tipo === "retiro" ? "📦" : p.tipo === "entrega" ? "🏁" : "📍"}{" "}
-                    <strong>{LABELS[i]} completada:</strong>{" "}
-                    <span className="text-green-400">{formatearFecha(p.completada_at)}</span>
-                  </p>
-                ))}
-                {viaje.hora_finalizacion && <p>🏆 <strong>Finalizado:</strong> <span className="text-green-400">{formatearFecha(viaje.hora_finalizacion)}</span></p>}
-              </div>
-            </div>
-          )}
-
+          {/* 📍 La ruta */}
           {paradas.length > 0 && (
             <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-6">
-              <h3 className="text-2xl font-black text-yellow-400 mb-4">Ruta del viaje</h3>
-              <div className="space-y-2">
+              <h3 className="text-xl font-black text-yellow-400 mb-4">📍 La ruta</h3>
+              <div className="space-y-3">
                 {paradas.map((parada, index) => (
                   <div key={parada.id} className={`flex items-center gap-3 p-3 rounded-xl border ${
                     parada.estado === "completada" ? "bg-green-900/30 border-green-700" :
-                    parada.estado === "en_curso" ? "bg-yellow-400/10 border-yellow-400" : "bg-zinc-800/30 border-zinc-700"
+                    parada.estado === "en_curso" ? "bg-yellow-400/10 border-yellow-400" :
+                    "bg-zinc-800/30 border-zinc-700"
                   }`}>
-                    <span className={`w-8 h-8 rounded-full flex items-center justify-center font-black text-sm flex-shrink-0 ${
+                    <span className={`w-9 h-9 rounded-full flex items-center justify-center font-black text-sm flex-shrink-0 ${
                       parada.estado === "completada" ? "bg-green-500 text-white" :
-                      parada.estado === "en_curso" ? "bg-yellow-400 text-black" : "bg-zinc-600 text-zinc-400"
+                      parada.estado === "en_curso" ? "bg-yellow-400 text-black" : "bg-zinc-700 text-zinc-400"
                     }`}>{LABELS[index] || index}</span>
                     <div className="flex-1 min-w-0">
                       <p className="text-zinc-400 text-xs font-black">{getTipoParadaLabel(parada.tipo)}</p>
                       <p className={`font-black text-sm truncate ${
                         parada.estado === "completada" ? "text-green-400" :
-                        parada.estado === "en_curso" ? "text-yellow-400" : "text-zinc-400"
+                        parada.estado === "en_curso" ? "text-yellow-400" : "text-zinc-300"
                       }`}>{parada.direccion}</p>
                       {parada.completada_at && <p className="text-zinc-500 text-xs">{formatearFecha(parada.completada_at)}</p>}
                     </div>
@@ -342,45 +351,92 @@ export default function PanelClientePage() {
             </div>
           )}
 
-          <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-8">
-            <h3 className="text-3xl font-black text-yellow-400 mb-4">Datos del viaje</h3>
-            <div className="space-y-3 text-xl">
-              <p>🚚 <strong>Vehículo:</strong> {viaje.vehiculo || "Pendiente"}</p>
-              <p>📍 <strong>Distancia:</strong> {viaje.km_estimados ? `${viaje.km_estimados} km` : "Sin calcular"}</p>
-              <p>⚖️ <strong>Peso:</strong> {viaje.peso || "Pendiente"}</p>
-              <p>📦 <strong>Tipo:</strong> {viaje.tipo_carga || "Pendiente"}</p>
-              <p>💰 <strong>Precio estimado total:</strong> ${Number(viaje.precio_cliente || 0).toLocaleString()}</p>
-              <p>📝 <strong>Detalles:</strong> {viaje.detalles || "Sin detalles"}</p>
+          {/* 📦 Tu carga */}
+          <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-6">
+            <h3 className="text-xl font-black text-yellow-400 mb-4">📦 Tu carga</h3>
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+              <Dato label="TIPO DE CARGA" valor={viaje.tipo_carga} />
+              <Dato label="PESO" valor={viaje.peso} />
+              <Dato label="VEHÍCULO REQUERIDO" valor={viaje.vehiculo} />
+              <Dato label="DISTANCIA" valor={viaje.km_estimados ? `${viaje.km_estimados} km` : null} />
+              <Dato label="DETALLES" valor={viaje.detalles} />
+              <Dato label="PRESENTACIÓN" valor={viaje.presentacion} />
             </div>
           </div>
 
+          {/* 💰 Tarifa */}
           <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-6">
-            <h3 className="text-3xl font-black text-yellow-400 mb-4">Tracking de carga</h3>
+            <h3 className="text-xl font-black text-yellow-400 mb-4">💰 Tarifa</h3>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="bg-black rounded-xl p-4 text-center col-span-2">
+                <p className="text-zinc-500 text-xs font-black">PRECIO TOTAL</p>
+                <p className="text-3xl font-black text-green-400 mt-1">${Number(viaje.precio_cliente || 0).toLocaleString()}</p>
+              </div>
+              <Dato label="DISTANCIA" valor={viaje.km_estimados ? `${viaje.km_estimados} km` : null} />
+              <Dato label="VEHÍCULO" valor={viaje.vehiculo} />
+            </div>
+          </div>
+
+          {/* 🕐 Cronología */}
+          {(viaje.created_at || viaje.hora_aceptacion || viaje.hora_inicio || viaje.hora_finalizacion) && (
+            <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-6">
+              <h3 className="text-xl font-black text-yellow-400 mb-4">🕐 Cronología</h3>
+              <div className="space-y-2">
+                {viaje.created_at && (
+                  <div className="flex items-center gap-3">
+                    <span className="w-2 h-2 rounded-full bg-zinc-500 flex-shrink-0" />
+                    <p className="text-sm"><span className="text-zinc-400 font-black">Publicado:</span> <span className="text-zinc-300">{formatearFecha(viaje.created_at)}</span></p>
+                  </div>
+                )}
+                {viaje.hora_aceptacion && (
+                  <div className="flex items-center gap-3">
+                    <span className="w-2 h-2 rounded-full bg-green-500 flex-shrink-0" />
+                    <p className="text-sm"><span className="text-zinc-400 font-black">Aceptado:</span> <span className="text-green-400">{formatearFecha(viaje.hora_aceptacion)}</span></p>
+                  </div>
+                )}
+                {viaje.hora_inicio && (
+                  <div className="flex items-center gap-3">
+                    <span className="w-2 h-2 rounded-full bg-yellow-400 flex-shrink-0" />
+                    <p className="text-sm"><span className="text-zinc-400 font-black">En camino:</span> <span className="text-yellow-400">{formatearFecha(viaje.hora_inicio)}</span></p>
+                  </div>
+                )}
+                {paradas.filter(p => p.completada_at).map((p, i) => (
+                  <div key={p.id} className="flex items-center gap-3">
+                    <span className="w-2 h-2 rounded-full bg-blue-400 flex-shrink-0" />
+                    <p className="text-sm">
+                      <span className="text-zinc-400 font-black">{LABELS[i]} completada:</span>{" "}
+                      <span className="text-blue-400">{formatearFecha(p.completada_at)}</span>
+                    </p>
+                  </div>
+                ))}
+                {viaje.hora_finalizacion && (
+                  <div className="flex items-center gap-3">
+                    <span className="w-2 h-2 rounded-full bg-green-400 flex-shrink-0" />
+                    <p className="text-sm"><span className="text-zinc-400 font-black">Finalizado:</span> <span className="text-green-400">{formatearFecha(viaje.hora_finalizacion)}</span></p>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Mapa y tracking */}
+          <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-6">
+            <h3 className="text-xl font-black text-yellow-400 mb-4">🗺️ Mapa en vivo</h3>
             {!viaje?.lat || !viaje?.lng ? (
               <div className="bg-zinc-800 rounded-2xl p-5 text-center mb-4">
-                <p className="text-zinc-400 text-lg">📡 Esperando ubicación del chofer...</p>
+                <p className="text-zinc-400">📡 Esperando ubicación del chofer...</p>
               </div>
             ) : null}
             <div className="rounded-2xl overflow-hidden border-2 border-yellow-400 mb-4">
               <MapaTILA lat={viaje?.lat} lng={viaje?.lng} origen={viaje.origen} destino={viaje.destino}
-                soloLectura={true} altura="360px"
-                paradas={paradasParaMapa.length >= 2 ? paradasParaMapa : undefined} />
+                soloLectura={true} altura="360px" paradas={paradasParaMapa.length >= 2 ? paradasParaMapa : undefined} />
             </div>
-            <div className="grid grid-cols-2 gap-3 mb-6">
-              <button onClick={() => setMapaAmpliado(true)} className="bg-zinc-800 hover:bg-zinc-700 border border-yellow-400 text-yellow-400 font-black py-3 rounded-2xl">🔍 Ampliar mapa</button>
-              <button onClick={() => { if (viaje?.lat && viaje?.lng) setViaje({ ...viaje }); }} className="bg-zinc-800 hover:bg-zinc-700 border border-green-400 text-green-400 font-black py-3 rounded-2xl">🚛 Seguir chofer</button>
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-4">
-              {estadosTracking.map((estado) => {
-                const activo = viaje.estado === estado.nombre;
-                return (
-                  <div key={estado.nombre} className={`rounded-2xl p-4 text-center font-black border transition ${activo ? `${estado.color} scale-105 animate-pulse` : "bg-black border-zinc-800 text-zinc-500"}`}>
-                    {estado.nombre}
-                  </div>
-                );
-              })}
+            <div className="grid grid-cols-2 gap-3">
+              <button onClick={() => setMapaAmpliado(true)} className="bg-zinc-800 hover:bg-zinc-700 border border-yellow-400 text-yellow-400 font-black py-3 rounded-2xl text-sm">🔍 Ampliar mapa</button>
+              <button onClick={() => { if (viaje?.lat && viaje?.lng) setViaje({ ...viaje }); }} className="bg-zinc-800 hover:bg-zinc-700 border border-green-400 text-green-400 font-black py-3 rounded-2xl text-sm">🚛 Seguir chofer</button>
             </div>
           </div>
+
         </div>
       )}
     </main>
