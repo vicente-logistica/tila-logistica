@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { supabase } from "../lib/supabase";
 import { useProtegerRuta } from "../hooks/useProtegerRuta";
+import HistorialChofer from "../components/historial-chofer";
 import BotonCerrarSesion from "../components/BotonCerrarSesion";
 
 const LABELS = ["A", "B", "C", "D", "E", "F"];
@@ -220,7 +221,8 @@ export default function PanelChoferPage() {
   }
 
   return (
-    <main className="min-h-screen bg-black text-white px-4 py-6 flex items-center justify-center">
+    <>
+      <main className="min-h-screen bg-black text-white px-4 py-6 flex items-center justify-center">
       <audio ref={audioRef} src="/sounds/alerta-viaje.mp3" loop preload="auto" />
 
       {cargando ? (
@@ -306,5 +308,18 @@ export default function PanelChoferPage() {
         </section>
       )}
     </main>
+
+    {/* Historial separado abajo */}
+    {autorizado && (
+      <div className="bg-black text-white px-4 py-8">
+        <div className="max-w-3xl mx-auto">
+          <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-6">
+            <h2 className="text-2xl font-black text-yellow-400 mb-6">📋 Mis viajes</h2>
+            <HistorialChofer />
+          </div>
+        </div>
+      </div>
+    )}
+  </>
   );
 }
