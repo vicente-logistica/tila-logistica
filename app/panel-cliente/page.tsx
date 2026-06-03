@@ -7,6 +7,7 @@ import { useProtegerRuta } from "../hooks/useProtegerRuta";
 import MapaTILA from "../components/MapaTILA";
 import ChatAsistencia from "../components/ChatAsistencia";
 import BotonCerrarSesion from "../components/BotonCerrarSesion";
+import HistorialCliente from "../components/historial-cliente";
 
 type ParadaMapa = {
   direccion: string;
@@ -439,6 +440,14 @@ export default function PanelClientePage() {
 
         </div>
       )}
+      {/* Historial de viajes */}
+      <div className="max-w-4xl mx-auto mt-8">
+        <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-6">
+          <h2 className="text-2xl font-black text-yellow-400 mb-6">📋 Historial de viajes</h2>
+          <HistorialCliente />
+        </div>
+      </div>
+
     </main>
   );
 }
