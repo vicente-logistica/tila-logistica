@@ -17,16 +17,43 @@ const colorEstado = (estado: string) => {
   return "bg-zinc-600 text-white";
 };
 
+const puedeOcultar = (viaje: any): { puede: boolean; razon?: string } => {
+  const estado = viaje.estado || "pendiente";
+
+  // No puede ocultar viajes activos
+  const estadosActivos = ["Chofer asignado", "En camino", "Carga retirada", "En ruta", "Descarga completada"];
+  if (estadosActivos.includes(estado)) {
+    return { puede: false, razon: "No podés ocultar un viaje en curso" };
+  }
+
+  // Puede ocultar finalizados siempre
+  if (estado === "Viaje finalizado") return { puede: true };
+
+  // Pendiente sin chofer: solo si pasaron 3 horas
+  if (estado === "pendiente" && !viaje.chofer_id) {
+    const horasTranscurridas = (Date.now() - new Date(viaje.created_at).getTime()) / 3600000;
+    if (horasTranscurridas >= 3) return { puede: true };
+    const minutosRestantes = Math.ceil((3 - horasTranscurridas) * 60);
+    return { puede: false, razon: `Podés cancelar en ${minutosRestantes} minutos` };
+  }
+
+  // Pendiente con chofer asignado: no puede ocultar
+  if (viaje.chofer_id) {
+    return { puede: false, razon: "Ya tiene chofer asignado" };
+  }
+
+  return { puede: false, razon: "No se puede ocultar en este estado" };
+};
+
 export default function HistorialCliente() {
   const [viajes, setViajes] = useState<any[]>([]);
   const [paradasPorViaje, setParadasPorViaje] = useState<Record<string, any[]>>({});
   const [choferesPorViaje, setChoferesPorViaje] = useState<Record<string, any>>({});
   const [cargando, setCargando] = useState(true);
   const [expandido, setExpandido] = useState<string | null>(null);
+  const [ocultando, setOcultando] = useState<string | null>(null);
 
-  useEffect(() => {
-    cargarHistorial();
-  }, []);
+  useEffect(() => { cargarHistorial(); }, []);
 
   const cargarHistorial = async () => {
     const u = localStorage.getItem("usuario");
@@ -37,14 +64,15 @@ export default function HistorialCliente() {
       .from("cargas")
       .select("*")
       .eq("cliente_id", usuario.id)
+      .neq("oculto_cliente", true)
       .order("created_at", { ascending: false });
 
     if (error) { console.error(error); setCargando(false); return; }
     setViajes(data || []);
 
     if (data && data.length > 0) {
-      // Paradas
       const ids = data.map((c: any) => c.id);
+
       const { data: dataParadas } = await supabase
         .from("paradas_viaje").select("*").in("carga_id", ids).order("orden", { ascending: true });
       if (dataParadas) {
@@ -57,7 +85,6 @@ export default function HistorialCliente() {
         setParadasPorViaje(mapa);
       }
 
-      // Choferes
       const choferIds = [...new Set(data.filter((c: any) => c.chofer_id).map((c: any) => String(c.chofer_id)))];
       if (choferIds.length > 0) {
         const { data: dataChoferes } = await supabase
@@ -75,6 +102,23 @@ export default function HistorialCliente() {
       }
     }
     setCargando(false);
+  };
+
+  const ocultarViaje = async (viajeId: string) => {
+    const confirmado = window.confirm(
+      "Esto solo elimina el viaje de tu historial.\nTILA conservará la trazabilidad administrativa."
+    );
+    if (!confirmado) return;
+
+    setOcultando(viajeId);
+    const { error } = await supabase
+      .from("cargas")
+      .update({ oculto_cliente: true, auto_oculto_at: new Date().toISOString() })
+      .eq("id", viajeId);
+
+    if (error) { alert("Error: " + error.message); }
+    else { setViajes(prev => prev.filter(v => String(v.id) !== viajeId)); }
+    setOcultando(null);
   };
 
   const totalViajes = viajes.length;
@@ -104,16 +148,17 @@ export default function HistorialCliente() {
 
       {viajes.length === 0 ? (
         <div className="bg-zinc-800 rounded-2xl p-8 text-center">
-          <p className="text-zinc-500">No tenés viajes registrados todavía.</p>
+          <p className="text-zinc-500">No tenés viajes en tu historial.</p>
         </div>
       ) : (
         viajes.map((viaje) => {
           const paradas = paradasPorViaje[String(viaje.id)] || [];
           const chofer = choferesPorViaje[String(viaje.id)];
           const abierto = expandido === String(viaje.id);
+          const { puede, razon } = puedeOcultar(viaje);
+
           return (
             <div key={viaje.id} className="bg-zinc-800 border border-zinc-700 rounded-2xl overflow-hidden">
-              {/* Header tarjeta */}
               <button className="w-full p-4 text-left" onClick={() => setExpandido(abierto ? null : String(viaje.id))}>
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex-1 min-w-0">
@@ -134,11 +179,8 @@ export default function HistorialCliente() {
                 </div>
               </button>
 
-              {/* Detalle expandido */}
               {abierto && (
                 <div className="border-t border-zinc-700 p-4 space-y-4">
-
-                  {/* Datos del viaje */}
                   <div className="grid grid-cols-2 gap-3 text-sm">
                     <div className="bg-black rounded-xl p-3">
                       <p className="text-zinc-500 text-xs font-black">PRECIO TOTAL</p>
@@ -158,16 +200,14 @@ export default function HistorialCliente() {
                     </div>
                   </div>
 
-                  {/* Chofer */}
                   {chofer && (
                     <div className="bg-black rounded-xl p-3">
-                      <p className="text-zinc-500 text-xs font-black mb-1">CHOFER ASIGNADO</p>
+                      <p className="text-zinc-500 text-xs font-black mb-1">CHOFER</p>
                       <p className="text-white font-black">{chofer.nombre}</p>
                       <p className="text-zinc-400 text-xs">{chofer.tipo_vehiculo || chofer.vehiculo}</p>
                     </div>
                   )}
 
-                  {/* Paradas */}
                   {paradas.length > 0 && (
                     <div>
                       <p className="text-zinc-500 text-xs font-black mb-2">RUTA</p>
@@ -187,7 +227,6 @@ export default function HistorialCliente() {
                     </div>
                   )}
 
-                  {/* Cronología */}
                   <div>
                     <p className="text-zinc-500 text-xs font-black mb-2">CRONOLOGÍA</p>
                     <div className="space-y-1 text-xs">
@@ -198,6 +237,24 @@ export default function HistorialCliente() {
                     </div>
                   </div>
 
+                  {/* Botón ocultar */}
+                  <div className="pt-2 border-t border-zinc-700">
+                    {puede ? (
+                      <button
+                        onClick={() => ocultarViaje(String(viaje.id))}
+                        disabled={ocultando === String(viaje.id)}
+                        className={`w-full py-2 rounded-xl font-black text-xs transition ${
+                          ocultando === String(viaje.id)
+                            ? "bg-zinc-700 text-zinc-500 cursor-not-allowed"
+                            : "border border-red-800 text-red-500 hover:bg-red-900/30"
+                        }`}
+                      >
+                        {ocultando === String(viaje.id) ? "Ocultando..." : "🗑️ Eliminar de mi historial"}
+                      </button>
+                    ) : (
+                      <p className="text-zinc-600 text-xs text-center">{razon}</p>
+                    )}
+                  </div>
                 </div>
               )}
             </div>
