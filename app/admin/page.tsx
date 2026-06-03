@@ -464,7 +464,11 @@ const HistorialAdmin = ({ cargas, paradasPorCarga, todosUsuarios }: { cargas: an
   const getNombre = (id: string) => todosUsuarios.find(u => u.id === id)?.nombre || "—";
 
   const cargasFiltradas = cargas.filter(c => {
-    if (filtroEstado !== "todos" && c.estado !== filtroEstado) return false;
+    if (filtroEstado !== "todos") {
+      const estadoCarga = (c.estado || "pendiente").toLowerCase();
+      const filtroLower = filtroEstado.toLowerCase();
+      if (estadoCarga !== filtroLower) return false;
+    }
     if (filtroTexto) {
       const q = filtroTexto.toLowerCase();
       return (c.origen || "").toLowerCase().includes(q) ||
