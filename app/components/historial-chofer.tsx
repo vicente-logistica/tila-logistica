@@ -17,12 +17,18 @@ const colorEstado = (estado: string) => {
   return "bg-zinc-600 text-white";
 };
 
+const puedeOcultar = (viaje: any): boolean => {
+  const estadosActivos = ["Chofer asignado", "En camino", "Carga retirada", "En ruta", "Descarga completada"];
+  return !estadosActivos.includes(viaje.estado || "");
+};
+
 export default function HistorialChofer() {
   const [viajes, setViajes] = useState<any[]>([]);
   const [paradasPorViaje, setParadasPorViaje] = useState<Record<string, any[]>>({});
   const [clientesPorViaje, setClientesPorViaje] = useState<Record<string, any>>({});
   const [cargando, setCargando] = useState(true);
   const [expandido, setExpandido] = useState<string | null>(null);
+  const [ocultando, setOcultando] = useState<string | null>(null);
 
   useEffect(() => { cargarHistorial(); }, []);
 
@@ -32,7 +38,11 @@ export default function HistorialChofer() {
     const usuario = JSON.parse(u);
 
     const { data, error } = await supabase
-      .from("cargas").select("*").eq("chofer_id", usuario.id).order("created_at", { ascending: false });
+      .from("cargas")
+      .select("*")
+      .eq("chofer_id", usuario.id)
+      .neq("oculto_chofer", true)
+      .order("created_at", { ascending: false });
 
     if (error) { console.error(error); setCargando(false); return; }
     setViajes(data || []);
@@ -40,7 +50,6 @@ export default function HistorialChofer() {
     if (data && data.length > 0) {
       const ids = data.map((c: any) => c.id);
 
-      // Paradas
       const { data: dataParadas } = await supabase
         .from("paradas_viaje").select("*").in("carga_id", ids).order("orden", { ascending: true });
       if (dataParadas) {
@@ -53,7 +62,6 @@ export default function HistorialChofer() {
         setParadasPorViaje(mapa);
       }
 
-      // Clientes
       const clienteIds = [...new Set(data.filter((c: any) => c.cliente_id).map((c: any) => String(c.cliente_id)))];
       if (clienteIds.length > 0) {
         const { data: dataClientes } = await supabase
@@ -71,6 +79,23 @@ export default function HistorialChofer() {
       }
     }
     setCargando(false);
+  };
+
+  const ocultarViaje = async (viajeId: string) => {
+    const confirmado = window.confirm(
+      "Esto solo elimina el viaje de tu historial.\nTILA conservará la trazabilidad administrativa."
+    );
+    if (!confirmado) return;
+
+    setOcultando(viajeId);
+    const { error } = await supabase
+      .from("cargas")
+      .update({ oculto_chofer: true, auto_oculto_at: new Date().toISOString() })
+      .eq("id", viajeId);
+
+    if (error) { alert("Error: " + error.message); }
+    else { setViajes(prev => prev.filter(v => String(v.id) !== viajeId)); }
+    setOcultando(null);
   };
 
   const finalizados = viajes.filter(v => v.estado === "Viaje finalizado");
@@ -99,13 +124,15 @@ export default function HistorialChofer() {
 
       {viajes.length === 0 ? (
         <div className="bg-zinc-800 rounded-2xl p-8 text-center">
-          <p className="text-zinc-500">No tenés viajes realizados todavía.</p>
+          <p className="text-zinc-500">No tenés viajes en tu historial.</p>
         </div>
       ) : (
         viajes.map((viaje) => {
           const paradas = paradasPorViaje[String(viaje.id)] || [];
           const cliente = clientesPorViaje[String(viaje.id)];
           const abierto = expandido === String(viaje.id);
+          const puede = puedeOcultar(viaje);
+
           return (
             <div key={viaje.id} className="bg-zinc-800 border border-zinc-700 rounded-2xl overflow-hidden">
               <button className="w-full p-4 text-left" onClick={() => setExpandido(abierto ? null : String(viaje.id))}>
@@ -184,6 +211,25 @@ export default function HistorialChofer() {
                       {viaje.hora_inicio && <p>🚛 <span className="text-zinc-400">En camino:</span> <span className="text-yellow-400">{formatearFecha(viaje.hora_inicio)}</span></p>}
                       {viaje.hora_finalizacion && <p>🏆 <span className="text-zinc-400">Finalizado:</span> <span className="text-green-400">{formatearFecha(viaje.hora_finalizacion)}</span></p>}
                     </div>
+                  </div>
+
+                  {/* Botón ocultar */}
+                  <div className="pt-2 border-t border-zinc-700">
+                    {puede ? (
+                      <button
+                        onClick={() => ocultarViaje(String(viaje.id))}
+                        disabled={ocultando === String(viaje.id)}
+                        className={`w-full py-2 rounded-xl font-black text-xs transition ${
+                          ocultando === String(viaje.id)
+                            ? "bg-zinc-700 text-zinc-500 cursor-not-allowed"
+                            : "border border-red-800 text-red-500 hover:bg-red-900/30"
+                        }`}
+                      >
+                        {ocultando === String(viaje.id) ? "Ocultando..." : "🗑️ Eliminar de mi historial"}
+                      </button>
+                    ) : (
+                      <p className="text-zinc-600 text-xs text-center">No podés ocultar un viaje en curso</p>
+                    )}
                   </div>
                 </div>
               )}
