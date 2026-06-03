@@ -524,7 +524,9 @@ const HistorialAdmin = ({ cargas, paradasPorCarga, todosUsuarios }: { cargas: an
                     <p className="text-yellow-400 font-black text-sm truncate">{carga.origen} → {carga.destino}</p>
                     <p className="text-zinc-500 text-xs mt-0.5">{formatearFechaAdmin(carga.created_at)}</p>
                   </div>
-                  <div className="flex items-center gap-2 flex-shrink-0">
+                  <div className="flex items-center gap-2 flex-shrink-0 flex-wrap justify-end">
+                    {carga.oculto_cliente && <span className="bg-orange-800 text-orange-200 text-xs font-black px-2 py-0.5 rounded-lg">👤 Oculto cliente</span>}
+                    {carga.oculto_chofer && <span className="bg-blue-900 text-blue-200 text-xs font-black px-2 py-0.5 rounded-lg">🚛 Oculto chofer</span>}
                     <span className={`px-2 py-1 rounded-lg text-xs font-black ${colorEstado(carga.estado)}`}>{carga.estado || "Pendiente"}</span>
                     <span className="text-zinc-500 text-xs">{abierto ? "▲" : "▼"}</span>
                   </div>
