@@ -78,6 +78,10 @@ const emojiBateria = (nivel: number | null) => {
 
 // ─── Tarjeta usuario unificada ────────────────────────────────────────────────
 
+const CATEGORIAS_LEGALES = ["N1", "N2", "N3"];
+const TIPOS_VEHICULO = ["Moto", "Utilitario", "Furgón", "Pick-up", "Camión rígido", "Camión tractor", "Bitrén"];
+const TIPOS_CARROCERIA = ["Furgón", "Furgón térmico", "Plataforma", "Baranda volcable", "Cisterna", "Jaula", "Tolva", "Batea", "Portacontenedor", "Mosquito", "Grúa plancha"];
+
 const TarjetaUsuario = ({
   usuario,
   esUnicoAdmin,
@@ -100,12 +104,19 @@ const TarjetaUsuario = ({
   const [email, setEmail] = useState(usuario.email || "");
   const [telefono, setTelefono] = useState(usuario.telefono || "");
   const [dni, setDni] = useState(usuario.dni || "");
+  const [categoriaLegal, setCategoriaLegal] = useState(usuario.categoria_legal || "");
+  const [tipoVehiculo, setTipoVehiculo] = useState(usuario.tipo_vehiculo || "");
+  const [tipoCarroceria, setTipoCarroceria] = useState(usuario.tipo_carroceria || "");
 
   const guardarEdicion = async () => {
-    const { error } = await supabase
-      .from("usuarios")
-      .update({ nombre, email, telefono, dni })
-      .eq("id", usuario.id);
+    const updateData: any = { nombre, email, telefono, dni };
+    if (usuario.rol === "chofer") {
+      updateData.categoria_legal = categoriaLegal;
+      updateData.tipo_vehiculo = tipoVehiculo;
+      updateData.tipo_carroceria = tipoCarroceria;
+      if (tipoVehiculo) updateData.vehiculo = tipoVehiculo;
+    }
+    const { error } = await supabase.from("usuarios").update(updateData).eq("id", usuario.id);
     if (error) { alert("Error al guardar: " + error.message); return; }
     setEditando(false);
   };
@@ -138,6 +149,25 @@ const TarjetaUsuario = ({
           <input value={email} onChange={e => setEmail(e.target.value)} placeholder="Email" className="w-full bg-zinc-900 border border-zinc-700 text-white p-2 rounded-xl text-sm" />
           <input value={telefono} onChange={e => setTelefono(e.target.value)} placeholder="Teléfono" className="w-full bg-zinc-900 border border-zinc-700 text-white p-2 rounded-xl text-sm" />
           <input value={dni} onChange={e => setDni(e.target.value)} placeholder="DNI" className="w-full bg-zinc-900 border border-zinc-700 text-white p-2 rounded-xl text-sm" />
+          {usuario.rol === "chofer" && (
+            <>
+              <p className="text-zinc-500 text-xs font-black pt-1">CLASIFICACIÓN VEHICULAR</p>
+              <div className="flex gap-2">
+                {CATEGORIAS_LEGALES.map(c => (
+                  <button key={c} type="button" onClick={() => setCategoriaLegal(c)}
+                    className={`flex-1 py-2 rounded-xl font-black text-sm ${categoriaLegal === c ? "bg-yellow-400 text-black" : "bg-zinc-800 text-zinc-400"}`}>{c}</button>
+                ))}
+              </div>
+              <select value={tipoVehiculo} onChange={e => setTipoVehiculo(e.target.value)} className="w-full bg-zinc-900 border border-zinc-700 text-white p-2 rounded-xl text-sm">
+                <option value="">Tipo de vehículo</option>
+                {TIPOS_VEHICULO.map(t => <option key={t}>{t}</option>)}
+              </select>
+              <select value={tipoCarroceria} onChange={e => setTipoCarroceria(e.target.value)} className="w-full bg-zinc-900 border border-zinc-700 text-white p-2 rounded-xl text-sm">
+                <option value="">Tipo de carrocería</option>
+                {TIPOS_CARROCERIA.map(t => <option key={t}>{t}</option>)}
+              </select>
+            </>
+          )}
           <button onClick={guardarEdicion} className="w-full bg-yellow-400 text-black font-black py-2 rounded-xl text-sm">💾 Guardar cambios</button>
         </div>
       ) : (
@@ -147,6 +177,13 @@ const TarjetaUsuario = ({
           {usuario.vehiculo && <p>🚛 {usuario.vehiculo}</p>}
           {usuario.telefono && <p>📞 {usuario.telefono}</p>}
           {usuario.dni && <p>🪪 DNI: {usuario.dni}</p>}
+          {usuario.rol === "chofer" && (usuario.categoria_legal || usuario.tipo_vehiculo || usuario.tipo_carroceria) && (
+            <div className="flex flex-wrap gap-1 mt-1">
+              {usuario.categoria_legal && <span className="bg-yellow-400 text-black px-2 py-0.5 rounded-lg text-xs font-black">{usuario.categoria_legal}</span>}
+              {usuario.tipo_vehiculo && <span className="bg-blue-600 text-white px-2 py-0.5 rounded-lg text-xs font-black">{usuario.tipo_vehiculo}</span>}
+              {usuario.tipo_carroceria && <span className="bg-zinc-600 text-white px-2 py-0.5 rounded-lg text-xs font-black">{usuario.tipo_carroceria}</span>}
+            </div>
+          )}
           <p className="text-zinc-500 text-xs">ID: {usuario.id?.slice(0, 8)}</p>
         </div>
       )}
@@ -198,12 +235,23 @@ const TarjetaChofer = ({ chofer, onActualizarAprobacion }: { chofer: any; onActu
         </span>
       </div>
     </div>
-    <div className="space-y-1 text-sm mb-4">
+    <div className="space-y-1 text-sm mb-3">
       <p>🚛 <strong>Vehículo:</strong> {chofer.vehiculo || "Sin dato"}</p>
       <p>📞 <strong>Teléfono:</strong> {chofer.telefono || "Sin dato"}</p>
       <p>📧 <strong>Email:</strong> {chofer.email || "Sin dato"}</p>
       <p>🪪 <strong>DNI:</strong> {chofer.dni || "Sin dato"}</p>
     </div>
+    {/* Clasificación profesional */}
+    {(chofer.categoria_legal || chofer.tipo_vehiculo || chofer.tipo_carroceria) && (
+      <div className="bg-zinc-900 rounded-xl p-3 mb-3">
+        <p className="text-zinc-500 text-xs font-black mb-2">CLASIFICACIÓN VEHICULAR</p>
+        <div className="flex flex-wrap gap-2">
+          {chofer.categoria_legal && <span className="bg-yellow-400 text-black px-2 py-0.5 rounded-lg text-xs font-black">{chofer.categoria_legal}</span>}
+          {chofer.tipo_vehiculo && <span className="bg-blue-600 text-white px-2 py-0.5 rounded-lg text-xs font-black">{chofer.tipo_vehiculo}</span>}
+          {chofer.tipo_carroceria && <span className="bg-zinc-600 text-white px-2 py-0.5 rounded-lg text-xs font-black">{chofer.tipo_carroceria}</span>}
+        </div>
+      </div>
+    )}
     <div className="grid grid-cols-2 gap-2">
       <button onClick={() => onActualizarAprobacion(chofer.id, "aprobado")} className="bg-green-600 text-white font-black py-2 rounded-xl text-sm">✅ Aprobar</button>
       <button onClick={() => onActualizarAprobacion(chofer.id, "rechazado")} className="bg-red-700 text-white font-black py-2 rounded-xl text-sm">❌ Rechazar</button>
