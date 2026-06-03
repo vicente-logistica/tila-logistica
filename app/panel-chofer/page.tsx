@@ -68,7 +68,7 @@ export default function PanelChoferPage() {
       const usuarioGuardado = localStorage.getItem("usuario");
       const usuario = usuarioGuardado ? JSON.parse(usuarioGuardado) : null;
       const vehiculoDelChofer = usuario?.vehiculo || "";
-      setVehiculoChofer(vehiculoDelChofer);
+      setVehiculoChofer(usuario?.tipo_vehiculo || usuario?.vehiculo || "No definido");
 
       const { data, error } = await supabase
         .from("cargas")
@@ -79,8 +79,22 @@ export default function PanelChoferPage() {
       if (error) { console.log(error); alert("Error al cargar viajes"); setCargando(false); return; }
 
       const cargasFiltradas = (data || []).filter((carga) => {
+        if (!vehiculoDelChofer && !usuario?.tipo_vehiculo) return true;
+
+        // Matching nuevo: por tipo_vehiculo
+        if (usuario?.tipo_vehiculo && carga.tipo_vehiculo) {
+          const matchTipo = String(carga.tipo_vehiculo).toLowerCase().trim() === String(usuario.tipo_vehiculo).toLowerCase().trim();
+          // Si además hay categoria_legal, verificar también
+          if (usuario?.categoria_legal && carga.categoria_legal) {
+            return matchTipo && String(carga.categoria_legal) === String(usuario.categoria_legal);
+          }
+          return matchTipo;
+        }
+
+        // Fallback viejo: por campo vehiculo
         if (!vehiculoDelChofer) return true;
-        return String(carga.vehiculo || "").toLowerCase().trim() === String(vehiculoDelChofer || "").toLowerCase().trim();
+        return String(carga.vehiculo || "").toLowerCase().trim().includes(String(vehiculoDelChofer || "").toLowerCase().trim()) ||
+          String(vehiculoDelChofer || "").toLowerCase().trim().includes(String(carga.vehiculo || "").toLowerCase().trim());
       });
 
       setCargas(cargasFiltradas);
