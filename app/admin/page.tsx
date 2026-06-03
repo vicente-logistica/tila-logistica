@@ -450,6 +450,145 @@ const TarjetaViaje = ({ carga, paradas, choferInfo, onAbrirCliente, onAbrirChofe
   );
 };
 
+const formatearFechaAdmin = (iso: string | null | undefined) => {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  return `${String(d.getDate()).padStart(2,"0")}/${String(d.getMonth()+1).padStart(2,"0")}/${d.getFullYear()} ${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`;
+};
+
+const HistorialAdmin = ({ cargas, paradasPorCarga, todosUsuarios }: { cargas: any[]; paradasPorCarga: Record<string, any[]>; todosUsuarios: any[] }) => {
+  const [filtroEstado, setFiltroEstado] = useState("todos");
+  const [filtroTexto, setFiltroTexto] = useState("");
+  const [expandido, setExpandido] = useState<string | null>(null);
+
+  const getNombre = (id: string) => todosUsuarios.find(u => u.id === id)?.nombre || "—";
+
+  const cargasFiltradas = cargas.filter(c => {
+    if (filtroEstado !== "todos" && c.estado !== filtroEstado) return false;
+    if (filtroTexto) {
+      const q = filtroTexto.toLowerCase();
+      return (c.origen || "").toLowerCase().includes(q) ||
+        (c.destino || "").toLowerCase().includes(q) ||
+        getNombre(c.cliente_id).toLowerCase().includes(q) ||
+        getNombre(c.chofer_id).toLowerCase().includes(q);
+    }
+    return true;
+  });
+
+  const totalComision = cargas
+    .filter(c => c.estado === "Viaje finalizado")
+    .reduce((acc, c) => acc + Number(c.comision_plataforma || 0), 0);
+
+  return (
+    <section className="bg-zinc-900 border border-zinc-700 rounded-3xl p-6 mb-8">
+      <div className="flex items-center justify-between mb-2 flex-wrap gap-3">
+        <h2 className="text-3xl font-black text-zinc-300">📋 Historial general</h2>
+        <span className="text-green-400 font-black text-sm">Comisión total: ${totalComision.toLocaleString()}</span>
+      </div>
+      <p className="text-zinc-500 text-sm mb-5">Todos los viajes de la plataforma.</p>
+
+      <div className="flex flex-col md:flex-row gap-3 mb-5">
+        <input type="text" placeholder="Buscar por origen, destino, cliente o chofer..."
+          value={filtroTexto} onChange={e => setFiltroTexto(e.target.value)}
+          className="flex-1 bg-zinc-800 border border-zinc-700 text-white p-3 rounded-xl text-sm" />
+        <select value={filtroEstado} onChange={e => setFiltroEstado(e.target.value)}
+          className="bg-zinc-800 border border-zinc-700 text-white p-3 rounded-xl text-sm">
+          <option value="todos">Todos los estados</option>
+          <option value="pendiente">Pendiente</option>
+          <option value="Chofer asignado">Chofer asignado</option>
+          <option value="En camino">En camino</option>
+          <option value="Carga retirada">Carga retirada</option>
+          <option value="En ruta">En ruta</option>
+          <option value="Descarga completada">Descarga completada</option>
+          <option value="Viaje finalizado">Viaje finalizado</option>
+        </select>
+      </div>
+
+      <p className="text-zinc-500 text-xs mb-4">{cargasFiltradas.length} viaje{cargasFiltradas.length !== 1 ? "s" : ""}</p>
+
+      <div className="space-y-3">
+        {cargasFiltradas.length === 0 ? (
+          <p className="text-zinc-500 text-sm">Sin resultados.</p>
+        ) : cargasFiltradas.map(carga => {
+          const paradas = paradasPorCarga[String(carga.id)] || [];
+          const abierto = expandido === String(carga.id);
+          return (
+            <div key={carga.id} className="bg-zinc-800 border border-zinc-700 rounded-2xl overflow-hidden">
+              <button className="w-full p-4 text-left" onClick={() => setExpandido(abierto ? null : String(carga.id))}>
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-yellow-400 font-black text-sm truncate">{carga.origen} → {carga.destino}</p>
+                    <p className="text-zinc-500 text-xs mt-0.5">{formatearFechaAdmin(carga.created_at)}</p>
+                  </div>
+                  <div className="flex items-center gap-2 flex-shrink-0">
+                    <span className={`px-2 py-1 rounded-lg text-xs font-black ${colorEstado(carga.estado)}`}>{carga.estado || "Pendiente"}</span>
+                    <span className="text-zinc-500 text-xs">{abierto ? "▲" : "▼"}</span>
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-3 mt-2 text-xs text-zinc-400">
+                  <span>👤 {getNombre(carga.cliente_id)}</span>
+                  {carga.chofer_id && <span>🚛 {getNombre(carga.chofer_id)}</span>}
+                  {carga.km_estimados && <span>📏 {carga.km_estimados} km</span>}
+                  {carga.precio_cliente && <span className="text-green-400">💰 ${Number(carga.precio_cliente).toLocaleString()}</span>}
+                  {carga.comision_plataforma && <span className="text-blue-400">🏦 ${Number(carga.comision_plataforma).toLocaleString()}</span>}
+                </div>
+              </button>
+
+              {abierto && (
+                <div className="border-t border-zinc-700 p-4 space-y-3">
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
+                    <div className="bg-black rounded-xl p-3">
+                      <p className="text-zinc-500 font-black">CLIENTE PAGA</p>
+                      <p className="text-green-400 font-black text-base">${Number(carga.precio_cliente || 0).toLocaleString()}</p>
+                    </div>
+                    <div className="bg-black rounded-xl p-3">
+                      <p className="text-zinc-500 font-black">CHOFER COBRA</p>
+                      <p className="text-yellow-400 font-black text-base">${Number(carga.pago_chofer || 0).toLocaleString()}</p>
+                    </div>
+                    <div className="bg-black rounded-xl p-3">
+                      <p className="text-zinc-500 font-black">COMISIÓN TILA</p>
+                      <p className="text-blue-400 font-black text-base">${Number(carga.comision_plataforma || 0).toLocaleString()}</p>
+                    </div>
+                    <div className="bg-black rounded-xl p-3">
+                      <p className="text-zinc-500 font-black">DISTANCIA</p>
+                      <p className="text-white font-black text-base">{carga.km_estimados ? `${carga.km_estimados} km` : "—"}</p>
+                    </div>
+                  </div>
+
+                  {paradas.length > 0 && (
+                    <div>
+                      <p className="text-zinc-500 text-xs font-black mb-2">RUTA</p>
+                      <div className="space-y-1">
+                        {paradas.map((p, i) => (
+                          <div key={p.id} className="flex items-center gap-2 text-xs">
+                            <span className={`w-5 h-5 rounded-full flex items-center justify-center font-black flex-shrink-0 ${
+                              p.estado === "completada" ? "bg-green-500 text-white" : "bg-zinc-600 text-zinc-400"
+                            }`}>{LABELS[i]}</span>
+                            <p className="text-zinc-300 truncate">{p.direccion}</p>
+                            {p.completada_at && <p className="text-zinc-500 flex-shrink-0">{formatearFechaAdmin(p.completada_at)}</p>}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="text-xs space-y-1">
+                    <p className="text-zinc-500 font-black mb-1">CRONOLOGÍA</p>
+                    {carga.created_at && <p>📋 <span className="text-zinc-400">Publicado:</span> {formatearFechaAdmin(carga.created_at)}</p>}
+                    {carga.hora_aceptacion && <p>✅ <span className="text-zinc-400">Aceptado:</span> <span className="text-green-400">{formatearFechaAdmin(carga.hora_aceptacion)}</span></p>}
+                    {carga.hora_inicio && <p>🚛 <span className="text-zinc-400">En camino:</span> <span className="text-yellow-400">{formatearFechaAdmin(carga.hora_inicio)}</span></p>}
+                    {carga.hora_finalizacion && <p>🏆 <span className="text-zinc-400">Finalizado:</span> <span className="text-green-400">{formatearFechaAdmin(carga.hora_finalizacion)}</span></p>}
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+};
+
 // ─── Componente principal ─────────────────────────────────────────────────────
 
 export default function AdminPage() {
@@ -801,6 +940,9 @@ export default function AdminPage() {
           </div>
         )}
       </section>
+
+      {/* Historial general */}
+      <HistorialAdmin cargas={cargas} paradasPorCarga={paradasPorCarga} todosUsuarios={todosUsuarios} />
 
       {/* Viajes */}
       <section className="grid grid-cols-1 xl:grid-cols-3 gap-6">
