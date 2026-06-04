@@ -150,6 +150,29 @@ export function calcularTarifaTILA({
   const pagoChofer    = Math.round(tarifaBase * (1 - COMISION));
   const comision      = precioCliente - pagoChofer;
 
+  // ── LOG DIAGNÓSTICO — quitar después de verificar ──────────────────────────
+  console.log("[tarifas.ts] calcularTarifaTILA →", {
+    km,
+    categoria_legal,
+    tipo_carga,
+    tipo_carroceria,
+    esUrbano,
+    factorCat,
+    factorUrbano,
+    cf: Math.round(cf),
+    cv: Math.round(cv * 100) / 100,
+    tarifaSinAjustes: Math.round(tarifaSinAjustes),
+    recargoCarga,
+    recargoCarroceria,
+    tarifaSinCedol: Math.round(tarifaSinCedol),
+    INDICE_CEDOL,
+    tarifa_base: tarifaBase,
+    precio_cliente: precioCliente,
+    pago_chofer: pagoChofer,
+    comision_plataforma: comision,
+  });
+  // ── FIN LOG ────────────────────────────────────────────────────────────────
+
   const detalle: DetalleTarifa = {
     km,
     categoria_legal,
