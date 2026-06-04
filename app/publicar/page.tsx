@@ -134,6 +134,11 @@ export default function PublicarPage() {
       return;
     }
 
+    // ── LOG DIAGNÓSTICO — quitar después de verificar ────────────────────────
+    console.log("[publicar] KM recibido:", kilometros, "| tipo km:", typeof kilometros);
+    console.log("[publicar] inputs →", { categoriaLegal, tipoVehiculo, tipoCarga: tipoCargaObj?.tipo, tipoCarroceria, esUrbano: esViajeUrbano(kilometros) });
+    // ── FIN LOG ──────────────────────────────────────────────────────────────
+
     const resultado = calcularTarifaTILA({
       km: kilometros,
       categoria_legal: categoriaLegal,
@@ -141,6 +146,10 @@ export default function PublicarPage() {
       tipo_carroceria: tipoCarroceria,
       esUrbano: esViajeUrbano(kilometros),
     });
+
+    // ── LOG DIAGNÓSTICO — quitar después de verificar ────────────────────────
+    console.log("[publicar] resultado tarifa →", resultado);
+    // ── FIN LOG ──────────────────────────────────────────────────────────────
 
     setPrecioCliente(resultado.precio_cliente);
     setPagoChofer(resultado.pago_chofer);
