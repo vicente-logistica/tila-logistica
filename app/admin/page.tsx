@@ -450,13 +450,144 @@ const TarjetaViaje = ({ carga, paradas, choferInfo, onAbrirCliente, onAbrirChofe
   );
 };
 
+const ReportesAdmin = ({ cargas, todosUsuarios }: { cargas: any[]; todosUsuarios: any[] }) => {
+  const [filtro, setFiltro] = useState("todos");
+  const [billetera, setBilletera] = useState<any[]>([]);
+
+  useEffect(() => {
+    supabase.from("billetera_chofer").select("*").then(({ data }) => {
+      if (data) setBilletera(data);
+    });
+  }, []);
+
+  const filtrarPorFecha = (items: any[], campo: string) => {
+    if (filtro === "todos") return items;
+    const ahora = new Date();
+    const desde = new Date();
+    if (filtro === "hoy") { desde.setHours(0, 0, 0, 0); }
+    else if (filtro === "semana") { desde.setDate(ahora.getDate() - 7); }
+    else if (filtro === "mes") { desde.setDate(1); desde.setHours(0, 0, 0, 0); }
+    return items.filter(item => new Date(item[campo]) >= desde);
+  };
+
+  const cargasFiltradas = filtrarPorFecha(cargas, "created_at");
+  const usuariosFiltrados = filtrarPorFecha(todosUsuarios, "created_at");
+  const billeteraFiltrada = filtrarPorFecha(billetera, "created_at");
+
+  const finalizados = cargasFiltradas.filter(c => c.estado === "Viaje finalizado");
+  const pendientes = cargasFiltradas.filter(c => !c.estado || c.estado.toLowerCase() === "pendiente");
+  const activos = cargasFiltradas.filter(c => ["Chofer asignado","En camino","Carga retirada","En ruta","Descarga completada"].includes(c.estado));
+  const clientes = usuariosFiltrados.filter(u => u.rol === "cliente" && !u.eliminado);
+  const choferes = usuariosFiltrados.filter(u => u.rol === "chofer" && !u.eliminado);
+  const choferesOnline = todosUsuarios.filter(u => u.rol === "chofer" && u.online && !u.eliminado);
+
+  const facturacionCliente = finalizados.reduce((acc, c) => acc + Number(c.precio_cliente || 0), 0);
+  const totalChofer = finalizados.reduce((acc, c) => acc + Number(c.pago_chofer || 0), 0);
+  const comisionPlataforma = finalizados.reduce((acc, c) => acc + Number(c.comision_plataforma || 0), 0);
+  const totalBilletera = billeteraFiltrada.reduce((acc, b) => acc + Number(b.monto || 0), 0);
+
+  const Metrica = ({ label, valor, color = "text-white", sub = "" }: { label: string; valor: string | number; color?: string; sub?: string }) => (
+    <div className="bg-zinc-800 rounded-2xl p-4">
+      <p className="text-zinc-500 text-xs font-black mb-1">{label}</p>
+      <p className={`text-2xl font-black ${color}`}>{valor}</p>
+      {sub && <p className="text-zinc-600 text-xs mt-1">{sub}</p>}
+    </div>
+  );
+
+  return (
+    <section className="bg-zinc-900 border border-yellow-400/50 rounded-3xl p-6 mb-8">
+      <div className="flex items-center justify-between mb-5 flex-wrap gap-3">
+        <div>
+          <h2 className="text-3xl font-black text-yellow-400">📊 Reportes y métricas</h2>
+          <p className="text-zinc-500 text-sm mt-1">Datos operativos y financieros de la plataforma.</p>
+        </div>
+        <div className="flex gap-2">
+          {["hoy", "semana", "mes", "todos"].map(f => (
+            <button key={f} onClick={() => setFiltro(f)}
+              className={`px-3 py-2 rounded-xl font-black text-xs transition ${filtro === f ? "bg-yellow-400 text-black" : "bg-zinc-800 text-zinc-400 hover:text-white"}`}>
+              {f === "hoy" ? "Hoy" : f === "semana" ? "7 días" : f === "mes" ? "Este mes" : "Todo"}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Viajes */}
+      <div className="mb-5">
+        <p className="text-zinc-400 text-xs font-black mb-3">VIAJES</p>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <Metrica label="TOTAL VIAJES" valor={cargasFiltradas.length} color="text-yellow-400" />
+          <Metrica label="FINALIZADOS" valor={finalizados.length} color="text-green-400" />
+          <Metrica label="ACTIVOS" valor={activos.length} color="text-blue-400" />
+          <Metrica label="PENDIENTES" valor={pendientes.length} color="text-zinc-300" />
+        </div>
+      </div>
+
+      {/* Usuarios */}
+      <div className="mb-5">
+        <p className="text-zinc-400 text-xs font-black mb-3">USUARIOS</p>
+        <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+          <Metrica label="CLIENTES" valor={clientes.length} color="text-purple-400" />
+          <Metrica label="CHOFERES" valor={choferes.length} color="text-blue-400" />
+          <Metrica label="CHOFERES ONLINE" valor={choferesOnline.length} color="text-green-400" sub="Ahora mismo" />
+        </div>
+      </div>
+
+      {/* Financiero */}
+      <div>
+        <p className="text-zinc-400 text-xs font-black mb-3">FINANCIERO</p>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <div className="bg-zinc-800 rounded-2xl p-4 md:col-span-1">
+            <p className="text-zinc-500 text-xs font-black mb-1">FACTURACIÓN TOTAL</p>
+            <p className="text-3xl font-black text-green-400">${facturacionCliente.toLocaleString()}</p>
+            <p className="text-zinc-600 text-xs mt-1">Lo que pagaron los clientes</p>
+          </div>
+          <div className="bg-zinc-800 rounded-2xl p-4">
+            <p className="text-zinc-500 text-xs font-black mb-1">PAGADO A CHOFERES</p>
+            <p className="text-3xl font-black text-yellow-400">${totalChofer.toLocaleString()}</p>
+            <p className="text-zinc-600 text-xs mt-1">Acreditado en billeteras</p>
+          </div>
+          <div className="bg-zinc-800 rounded-2xl p-4">
+            <p className="text-zinc-500 text-xs font-black mb-1">GANANCIA TILA</p>
+            <p className="text-3xl font-black text-blue-400">${comisionPlataforma.toLocaleString()}</p>
+            <p className="text-zinc-600 text-xs mt-1">Comisión plataforma</p>
+          </div>
+        </div>
+
+        {/* Barra visual */}
+        {facturacionCliente > 0 && (
+          <div className="mt-4 bg-zinc-800 rounded-2xl p-4">
+            <p className="text-zinc-500 text-xs font-black mb-3">DISTRIBUCIÓN DE INGRESOS</p>
+            <div className="flex rounded-xl overflow-hidden h-6">
+              <div className="bg-yellow-500 flex items-center justify-center text-xs font-black text-black"
+                style={{ width: `${Math.round((totalChofer / facturacionCliente) * 100)}%` }}>
+                {Math.round((totalChofer / facturacionCliente) * 100)}% Chofer
+              </div>
+              <div className="bg-blue-600 flex items-center justify-center text-xs font-black text-white"
+                style={{ width: `${Math.round((comisionPlataforma / facturacionCliente) * 100)}%` }}>
+                {Math.round((comisionPlataforma / facturacionCliente) * 100)}% TILA
+              </div>
+            </div>
+          </div>
+        )}
+
+        {totalBilletera > 0 && totalBilletera !== totalChofer && (
+          <div className="mt-3 bg-zinc-800 rounded-2xl p-4">
+            <p className="text-zinc-500 text-xs font-black mb-1">TOTAL EN BILLETERAS (acumulado histórico)</p>
+            <p className="text-2xl font-black text-green-400">${totalBilletera.toLocaleString()}</p>
+          </div>
+        )}
+      </div>
+    </section>
+  );
+};
+
 const formatearFechaAdmin = (iso: string | null | undefined) => {
   if (!iso) return "—";
   const d = new Date(iso);
   return `${String(d.getDate()).padStart(2,"0")}/${String(d.getMonth()+1).padStart(2,"0")}/${d.getFullYear()} ${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`;
 };
 
-const HistorialAdmin = ({ cargas, paradasPorCarga, todosUsuarios }: { cargas: any[]; paradasPorCarga: Record<string, any[]>; todosUsuarios: any[] }) => {
+const HistorialAdmin = ({ cargas, paradasPorCarga, todosUsuarios, onRecargar }: { cargas: any[]; paradasPorCarga: Record<string, any[]>; todosUsuarios: any[]; onRecargar: () => Promise<void> }) => {
   const [filtroEstado, setFiltroEstado] = useState("todos");
   const [filtroTexto, setFiltroTexto] = useState("");
   const [expandido, setExpandido] = useState<string | null>(null);
@@ -584,6 +715,46 @@ const HistorialAdmin = ({ cargas, paradasPorCarga, todosUsuarios }: { cargas: an
                     {carga.hora_aceptacion && <p>✅ <span className="text-zinc-400">Aceptado:</span> <span className="text-green-400">{formatearFechaAdmin(carga.hora_aceptacion)}</span></p>}
                     {carga.hora_inicio && <p>🚛 <span className="text-zinc-400">En camino:</span> <span className="text-yellow-400">{formatearFechaAdmin(carga.hora_inicio)}</span></p>}
                     {carga.hora_finalizacion && <p>🏆 <span className="text-zinc-400">Finalizado:</span> <span className="text-green-400">{formatearFechaAdmin(carga.hora_finalizacion)}</span></p>}
+                  </div>
+
+                  {/* Acciones admin */}
+                  <div className="pt-3 border-t border-zinc-700 grid grid-cols-2 gap-2">
+                    <button
+                      onClick={async () => {
+                        const { error } = await supabase.from("cargas").update({
+                          oculto_cliente: true, oculto_chofer: true, auto_oculto_at: new Date().toISOString()
+                        }).eq("id", carga.id);
+                        if (!error) await onRecargar();
+                      }}
+                      className="py-2 rounded-xl font-black text-xs border border-orange-700 text-orange-400 hover:bg-orange-900/20 transition"
+                    >
+                      👁️ Ocultar de cliente/chofer
+                    </button>
+                    <button
+                      onClick={async () => {
+                        const ok1 = window.confirm("⚠️ Esta acción eliminará definitivamente el viaje del sistema.\n¿Continuar?");
+                        if (!ok1) return;
+                        const pass = window.prompt("Ingresá tu contraseña de admin para confirmar:");
+                        if (!pass) return;
+                        const adminGuardado = localStorage.getItem("usuario");
+                        if (!adminGuardado) { alert("Error: sesión no encontrada."); return; }
+                        const adminObj = JSON.parse(adminGuardado);
+                        const { data: adminData } = await supabase.from("usuarios").select("password").eq("id", adminObj.id).single();
+                        if (!adminData || adminData.password !== pass) {
+                          alert("❌ Contraseña incorrecta. Eliminación cancelada.");
+                          return;
+                        }
+                        await supabase.from("mensajes_viaje").delete().eq("viaje_id", carga.id);
+                        await supabase.from("paradas_viaje").delete().eq("carga_id", carga.id);
+                        await supabase.from("billetera_chofer").delete().eq("viaje_id", String(carga.id));
+                        const { error } = await supabase.from("cargas").delete().eq("id", carga.id);
+                        if (error) { alert("Error al eliminar: " + error.message); return; }
+                        await onRecargar();
+                      }}
+                      className="py-2 rounded-xl font-black text-xs border border-red-800 text-red-500 hover:bg-red-900/20 transition"
+                    >
+                      🗑️ Eliminar definitivo
+                    </button>
                   </div>
                 </div>
               )}
@@ -947,8 +1118,11 @@ export default function AdminPage() {
         )}
       </section>
 
+      {/* Reportes */}
+      <ReportesAdmin cargas={cargas} todosUsuarios={todosUsuarios} />
+
       {/* Historial general */}
-      <HistorialAdmin cargas={cargas} paradasPorCarga={paradasPorCarga} todosUsuarios={todosUsuarios} />
+      <HistorialAdmin cargas={cargas} paradasPorCarga={paradasPorCarga} todosUsuarios={todosUsuarios} onRecargar={cargarViajes} />
 
       {/* Viajes */}
       <section className="grid grid-cols-1 xl:grid-cols-3 gap-6">
