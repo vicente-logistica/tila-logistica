@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { supabase } from "../lib/supabase";
 import { useProtegerRuta } from "../hooks/useProtegerRuta";
 import BotonCerrarSesion from "../components/BotonCerrarSesion";
+import { calcularTarifaTILA, esViajeUrbano, formatearPesos } from "../lib/tarifas";
 
 const SOPORTE_WHATSAPP = "5491158689383";
 const SOPORTE_EMAIL = "logisticatila@gmail.com";
@@ -12,13 +13,13 @@ const SOPORTE_EMAIL = "logisticatila@gmail.com";
 const CATEGORIAS_LEGALES = ["N1", "N2", "N3"];
 
 const TIPOS_VEHICULO = [
-  { nombre: "Moto", categoria: "N1" },
-  { nombre: "Utilitario", categoria: "N1" },
-  { nombre: "Furgón", categoria: "N1" },
-  { nombre: "Pick-up", categoria: "N1" },
-  { nombre: "Camión rígido", categoria: "N2" },
+  { nombre: "Moto",           categoria: "N1" },
+  { nombre: "Utilitario",     categoria: "N1" },
+  { nombre: "Furgón",         categoria: "N1" },
+  { nombre: "Pick-up",        categoria: "N1" },
+  { nombre: "Camión rígido",  categoria: "N2" },
   { nombre: "Camión tractor", categoria: "N3" },
-  { nombre: "Bitrén", categoria: "N3" },
+  { nombre: "Bitrén",         categoria: "N3" },
 ];
 
 const TIPOS_CARROCERIA = [
@@ -27,26 +28,13 @@ const TIPOS_CARROCERIA = [
   "Portacontenedor", "Mosquito", "Grúa plancha",
 ];
 
-const tiposCarga = [
-  { nombre: "Carga común", extraLitros: 0 },
-  { nombre: "Carga frágil", extraLitros: 0.5 },
-  { nombre: "Carga cara", extraLitros: 0.5 },
-  { nombre: "Carga peligrosa", extraLitros: 1 },
-  { nombre: "Carga refrigerada", extraLitros: 1 },
+const TIPOS_CARGA = [
+  { nombre: "Carga común",        tipo: "normal" },
+  { nombre: "Carga frágil",       tipo: "fraccionada" },
+  { nombre: "Carga cara",         tipo: "fraccionada" },
+  { nombre: "Carga peligrosa",    tipo: "peligrosa" },
+  { nombre: "Carga refrigerada",  tipo: "refrigerada" },
 ];
-
-// Tarifa base por tipo de vehículo
-const TARIFAS_VEHICULO: Record<string, { litrosKm: number; minimo: number }> = {
-  "Moto": { litrosKm: 0.3, minimo: 8000 },
-  "Utilitario": { litrosKm: 0.6, minimo: 15000 },
-  "Furgón": { litrosKm: 0.8, minimo: 25000 },
-  "Pick-up": { litrosKm: 0.9, minimo: 30000 },
-  "Camión rígido": { litrosKm: 1.5, minimo: 85000 },
-  "Camión tractor": { litrosKm: 2.5, minimo: 350000 },
-  "Bitrén": { litrosKm: 3, minimo: 500000 },
-};
-
-const precioCombustible = 2500;
 
 const calcularKmAutomatico = (origen: string, destino: string) => {
   const o = origen.toLowerCase();
@@ -75,7 +63,7 @@ export default function PublicarPage() {
   const [tipoCarroceria, setTipoCarroceria] = useState("");
 
   const [peso, setPeso] = useState("");
-  const [tipoCarga, setTipoCarga] = useState("");
+  const [tipoCargaNombre, setTipoCargaNombre] = useState("");
   const [presentacion, setPresentacion] = useState("");
   const [km, setKm] = useState("");
 
@@ -83,6 +71,9 @@ export default function PublicarPage() {
   const [pagoChofer, setPagoChofer] = useState(0);
   const [comisionPlataforma, setComisionPlataforma] = useState(0);
   const [publicando, setPublicando] = useState(false);
+
+  // Tipo de carga seleccionado (objeto completo)
+  const tipoCargaObj = TIPOS_CARGA.find(c => c.nombre === tipoCargaNombre);
 
   // Filtrar tipos de vehículo por categoría seleccionada
   const tiposFiltrados = categoriaLegal
@@ -97,14 +88,7 @@ export default function PublicarPage() {
     }
   }, [categoriaLegal]);
 
-  const calcularValores = (kilometros: number, litrosPorKm: number, minimo: number) => {
-    const base = Math.max(Math.round(kilometros * litrosPorKm * precioCombustible), minimo);
-    const cliente = Math.round(base * 1.075);
-    const chofer = Math.round(base * 0.925);
-    const comision = Math.round(cliente - chofer);
-    return { cliente, chofer, comision };
-  };
-
+  // Calcular distancia desde API Google Maps
   useEffect(() => {
     const calcularDistancia = async () => {
       if (!origen || !destino) return;
@@ -140,22 +124,28 @@ export default function PublicarPage() {
     calcularDistancia();
   }, [origen, destino, paradasIntermedias]);
 
+  // ─── Calcular tarifa usando módulo UTN/CEDOL ─────────────────────────────
   useEffect(() => {
-    if (!tipoVehiculo || !tipoCarga || !km) {
-      setPrecioCliente(0); setPagoChofer(0); setComisionPlataforma(0);
+    const kilometros = Number(km);
+    if (!tipoVehiculo || !tipoCargaNombre || !categoriaLegal || !kilometros || kilometros <= 0) {
+      setPrecioCliente(0);
+      setPagoChofer(0);
+      setComisionPlataforma(0);
       return;
     }
-    const kilometros = Number(km);
-    if (!kilometros || kilometros <= 0) { setPrecioCliente(0); setPagoChofer(0); setComisionPlataforma(0); return; }
-    const tarifaBase = TARIFAS_VEHICULO[tipoVehiculo];
-    const cargaSeleccionada = tiposCarga.find(c => c.nombre === tipoCarga);
-    if (!tarifaBase || !cargaSeleccionada) return;
-    const litrosPorKm = tarifaBase.litrosKm + cargaSeleccionada.extraLitros;
-    const valores = calcularValores(kilometros, litrosPorKm, tarifaBase.minimo);
-    setPrecioCliente(valores.cliente);
-    setPagoChofer(valores.chofer);
-    setComisionPlataforma(valores.comision);
-  }, [tipoVehiculo, tipoCarga, km]);
+
+    const resultado = calcularTarifaTILA({
+      km: kilometros,
+      categoria_legal: categoriaLegal,
+      tipo_carga: tipoCargaObj?.tipo,
+      tipo_carroceria: tipoCarroceria,
+      esUrbano: esViajeUrbano(kilometros),
+    });
+
+    setPrecioCliente(resultado.precio_cliente);
+    setPagoChofer(resultado.pago_chofer);
+    setComisionPlataforma(resultado.comision_plataforma);
+  }, [tipoVehiculo, tipoCargaNombre, categoriaLegal, tipoCarroceria, km]);
 
   const agregarParada = () => {
     if (paradasIntermedias.length >= MAX_PARADAS) return;
@@ -174,50 +164,66 @@ export default function PublicarPage() {
 
   const publicarCarga = async () => {
     if (publicando) return;
-    if (!origen || !destino || !tipoVehiculo || !peso || !tipoCarga) {
+    if (!origen || !destino || !tipoVehiculo || !peso || !tipoCargaNombre || !categoriaLegal) {
       alert("Completá todos los campos obligatorios");
       return;
     }
 
     const usuarioGuardado = localStorage.getItem("usuario");
-    if (!usuarioGuardado) { alert("Sesión no encontrada. Volvé a iniciar sesión."); router.push("/login"); return; }
+    if (!usuarioGuardado) {
+      alert("Sesión no encontrada. Volvé a iniciar sesión.");
+      router.push("/login");
+      return;
+    }
     const usuario = JSON.parse(usuarioGuardado);
 
-    const tarifaBase = TARIFAS_VEHICULO[tipoVehiculo];
-    const cargaSeleccionada = tiposCarga.find(c => c.nombre === tipoCarga);
-    if (!tarifaBase || !cargaSeleccionada) { alert("Seleccioná vehículo y tipo de carga válidos"); return; }
-
-    const litrosPorKm = tarifaBase.litrosKm + cargaSeleccionada.extraLitros;
     const kilometros = Number(km || calcularKmAutomatico(origen, destino));
-    if (!kilometros || kilometros <= 0) { alert("No se pudo calcular la distancia del viaje"); return; }
+    if (!kilometros || kilometros <= 0) {
+      alert("No se pudo calcular la distancia del viaje");
+      return;
+    }
 
     setPublicando(true);
-    const valoresFinales = calcularValores(kilometros, litrosPorKm, tarifaBase.minimo);
 
-    // vehiculo = texto legible para compatibilidad
-    const vehiculoTexto = [tipoVehiculo, tipoCarroceria, categoriaLegal].filter(Boolean).join(" - ");
+    // Calcular tarifa final con módulo UTN/CEDOL
+    const tarifaFinal = calcularTarifaTILA({
+      km: kilometros,
+      categoria_legal: categoriaLegal,
+      tipo_carga: tipoCargaObj?.tipo,
+      tipo_carroceria: tipoCarroceria,
+      esUrbano: esViajeUrbano(kilometros),
+    });
+
+    // vehiculo = texto legible para compatibilidad con panel chofer
+    const vehiculoTexto = [tipoVehiculo, tipoCarroceria, categoriaLegal]
+      .filter(Boolean)
+      .join(" - ");
 
     const { data, error } = await supabase.from("cargas").insert([{
       cliente_id: usuario.id,
-      origen, destino,
-      vehiculo: vehiculoTexto,          // campo viejo — texto legible
-      categoria_legal: categoriaLegal,   // campo nuevo
-      tipo_vehiculo: tipoVehiculo,       // campo nuevo
-      tipo_carroceria: tipoCarroceria,   // campo nuevo
+      origen,
+      destino,
+      vehiculo: vehiculoTexto,
+      categoria_legal: categoriaLegal,
+      tipo_vehiculo: tipoVehiculo,
+      tipo_carroceria: tipoCarroceria,
       peso,
-      tipo_carga: tipoCarga,
+      tipo_carga: tipoCargaNombre,
       detalles: presentacion,
       km_estimados: kilometros,
-      litros_por_km: litrosPorKm,
-      precio_base: valoresFinales.cliente,
-      precio_cliente: valoresFinales.cliente,
-      pago_chofer: valoresFinales.chofer,
-      comision_plataforma: valoresFinales.comision,
+      precio_base: tarifaFinal.tarifa_base,
+      precio_cliente: tarifaFinal.precio_cliente,
+      pago_chofer: tarifaFinal.pago_chofer,
+      comision_plataforma: tarifaFinal.comision_plataforma,
       estado: "pendiente",
       tracking: false,
     }]).select().single();
 
-    if (error) { alert("Error publicando carga: " + error.message); setPublicando(false); return; }
+    if (error) {
+      alert("Error publicando carga: " + error.message);
+      setPublicando(false);
+      return;
+    }
 
     // Paradas intermedias
     const paradasValidas = paradasIntermedias.map(p => p.trim()).filter(Boolean);
@@ -225,7 +231,11 @@ export default function PublicarPage() {
       const paradasParaInsertar = [
         { carga_id: Number(data.id), orden: 0, tipo: "retiro", direccion: origen.trim(), estado: "pendiente" },
         ...paradasValidas.map((direccion, index) => ({
-          carga_id: Number(data.id), orden: index + 1, tipo: "parada", direccion, estado: "pendiente",
+          carga_id: Number(data.id),
+          orden: index + 1,
+          tipo: "parada",
+          direccion,
+          estado: "pendiente",
         })),
         { carga_id: Number(data.id), orden: paradasValidas.length + 1, tipo: "entrega", direccion: destino.trim(), estado: "pendiente" },
       ];
@@ -283,7 +293,12 @@ export default function PublicarPage() {
 
             {km && Number(km) > 0 && (
               <div className="bg-zinc-800 rounded-xl p-3 text-center">
-                <p className="text-zinc-400 text-sm">📏 Distancia estimada: <span className="text-yellow-400 font-black">{km} km</span></p>
+                <p className="text-zinc-400 text-sm">
+                  📏 Distancia estimada: <span className="text-yellow-400 font-black">{km} km</span>
+                  {esViajeUrbano(Number(km)) && (
+                    <span className="ml-2 text-blue-400 text-xs font-black">URBANO</span>
+                  )}
+                </p>
               </div>
             )}
           </div>
@@ -299,7 +314,9 @@ export default function PublicarPage() {
                 {CATEGORIAS_LEGALES.map(cat => (
                   <button key={cat} type="button" onClick={() => setCategoriaLegal(cat)}
                     className={`flex-1 py-3 rounded-xl font-black text-lg transition ${
-                      categoriaLegal === cat ? "bg-yellow-400 text-black" : "bg-black border border-zinc-700 text-zinc-400 hover:border-yellow-400"
+                      categoriaLegal === cat
+                        ? "bg-yellow-400 text-black"
+                        : "bg-black border border-zinc-700 text-zinc-400 hover:border-yellow-400"
                     }`}>
                     {cat}
                   </button>
@@ -313,9 +330,15 @@ export default function PublicarPage() {
               <label className="text-zinc-400 text-sm font-black mb-2 block">Tipo de vehículo *</label>
               <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
                 {tiposFiltrados.map(tipo => (
-                  <button key={tipo.nombre} type="button" onClick={() => { setTipoVehiculo(tipo.nombre); if (!categoriaLegal) setCategoriaLegal(tipo.categoria); }}
+                  <button key={tipo.nombre} type="button"
+                    onClick={() => {
+                      setTipoVehiculo(tipo.nombre);
+                      if (!categoriaLegal) setCategoriaLegal(tipo.categoria);
+                    }}
                     className={`py-3 px-2 rounded-xl font-black text-sm transition ${
-                      tipoVehiculo === tipo.nombre ? "bg-yellow-400 text-black" : "bg-black border border-zinc-700 text-zinc-400 hover:border-yellow-400"
+                      tipoVehiculo === tipo.nombre
+                        ? "bg-yellow-400 text-black"
+                        : "bg-black border border-zinc-700 text-zinc-400 hover:border-yellow-400"
                     }`}>
                     {tipo.nombre}
                   </button>
@@ -328,9 +351,12 @@ export default function PublicarPage() {
               <label className="text-zinc-400 text-sm font-black mb-2 block">Tipo de carrocería</label>
               <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
                 {TIPOS_CARROCERIA.map(tipo => (
-                  <button key={tipo} type="button" onClick={() => setTipoCarroceria(tipoCarroceria === tipo ? "" : tipo)}
+                  <button key={tipo} type="button"
+                    onClick={() => setTipoCarroceria(tipoCarroceria === tipo ? "" : tipo)}
                     className={`py-3 px-2 rounded-xl font-black text-sm transition ${
-                      tipoCarroceria === tipo ? "bg-blue-600 text-white" : "bg-black border border-zinc-700 text-zinc-400 hover:border-blue-400"
+                      tipoCarroceria === tipo
+                        ? "bg-blue-600 text-white"
+                        : "bg-black border border-zinc-700 text-zinc-400 hover:border-blue-400"
                     }`}>
                     {tipo}
                   </button>
@@ -362,10 +388,12 @@ export default function PublicarPage() {
             <div>
               <label className="text-zinc-400 text-sm font-black mb-2 block">Tipo de carga *</label>
               <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
-                {tiposCarga.map(c => (
-                  <button key={c.nombre} type="button" onClick={() => setTipoCarga(c.nombre)}
+                {TIPOS_CARGA.map(c => (
+                  <button key={c.nombre} type="button" onClick={() => setTipoCargaNombre(c.nombre)}
                     className={`py-3 px-2 rounded-xl font-black text-sm transition ${
-                      tipoCarga === c.nombre ? "bg-yellow-400 text-black" : "bg-black border border-zinc-700 text-zinc-400 hover:border-yellow-400"
+                      tipoCargaNombre === c.nombre
+                        ? "bg-yellow-400 text-black"
+                        : "bg-black border border-zinc-700 text-zinc-400 hover:border-yellow-400"
                     }`}>
                     {c.nombre}
                   </button>
@@ -382,18 +410,36 @@ export default function PublicarPage() {
           {precioCliente > 0 && (
             <div className="bg-zinc-900 border border-yellow-400 rounded-3xl p-6">
               <h2 className="text-xl font-black text-yellow-400 mb-4">💰 Tarifa estimada</h2>
-              <div className="text-center">
+              <div className="text-center mb-4">
                 <p className="text-zinc-400 text-sm mb-1">Precio total del servicio</p>
-                <p className="text-5xl font-black text-green-400">${precioCliente.toLocaleString()}</p>
-                <p className="text-zinc-500 text-sm mt-2">{km} km · {tipoVehiculo} · {tipoCarga}</p>
+                <p className="text-5xl font-black text-green-400">{formatearPesos(precioCliente)}</p>
+                <p className="text-zinc-500 text-sm mt-2">
+                  {km} km · {tipoVehiculo} · {categoriaLegal} · {tipoCargaNombre}
+                </p>
               </div>
+              {/* Desglose */}
+              <div className="grid grid-cols-2 gap-3 mt-2">
+                <div className="bg-zinc-800 rounded-xl p-3 text-center">
+                  <p className="text-zinc-500 text-xs font-black">CHOFER COBRA</p>
+                  <p className="text-yellow-400 font-black text-lg">{formatearPesos(pagoChofer)}</p>
+                </div>
+                <div className="bg-zinc-800 rounded-xl p-3 text-center">
+                  <p className="text-zinc-500 text-xs font-black">COMISIÓN TILA</p>
+                  <p className="text-blue-400 font-black text-lg">{formatearPesos(comisionPlataforma)}</p>
+                </div>
+              </div>
+              <p className="text-zinc-600 text-xs text-center mt-3">
+                Tarifa calculada según índice CEDOL/UTN mayo 2026
+              </p>
             </div>
           )}
 
           {/* Publicar */}
           <button type="button" onClick={publicarCarga} disabled={publicando}
             className={`w-full p-5 rounded-2xl font-black text-xl transition ${
-              publicando ? "bg-zinc-700 text-zinc-400 cursor-not-allowed" : "bg-yellow-400 hover:bg-yellow-500 text-black hover:scale-105"
+              publicando
+                ? "bg-zinc-700 text-zinc-400 cursor-not-allowed"
+                : "bg-yellow-400 hover:bg-yellow-500 text-black hover:scale-105"
             }`}>
             {publicando ? "Publicando..." : "Publicar carga"}
           </button>
