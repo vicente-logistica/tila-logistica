@@ -322,7 +322,7 @@ export default function ViajeActivoPage() {
     <main className="fixed inset-0 bg-black overflow-hidden">
 
       {/* ─── MAPA — ocupa toda la pantalla ─────────────────────────────── */}
-      <div className="absolute inset-0">
+      <div className="absolute inset-0" style={{ height: "100dvh", width: "100vw" }}>
         <MapaTILA
           lat={viaje?.lat}
           lng={viaje?.lng}
@@ -330,7 +330,7 @@ export default function ViajeActivoPage() {
           destino={viaje.destino}
           paradaActivaDireccion={destinoRuta}
           paradas={paradasParaMapa.length > 0 ? paradasParaMapa : undefined}
-          altura="100%"
+          altura="100dvh"
         />
       </div>
 
