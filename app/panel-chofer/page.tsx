@@ -5,6 +5,7 @@ import { supabase } from "../lib/supabase";
 import { useProtegerRuta } from "../hooks/useProtegerRuta";
 import HistorialChofer from "../components/historial-chofer";
 import BotonCerrarSesion from "../components/BotonCerrarSesion";
+import MapaTILA, { ParadaMapa } from "../components/MapaTILA";
 
 const LABELS = ["A", "B", "C", "D", "E", "F"];
 const SOPORTE_WHATSAPP = "5491158689383";
@@ -20,6 +21,7 @@ export default function PanelChoferPage() {
   const [online, setOnline] = useState(false);
   const [vehiculoChofer, setVehiculoChofer] = useState("");
   const [onlineCargado, setOnlineCargado] = useState(false);
+  const [mostrarMapa, setMostrarMapa] = useState(false);
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
@@ -63,6 +65,11 @@ export default function PanelChoferPage() {
     else detenerAlarma();
   }, [online, cargas, indice]);
 
+  // Cerrar mapa al cambiar de viaje
+  useEffect(() => {
+    setMostrarMapa(false);
+  }, [indice]);
+
   const cargarCargas = async () => {
     setCargando(true);
     try {
@@ -81,18 +88,13 @@ export default function PanelChoferPage() {
 
       const cargasFiltradas = (data || []).filter((carga) => {
         if (!vehiculoDelChofer && !usuario?.tipo_vehiculo) return true;
-
-        // Matching nuevo: por tipo_vehiculo
         if (usuario?.tipo_vehiculo && carga.tipo_vehiculo) {
           const matchTipo = String(carga.tipo_vehiculo).toLowerCase().trim() === String(usuario.tipo_vehiculo).toLowerCase().trim();
-          // Si además hay categoria_legal, verificar también
           if (usuario?.categoria_legal && carga.categoria_legal) {
             return matchTipo && String(carga.categoria_legal) === String(usuario.categoria_legal);
           }
           return matchTipo;
         }
-
-        // Fallback viejo: por campo vehiculo
         if (!vehiculoDelChofer) return true;
         return String(carga.vehiculo || "").toLowerCase().trim().includes(String(vehiculoDelChofer || "").toLowerCase().trim()) ||
           String(vehiculoDelChofer || "").toLowerCase().trim().includes(String(carga.vehiculo || "").toLowerCase().trim());
@@ -150,6 +152,7 @@ export default function PanelChoferPage() {
 
   const rechazarViaje = () => {
     detenerAlarma();
+    setMostrarMapa(false);
     if (indice < cargas.length - 1) setIndice(indice + 1);
     else { setIndice(0); cargarCargas(); }
   };
@@ -174,8 +177,6 @@ export default function PanelChoferPage() {
     window.location.href = "/viaje-activo";
   };
 
-  const cerrarSesion = () => { localStorage.clear(); window.location.href = "/login"; };
-
   const getTipoParadaLabel = (tipo: string) => {
     if (tipo === "retiro") return "📦 Carga / Retiro";
     if (tipo === "entrega") return "🏁 Descarga / Entrega final";
@@ -184,6 +185,13 @@ export default function PanelChoferPage() {
 
   const cargaActual = online ? cargas[indice] : null;
   const paradasActuales = cargaActual ? (paradasPorCarga[String(cargaActual.id)] || []) : [];
+
+  // Armar array de paradas para MapaTILA
+  const paradasParaMapa: ParadaMapa[] = paradasActuales.map((p) => ({
+    direccion: p.direccion,
+    tipo: p.tipo as "retiro" | "entrega" | "parada",
+    estado: "pendiente" as const,
+  }));
 
   const BotonOnline = () => (
     <div className="w-full flex justify-center mb-6">
@@ -223,103 +231,133 @@ export default function PanelChoferPage() {
   return (
     <>
       <main className="min-h-screen bg-black text-white px-4 py-6 flex items-center justify-center">
-      <audio ref={audioRef} src="/sounds/alerta-viaje.mp3" loop preload="auto" />
+        <audio ref={audioRef} src="/sounds/alerta-viaje.mp3" loop preload="auto" />
 
-      {cargando ? (
-        <section className="w-full max-w-xl text-center">
-          <BotonOnline />
-          <h1 className="text-4xl md:text-5xl font-black text-yellow-400 animate-pulse">Buscando viajes...</h1>
-        </section>
-      ) : !cargaActual ? (
-        <section className="w-full max-w-3xl text-center bg-zinc-900 border border-zinc-800 rounded-3xl p-8 md:p-12">
-          <BotonOnline />
-          <h1 className="text-4xl md:text-6xl font-black text-yellow-400 mb-4">DESPACHO EN TIEMPO REAL</h1>
-          <p className="text-green-400 font-black text-lg md:text-xl mb-4">Vehículo habilitado: {vehiculoChofer || "No definido"}</p>
-          <p className="text-zinc-400 text-lg md:text-2xl mb-8">
-            {online ? "No hay viajes compatibles pendientes por ahora." : "Estás offline. Activá ONLINE para recibir viajes."}
-          </p>
-          <button onClick={() => { window.location.href = "/billetera-chofer"; }} className="w-full max-w-md bg-zinc-800 border-2 border-yellow-400 hover:bg-zinc-700 text-yellow-400 font-black text-xl py-5 rounded-3xl">
-            💼 MI BILLETERA
-          </button>
-          <BloquesSoporte />
-          <div className="mt-5 flex justify-center">
-            <BotonCerrarSesion />
-          </div>
-        </section>
-      ) : (
-        <section className="w-full max-w-5xl bg-zinc-900 border-4 border-yellow-400 rounded-3xl p-5 md:p-8 shadow-2xl animate-pulse text-center">
-          <BotonOnline />
-          <p className="text-pink-500 font-black text-xl md:text-2xl mb-4">🚨 NUEVO VIAJE DISPONIBLE 🚨</p>
-          <p className="text-green-400 font-black text-lg md:text-xl mb-6">Vehículo habilitado: {vehiculoChofer || "No definido"}</p>
+        {cargando ? (
+          <section className="w-full max-w-xl text-center">
+            <BotonOnline />
+            <h1 className="text-4xl md:text-5xl font-black text-yellow-400 animate-pulse">Buscando viajes...</h1>
+          </section>
 
-          {paradasActuales.length > 0 ? (
-            <div className="mb-6">
-              <h1 className="text-2xl md:text-4xl font-black text-yellow-400 mb-4 leading-tight">Ruta del viaje</h1>
-              <div className="flex flex-col gap-2 text-left">
-                {paradasActuales.map((parada, index) => (
-                  <div key={parada.id} className="flex items-center gap-3">
-                    <span className={`w-8 h-8 rounded-full flex items-center justify-center font-black text-sm flex-shrink-0 ${
-                      parada.tipo === "retiro" ? "bg-blue-600 text-white" :
-                      parada.tipo === "entrega" ? "bg-green-600 text-white" : "bg-zinc-600 text-white"
-                    }`}>
-                      {LABELS[index] || index}
-                    </span>
-                    <div>
-                      <p className="text-xs font-black text-zinc-400">{getTipoParadaLabel(parada.tipo)}</p>
-                      <p className="text-white text-base font-black">{parada.direccion}</p>
-                    </div>
-                    {index < paradasActuales.length - 1 && <span className="text-yellow-400 ml-auto">↓</span>}
-                  </div>
-                ))}
-              </div>
+        ) : !cargaActual ? (
+          <section className="w-full max-w-3xl text-center bg-zinc-900 border border-zinc-800 rounded-3xl p-8 md:p-12">
+            <BotonOnline />
+            <h1 className="text-4xl md:text-6xl font-black text-yellow-400 mb-4">DESPACHO EN TIEMPO REAL</h1>
+            <p className="text-green-400 font-black text-lg md:text-xl mb-4">Vehículo habilitado: {vehiculoChofer || "No definido"}</p>
+            <p className="text-zinc-400 text-lg md:text-2xl mb-8">
+              {online ? "No hay viajes compatibles pendientes por ahora." : "Estás offline. Activá ONLINE para recibir viajes."}
+            </p>
+            <button onClick={() => { window.location.href = "/billetera-chofer"; }} className="w-full max-w-md bg-zinc-800 border-2 border-yellow-400 hover:bg-zinc-700 text-yellow-400 font-black text-xl py-5 rounded-3xl">
+              💼 MI BILLETERA
+            </button>
+            <BloquesSoporte />
+            <div className="mt-5 flex justify-center">
+              <BotonCerrarSesion />
             </div>
-          ) : (
-            <h1 className="text-3xl md:text-6xl font-black text-yellow-400 mb-6 leading-tight">
-              {cargaActual.origen} → {cargaActual.destino}
-            </h1>
-          )}
+          </section>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-lg md:text-2xl mb-8 text-left">
-            <p>🚛 <strong>Vehículo:</strong> {cargaActual.vehiculo || "Sin dato"}</p>
-            <p>📍 <strong>Distancia:</strong> {cargaActual.km_estimados ? `${cargaActual.km_estimados} km` : "Sin calcular"}</p>
-            <p>⚖️ <strong>Peso:</strong> {cargaActual.peso || "Sin dato"}</p>
-            <p>💰 <strong>Ganancia chofer:</strong> ${Number(cargaActual.pago_chofer || 0).toLocaleString()}</p>
-            <p>📦 <strong>Tipo:</strong> {cargaActual.tipo_carga || "Sin dato"}</p>
-            <p className="md:col-span-2">📝 <strong>Detalles:</strong> {cargaActual.detalles || "Sin detalles"}</p>
-          </div>
+        ) : (
+          <section className="w-full max-w-5xl bg-zinc-900 border-4 border-yellow-400 rounded-3xl p-5 md:p-8 shadow-2xl animate-pulse text-center">
+            <BotonOnline />
+            <p className="text-pink-500 font-black text-xl md:text-2xl mb-4">🚨 NUEVO VIAJE DISPONIBLE 🚨</p>
+            <p className="text-green-400 font-black text-lg md:text-xl mb-6">Vehículo habilitado: {vehiculoChofer || "No definido"}</p>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-            <button onClick={aceptarViaje} disabled={!online} className={`font-black text-2xl md:text-3xl py-6 rounded-3xl ${online ? "bg-green-600 hover:bg-green-500 text-black" : "bg-zinc-800 text-zinc-500 cursor-not-allowed"}`}>
-              ACEPTAR
+            {/* Ruta del viaje */}
+            {paradasActuales.length > 0 ? (
+              <div className="mb-6">
+                <h1 className="text-2xl md:text-4xl font-black text-yellow-400 mb-4 leading-tight">Ruta del viaje</h1>
+                <div className="flex flex-col gap-2 text-left">
+                  {paradasActuales.map((parada, index) => (
+                    <div key={parada.id} className="flex items-center gap-3">
+                      <span className={`w-8 h-8 rounded-full flex items-center justify-center font-black text-sm flex-shrink-0 ${
+                        parada.tipo === "retiro" ? "bg-blue-600 text-white" :
+                        parada.tipo === "entrega" ? "bg-green-600 text-white" : "bg-zinc-600 text-white"
+                      }`}>
+                        {LABELS[index] || index}
+                      </span>
+                      <div>
+                        <p className="text-xs font-black text-zinc-400">{getTipoParadaLabel(parada.tipo)}</p>
+                        <p className="text-white text-base font-black">{parada.direccion}</p>
+                      </div>
+                      {index < paradasActuales.length - 1 && <span className="text-yellow-400 ml-auto">↓</span>}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <h1 className="text-3xl md:text-6xl font-black text-yellow-400 mb-6 leading-tight">
+                {cargaActual.origen} → {cargaActual.destino}
+              </h1>
+            )}
+
+            {/* Detalles del viaje */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-lg md:text-2xl mb-6 text-left">
+              <p>🚛 <strong>Vehículo:</strong> {cargaActual.vehiculo || "Sin dato"}</p>
+              <p>📍 <strong>Distancia:</strong> {cargaActual.km_estimados ? `${cargaActual.km_estimados} km` : "Sin calcular"}</p>
+              <p>⚖️ <strong>Peso:</strong> {cargaActual.peso || "Sin dato"}</p>
+              <p>💰 <strong>Ganancia chofer:</strong> ${Number(cargaActual.pago_chofer || 0).toLocaleString()}</p>
+              <p>📦 <strong>Tipo:</strong> {cargaActual.tipo_carga || "Sin dato"}</p>
+              <p className="md:col-span-2">📝 <strong>Detalles:</strong> {cargaActual.detalles || "Sin detalles"}</p>
+            </div>
+
+            {/* ─── Mapa integrado ──────────────────────────────────────────────── */}
+            <div className="mb-6">
+              <button
+                onClick={() => setMostrarMapa(!mostrarMapa)}
+                className="w-full bg-zinc-800 hover:bg-zinc-700 border border-yellow-400 text-yellow-400 font-black py-3 rounded-2xl text-sm mb-3 transition"
+              >
+                {mostrarMapa ? "🗺️ Ocultar mapa del recorrido" : "🗺️ Ver mapa del recorrido"}
+              </button>
+
+              {mostrarMapa && (
+                <div className="rounded-2xl overflow-hidden border-2 border-yellow-400">
+                  <MapaTILA
+                    lat={null}
+                    lng={null}
+                    origen={cargaActual.origen}
+                    destino={cargaActual.destino}
+                    soloLectura={true}
+                    altura="360px"
+                    paradas={paradasParaMapa.length >= 2 ? paradasParaMapa : undefined}
+                  />
+                </div>
+              )}
+            </div>
+            {/* ─── Fin mapa ─────────────────────────────────────────────────────── */}
+
+            {/* Botones aceptar / rechazar */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+              <button onClick={aceptarViaje} disabled={!online} className={`font-black text-2xl md:text-3xl py-6 rounded-3xl ${online ? "bg-green-600 hover:bg-green-500 text-black" : "bg-zinc-800 text-zinc-500 cursor-not-allowed"}`}>
+                ACEPTAR
+              </button>
+              <button onClick={rechazarViaje} className="bg-red-600 hover:bg-red-500 text-white font-black text-2xl md:text-3xl py-6 rounded-3xl">
+                RECHAZAR
+              </button>
+            </div>
+
+            <button onClick={() => { window.location.href = "/billetera-chofer"; }} className="w-full mt-5 bg-zinc-800 border-2 border-yellow-400 hover:bg-zinc-700 text-yellow-400 font-black text-xl md:text-2xl py-5 rounded-3xl">
+              💼 MI BILLETERA
             </button>
-            <button onClick={rechazarViaje} className="bg-red-600 hover:bg-red-500 text-white font-black text-2xl md:text-3xl py-6 rounded-3xl">
-              RECHAZAR
-            </button>
-          </div>
+            <BloquesSoporte />
+            <div className="mt-5 flex justify-center">
+              <BotonCerrarSesion />
+            </div>
+            <p className="text-zinc-500 text-center mt-6">Viaje {indice + 1} de {cargas.length}</p>
+          </section>
+        )}
+      </main>
 
-          <button onClick={() => { window.location.href = "/billetera-chofer"; }} className="w-full mt-5 bg-zinc-800 border-2 border-yellow-400 hover:bg-zinc-700 text-yellow-400 font-black text-xl md:text-2xl py-5 rounded-3xl">
-            💼 MI BILLETERA
-          </button>
-          <BloquesSoporte />
-          <div className="mt-5 flex justify-center">
-            <BotonCerrarSesion />
-          </div>
-          <p className="text-zinc-500 text-center mt-6">Viaje {indice + 1} de {cargas.length}</p>
-        </section>
-      )}
-    </main>
-
-    {/* Historial separado abajo */}
-    {autorizado && (
-      <div className="bg-black text-white px-4 py-8">
-        <div className="max-w-3xl mx-auto">
-          <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-6">
-            <h2 className="text-2xl font-black text-yellow-400 mb-6">📋 Mis viajes</h2>
-            <HistorialChofer />
+      {/* Historial separado abajo */}
+      {autorizado && (
+        <div className="bg-black text-white px-4 py-8">
+          <div className="max-w-3xl mx-auto">
+            <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-6">
+              <h2 className="text-2xl font-black text-yellow-400 mb-6">📋 Mis viajes</h2>
+              <HistorialChofer />
+            </div>
           </div>
         </div>
-      </div>
-    )}
-  </>
+      )}
+    </>
   );
 }
