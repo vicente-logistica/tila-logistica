@@ -106,7 +106,11 @@ export default function MapaTILA({
 
   const modoMultiChofer = choferes && choferes.length > 0;
   const tieneParadas    = paradas && paradas.length >= 2;
-  const contenedorEstilo = { width: "100%", height: altura, borderRadius: "1rem" };
+  const contenedorEstilo = {
+    width: "100%",
+    height: altura,
+    borderRadius: altura === "100dvh" || altura === "100%" || altura === "100vh" ? "0" : "1rem",
+  };
 
   // ─── fitBounds ────────────────────────────────────────────────────────────
   const ajustarZoom = useCallback((puntos: google.maps.LatLngLiteral[]) => {
