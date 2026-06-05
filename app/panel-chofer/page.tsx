@@ -35,7 +35,67 @@ export default function PanelChoferPage() {
   const [viajeActivo, setViajeActivo] = useState<any>(null);
   const [buscandoViajeActivo, setBuscandoViajeActivo] = useState(true);
 
+  // ─── Audio desbloqueado por interacción del usuario ───────────────────────
+  const [audioDesbloqueado, setAudioDesbloqueado] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  // Cuántos viajes había la última vez que corrió la alarma — para detectar nuevos
+  const cantidadAnteriorRef = useRef<number>(0);
+  const onlineRef = useRef(false);
+
+  // Mantener ref sincronizada con estado
+  useEffect(() => { onlineRef.current = online; }, [online]);
+
+  // ─── Desbloquear audio con primera interacción ────────────────────────────
+  const desbloquearAudio = async () => {
+    if (!audioRef.current || audioDesbloqueado) return;
+    try {
+      // Reproducir silenciosamente y pausar — esto desbloquea el contexto de audio
+      audioRef.current.volume = 0;
+      await audioRef.current.play();
+      audioRef.current.pause();
+      audioRef.current.currentTime = 0;
+      audioRef.current.volume = 1;
+      setAudioDesbloqueado(true);
+      console.log("[audio] Desbloqueado");
+    } catch (e) {
+      console.warn("[audio] No se pudo desbloquear:", e);
+    }
+  };
+
+  const reproducirAlarma = () => {
+    if (!audioRef.current) return;
+    audioRef.current.currentTime = 0;
+    audioRef.current.volume = 1;
+    audioRef.current.play().catch((e) => {
+      console.warn("[audio] Error al reproducir alarma:", e);
+    });
+  };
+
+  const detenerAlarma = () => {
+    if (!audioRef.current) return;
+    audioRef.current.pause();
+    audioRef.current.currentTime = 0;
+  };
+
+  // ─── Disparar alarma cuando cambian los viajes disponibles ───────────────
+  useEffect(() => {
+    const cantidadActual = cargas.length;
+    const cantidadAnterior = cantidadAnteriorRef.current;
+
+    if (onlineRef.current && cantidadActual > 0) {
+      // Sonar si: hay viajes Y (es la primera carga O llegó un viaje nuevo)
+      if (cantidadAnterior === 0 || cantidadActual > cantidadAnterior) {
+        reproducirAlarma();
+      } else {
+        // Mantener sonido mientras haya viajes disponibles
+        reproducirAlarma();
+      }
+    } else {
+      detenerAlarma();
+    }
+
+    cantidadAnteriorRef.current = cantidadActual;
+  }, [cargas, online]);
 
   // ─── Buscar viaje activo del chofer al montar ─────────────────────────────
   useEffect(() => {
@@ -55,10 +115,9 @@ export default function PanelChoferPage() {
           .limit(1)
           .maybeSingle();
 
-        if (error) { console.warn("Error buscando viaje activo:", error); }
+        if (error) console.warn("Error buscando viaje activo:", error);
         if (data) {
           setViajeActivo(data);
-          // Sincronizar localStorage para que viaje-activo lo encuentre
           localStorage.setItem("viajeActivoId", String(data.id));
         }
       } catch (e) {
@@ -70,6 +129,7 @@ export default function PanelChoferPage() {
     buscarViajeActivo();
   }, []);
 
+  // ─── Estado online inicial ────────────────────────────────────────────────
   useEffect(() => {
     const iniciarPanel = async () => {
       try {
@@ -91,29 +151,52 @@ export default function PanelChoferPage() {
     iniciarPanel();
   }, []);
 
+  // ─── Realtime + polling ───────────────────────────────────────────────────
   useEffect(() => {
     cargarCargas();
+
     const canal = supabase
       .channel("panel-chofer-cargas")
-      .on("postgres_changes", { event: "*", schema: "public", table: "cargas" }, () => cargarCargas())
-      .subscribe();
-    return () => { supabase.removeChannel(canal); detenerAlarma(); };
+      .on("postgres_changes", {
+        event: "INSERT",
+        schema: "public",
+        table: "cargas",
+      }, () => {
+        console.log("[realtime] Nueva carga insertada — recargando");
+        cargarCargas();
+      })
+      .on("postgres_changes", {
+        event: "UPDATE",
+        schema: "public",
+        table: "cargas",
+      }, () => {
+        cargarCargas();
+      })
+      .subscribe((status) => {
+        console.log("[realtime] panel-chofer status:", status);
+      });
+
+    // Polling cada 8s como fallback
+    const intervalo = setInterval(() => {
+      if (onlineRef.current) cargarCargas();
+    }, 8000);
+
+    return () => {
+      supabase.removeChannel(canal);
+      clearInterval(intervalo);
+      detenerAlarma();
+    };
   }, []);
 
   useEffect(() => {
     if (!onlineCargado) return;
     actualizarEstadoOnline(online);
+    if (!online) detenerAlarma();
   }, [online, onlineCargado]);
 
-  useEffect(() => {
-    if (online && cargas.length > 0) iniciarAlarma();
-    else detenerAlarma();
-  }, [online, cargas, indice]);
+  useEffect(() => { setMostrarMapa(false); }, [indice]);
 
-  useEffect(() => {
-    setMostrarMapa(false);
-  }, [indice]);
-
+  // ─── Cargar viajes disponibles ────────────────────────────────────────────
   const cargarCargas = async () => {
     setCargando(true);
     try {
@@ -140,12 +223,15 @@ export default function PanelChoferPage() {
           return matchTipo;
         }
         if (!vehiculoDelChofer) return true;
-        return String(carga.vehiculo || "").toLowerCase().trim().includes(String(vehiculoDelChofer || "").toLowerCase().trim()) ||
-          String(vehiculoDelChofer || "").toLowerCase().trim().includes(String(carga.vehiculo || "").toLowerCase().trim());
+        return (
+          String(carga.vehiculo || "").toLowerCase().trim().includes(String(vehiculoDelChofer || "").toLowerCase().trim()) ||
+          String(vehiculoDelChofer || "").toLowerCase().trim().includes(String(carga.vehiculo || "").toLowerCase().trim())
+        );
       });
 
       setCargas(cargasFiltradas);
-      setIndice(0);
+      // No resetear índice si ya estábamos viendo un viaje y siguen siendo los mismos
+      setIndice((prev) => (prev >= cargasFiltradas.length ? 0 : prev));
 
       if (cargasFiltradas.length > 0) {
         const ids = cargasFiltradas.map((c) => c.id);
@@ -173,18 +259,6 @@ export default function PanelChoferPage() {
     }
   };
 
-  const iniciarAlarma = () => {
-    if (!audioRef.current) return;
-    audioRef.current.currentTime = 0;
-    audioRef.current.play().catch(() => {});
-  };
-
-  const detenerAlarma = () => {
-    if (!audioRef.current) return;
-    audioRef.current.pause();
-    audioRef.current.currentTime = 0;
-  };
-
   const actualizarEstadoOnline = async (estado: boolean) => {
     try {
       const usuarioGuardado = localStorage.getItem("usuario");
@@ -197,8 +271,15 @@ export default function PanelChoferPage() {
   const rechazarViaje = () => {
     detenerAlarma();
     setMostrarMapa(false);
-    if (indice < cargas.length - 1) setIndice(indice + 1);
-    else { setIndice(0); cargarCargas(); }
+    const siguiente = indice + 1;
+    if (siguiente < cargas.length) {
+      setIndice(siguiente);
+      // Sonar para el siguiente viaje
+      setTimeout(() => reproducirAlarma(), 300);
+    } else {
+      setIndice(0);
+      cargarCargas();
+    }
   };
 
   const aceptarViaje = async () => {
@@ -222,9 +303,7 @@ export default function PanelChoferPage() {
   };
 
   const retomar = () => {
-    if (viajeActivo?.id) {
-      localStorage.setItem("viajeActivoId", String(viajeActivo.id));
-    }
+    if (viajeActivo?.id) localStorage.setItem("viajeActivoId", String(viajeActivo.id));
     window.location.href = "/viaje-activo";
   };
 
@@ -236,7 +315,6 @@ export default function PanelChoferPage() {
 
   const cargaActual = online ? cargas[indice] : null;
   const paradasActuales = cargaActual ? (paradasPorCarga[String(cargaActual.id)] || []) : [];
-
   const paradasParaMapa: ParadaMapa[] = paradasActuales.map((p) => ({
     direccion: p.direccion,
     tipo: p.tipo as "retiro" | "entrega" | "parada",
@@ -246,7 +324,10 @@ export default function PanelChoferPage() {
   const BotonOnline = () => (
     <div className="w-full flex justify-center mb-6">
       <button
-        onClick={() => setOnline(!online)}
+        onClick={async () => {
+          await desbloquearAudio();
+          setOnline(!online);
+        }}
         className={`px-8 py-4 rounded-3xl font-black text-xl md:text-2xl shadow-2xl transition ${online ? "bg-green-500 text-black" : "bg-red-600 text-white"}`}
       >
         {online ? "🟢 ONLINE" : "🔴 OFFLINE"}
@@ -259,13 +340,9 @@ export default function PanelChoferPage() {
       <p className="text-zinc-500 text-xs font-black mb-3 text-center">🆘 SOPORTE TILA</p>
       <div className="flex gap-3 justify-center">
         <a href={`https://wa.me/${SOPORTE_WHATSAPP}`} target="_blank" rel="noreferrer"
-          className="bg-green-600 hover:bg-green-500 text-white font-black px-4 py-2 rounded-xl text-sm">
-          💬 WhatsApp
-        </a>
+          className="bg-green-600 hover:bg-green-500 text-white font-black px-4 py-2 rounded-xl text-sm">💬 WhatsApp</a>
         <a href={`mailto:${SOPORTE_EMAIL}`}
-          className="bg-zinc-700 hover:bg-zinc-600 text-white font-black px-4 py-2 rounded-xl text-sm">
-          📧 Email
-        </a>
+          className="bg-zinc-700 hover:bg-zinc-600 text-white font-black px-4 py-2 rounded-xl text-sm">📧 Email</a>
       </div>
     </div>
   );
@@ -285,7 +362,20 @@ export default function PanelChoferPage() {
 
         <div className="w-full max-w-5xl flex flex-col gap-6">
 
-          {/* ─── TARJETA VIAJE ACTIVO — siempre visible si existe ─────────────── */}
+          {/* ─── Banner desbloqueo audio — solo si no desbloqueado ────────────── */}
+          {!audioDesbloqueado && (
+            <div className="bg-yellow-400 text-black rounded-2xl p-4 flex items-center justify-between gap-4">
+              <p className="font-black text-sm">🔔 Tocá el botón para activar las alertas sonoras de nuevos viajes</p>
+              <button
+                onClick={desbloquearAudio}
+                className="bg-black text-yellow-400 font-black px-4 py-2 rounded-xl text-sm whitespace-nowrap hover:bg-zinc-900 transition"
+              >
+                Activar sonido
+              </button>
+            </div>
+          )}
+
+          {/* ─── Tarjeta viaje activo — siempre visible si existe ─────────────── */}
           {!buscandoViajeActivo && viajeActivo && (
             <div className="bg-green-950 border-4 border-green-400 rounded-3xl p-6 text-center shadow-2xl">
               <p className="text-green-400 font-black text-xs mb-2 tracking-widest">VIAJE EN CURSO</p>
@@ -309,7 +399,7 @@ export default function PanelChoferPage() {
             </div>
           )}
 
-          {/* ─── PANEL PRINCIPAL ──────────────────────────────────────────────── */}
+          {/* ─── Panel principal ──────────────────────────────────────────────── */}
           {cargando ? (
             <section className="text-center">
               <BotonOnline />
@@ -324,13 +414,12 @@ export default function PanelChoferPage() {
               <p className="text-zinc-400 text-lg md:text-2xl mb-8">
                 {online ? "No hay viajes compatibles pendientes por ahora." : "Estás offline. Activá ONLINE para recibir viajes."}
               </p>
-              <button onClick={() => { window.location.href = "/billetera-chofer"; }} className="w-full max-w-md bg-zinc-800 border-2 border-yellow-400 hover:bg-zinc-700 text-yellow-400 font-black text-xl py-5 rounded-3xl">
+              <button onClick={() => { window.location.href = "/billetera-chofer"; }}
+                className="w-full max-w-md bg-zinc-800 border-2 border-yellow-400 hover:bg-zinc-700 text-yellow-400 font-black text-xl py-5 rounded-3xl">
                 💼 MI BILLETERA
               </button>
               <BloquesSoporte />
-              <div className="mt-5 flex justify-center">
-                <BotonCerrarSesion />
-              </div>
+              <div className="mt-5 flex justify-center"><BotonCerrarSesion /></div>
             </section>
 
           ) : (
@@ -348,9 +437,7 @@ export default function PanelChoferPage() {
                         <span className={`w-8 h-8 rounded-full flex items-center justify-center font-black text-sm flex-shrink-0 ${
                           parada.tipo === "retiro" ? "bg-blue-600 text-white" :
                           parada.tipo === "entrega" ? "bg-green-600 text-white" : "bg-zinc-600 text-white"
-                        }`}>
-                          {LABELS[index] || index}
-                        </span>
+                        }`}>{LABELS[index] || index}</span>
                         <div>
                           <p className="text-xs font-black text-zinc-400">{getTipoParadaLabel(parada.tipo)}</p>
                           <p className="text-white text-base font-black">{parada.direccion}</p>
@@ -399,21 +486,22 @@ export default function PanelChoferPage() {
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-                <button onClick={aceptarViaje} disabled={!online} className={`font-black text-2xl md:text-3xl py-6 rounded-3xl ${online ? "bg-green-600 hover:bg-green-500 text-black" : "bg-zinc-800 text-zinc-500 cursor-not-allowed"}`}>
+                <button onClick={aceptarViaje} disabled={!online}
+                  className={`font-black text-2xl md:text-3xl py-6 rounded-3xl ${online ? "bg-green-600 hover:bg-green-500 text-black" : "bg-zinc-800 text-zinc-500 cursor-not-allowed"}`}>
                   ACEPTAR
                 </button>
-                <button onClick={rechazarViaje} className="bg-red-600 hover:bg-red-500 text-white font-black text-2xl md:text-3xl py-6 rounded-3xl">
+                <button onClick={rechazarViaje}
+                  className="bg-red-600 hover:bg-red-500 text-white font-black text-2xl md:text-3xl py-6 rounded-3xl">
                   RECHAZAR
                 </button>
               </div>
 
-              <button onClick={() => { window.location.href = "/billetera-chofer"; }} className="w-full mt-5 bg-zinc-800 border-2 border-yellow-400 hover:bg-zinc-700 text-yellow-400 font-black text-xl md:text-2xl py-5 rounded-3xl">
+              <button onClick={() => { window.location.href = "/billetera-chofer"; }}
+                className="w-full mt-5 bg-zinc-800 border-2 border-yellow-400 hover:bg-zinc-700 text-yellow-400 font-black text-xl md:text-2xl py-5 rounded-3xl">
                 💼 MI BILLETERA
               </button>
               <BloquesSoporte />
-              <div className="mt-5 flex justify-center">
-                <BotonCerrarSesion />
-              </div>
+              <div className="mt-5 flex justify-center"><BotonCerrarSesion /></div>
               <p className="text-zinc-500 text-center mt-6">Viaje {indice + 1} de {cargas.length}</p>
             </section>
           )}
