@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { supabase } from "../lib/supabase";
 import { useProtegerRuta } from "../hooks/useProtegerRuta";
 import HistorialChofer from "../components/historial-chofer";
@@ -9,104 +9,81 @@ import MapaTILA, { ParadaMapa } from "../components/MapaTILA";
 
 const LABELS = ["A", "B", "C", "D", "E", "F"];
 const SOPORTE_WHATSAPP = "5491158689383";
-const SOPORTE_EMAIL = "logisticatila@gmail.com";
+const SOPORTE_EMAIL    = "logisticatila@gmail.com";
 
 const ESTADOS_ACTIVOS = [
-  "Chofer asignado",
-  "En camino",
-  "Carga retirada",
-  "En ruta",
-  "Descarga completada",
+  "Chofer asignado", "En camino", "Carga retirada", "En ruta", "Descarga completada",
 ];
 
 export default function PanelChoferPage() {
   const { autorizado } = useProtegerRuta("chofer");
 
-  const [cargas, setCargas] = useState<any[]>([]);
+  const [cargas, setCargas]                 = useState<any[]>([]);
   const [paradasPorCarga, setParadasPorCarga] = useState<Record<string, any[]>>({});
-  const [indice, setIndice] = useState(0);
-  const [cargando, setCargando] = useState(true);
-  const [online, setOnline] = useState(false);
+  const [indice, setIndice]                 = useState(0);
+  const [cargando, setCargando]             = useState(true);
+  const [online, setOnline]                 = useState(false);
   const [vehiculoChofer, setVehiculoChofer] = useState("");
-  const [onlineCargado, setOnlineCargado] = useState(false);
-  const [mostrarMapa, setMostrarMapa] = useState(false);
+  const [onlineCargado, setOnlineCargado]   = useState(false);
+  const [mostrarMapa, setMostrarMapa]       = useState(false);
 
-  // ─── Viaje activo del chofer ──────────────────────────────────────────────
-  const [viajeActivo, setViajeActivo] = useState<any>(null);
+  const [viajeActivo, setViajeActivo]               = useState<any>(null);
   const [buscandoViajeActivo, setBuscandoViajeActivo] = useState(true);
 
-  // ─── Audio desbloqueado por interacción del usuario ───────────────────────
   const [audioDesbloqueado, setAudioDesbloqueado] = useState(false);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-  // Cuántos viajes había la última vez que corrió la alarma — para detectar nuevos
-  const cantidadAnteriorRef = useRef<number>(0);
-  const onlineRef = useRef(false);
 
-  // Mantener ref sincronizada con estado
+  // ─── Refs estables — no causan re-renders ─────────────────────────────────
+  const audioRef          = useRef<HTMLAudioElement | null>(null);
+  const onlineRef         = useRef(false);
+  // ID del último set de cargas — para no re-renderizar si los datos son iguales
+  const cargasHashRef     = useRef<string>("");
+  // Evitar re-suscripción al canal en cada render
+  const canalRef          = useRef<ReturnType<typeof supabase.channel> | null>(null);
+  const intervaloRef      = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Ids de viajes ya sonados — para no repetir alarma para el mismo viaje
+  const viajesSonadosRef  = useRef<Set<string>>(new Set());
+  const sonandoRef        = useRef(false);
+
   useEffect(() => { onlineRef.current = online; }, [online]);
 
-  // ─── Desbloquear audio con primera interacción ────────────────────────────
+  // ─── Audio ────────────────────────────────────────────────────────────────
   const desbloquearAudio = async () => {
     if (!audioRef.current || audioDesbloqueado) return;
     try {
-      // Reproducir silenciosamente y pausar — esto desbloquea el contexto de audio
       audioRef.current.volume = 0;
       await audioRef.current.play();
       audioRef.current.pause();
       audioRef.current.currentTime = 0;
       audioRef.current.volume = 1;
       setAudioDesbloqueado(true);
-      console.log("[audio] Desbloqueado");
-    } catch (e) {
-      console.warn("[audio] No se pudo desbloquear:", e);
-    }
+    } catch (e) { console.warn("[audio] No se pudo desbloquear:", e); }
   };
 
-  const reproducirAlarma = () => {
-    if (!audioRef.current) return;
+  const reproducirAlarma = useCallback(() => {
+    if (!audioRef.current || sonandoRef.current) return;
     audioRef.current.currentTime = 0;
     audioRef.current.volume = 1;
-    audioRef.current.play().catch((e) => {
-      console.warn("[audio] Error al reproducir alarma:", e);
-    });
-  };
+    audioRef.current.play()
+      .then(() => { sonandoRef.current = true; })
+      .catch(e => console.warn("[audio] Error:", e));
+  }, []);
 
-  const detenerAlarma = () => {
+  const detenerAlarma = useCallback(() => {
     if (!audioRef.current) return;
     audioRef.current.pause();
     audioRef.current.currentTime = 0;
-  };
+    sonandoRef.current = false;
+  }, []);
 
-  // ─── Disparar alarma cuando cambian los viajes disponibles ───────────────
-  useEffect(() => {
-    const cantidadActual = cargas.length;
-    const cantidadAnterior = cantidadAnteriorRef.current;
-
-    if (onlineRef.current && cantidadActual > 0) {
-      // Sonar si: hay viajes Y (es la primera carga O llegó un viaje nuevo)
-      if (cantidadAnterior === 0 || cantidadActual > cantidadAnterior) {
-        reproducirAlarma();
-      } else {
-        // Mantener sonido mientras haya viajes disponibles
-        reproducirAlarma();
-      }
-    } else {
-      detenerAlarma();
-    }
-
-    cantidadAnteriorRef.current = cantidadActual;
-  }, [cargas, online]);
-
-  // ─── Buscar viaje activo del chofer al montar ─────────────────────────────
+  // ─── Viaje activo ─────────────────────────────────────────────────────────
   useEffect(() => {
     const buscarViajeActivo = async () => {
       try {
-        const usuarioGuardado = localStorage.getItem("usuario");
-        if (!usuarioGuardado) { setBuscandoViajeActivo(false); return; }
-        const usuario = JSON.parse(usuarioGuardado);
-        if (!usuario?.id) { setBuscandoViajeActivo(false); return; }
-
-        const { data, error } = await supabase
+        const u = localStorage.getItem("usuario");
+        if (!u) return;
+        const usuario = JSON.parse(u);
+        if (!usuario?.id) return;
+        const { data } = await supabase
           .from("cargas")
           .select("id, origen, destino, estado, pago_chofer")
           .eq("chofer_id", usuario.id)
@@ -114,14 +91,10 @@ export default function PanelChoferPage() {
           .order("created_at", { ascending: false })
           .limit(1)
           .maybeSingle();
-
-        if (error) console.warn("Error buscando viaje activo:", error);
         if (data) {
           setViajeActivo(data);
           localStorage.setItem("viajeActivoId", String(data.id));
         }
-      } catch (e) {
-        console.warn("Error en buscarViajeActivo:", e);
       } finally {
         setBuscandoViajeActivo(false);
       }
@@ -131,164 +104,156 @@ export default function PanelChoferPage() {
 
   // ─── Estado online inicial ────────────────────────────────────────────────
   useEffect(() => {
-    const iniciarPanel = async () => {
+    const iniciar = async () => {
       try {
-        const usuarioGuardado = localStorage.getItem("usuario");
-        if (!usuarioGuardado) { setOnlineCargado(true); return; }
-        const usuario = JSON.parse(usuarioGuardado);
-        const { data, error } = await supabase
-          .from("usuarios")
-          .select("online")
-          .eq("id", usuario.id)
-          .single();
+        const u = localStorage.getItem("usuario");
+        if (!u) return;
+        const usuario = JSON.parse(u);
+        const { data, error } = await supabase.from("usuarios").select("online").eq("id", usuario.id).single();
         if (!error && data) setOnline(data.online ?? false);
-      } catch (error) {
-        console.log(error);
       } finally {
         setOnlineCargado(true);
       }
     };
-    iniciarPanel();
+    iniciar();
   }, []);
 
-  // ─── Realtime + polling ───────────────────────────────────────────────────
+  // ─── cargarCargas con useCallback — referencia estable ───────────────────
+  const cargarCargas = useCallback(async () => {
+    const u = localStorage.getItem("usuario");
+    const usuario = u ? JSON.parse(u) : null;
+    const vehiculoDelChofer = usuario?.vehiculo || "";
+    setVehiculoChofer(usuario?.tipo_vehiculo || usuario?.vehiculo || "No definido");
+
+    const { data, error } = await supabase
+      .from("cargas")
+      .select("*")
+      .or("estado.is.null,estado.eq.pendiente")
+      .order("created_at", { ascending: true });
+
+    if (error) { console.error("Error cargando cargas:", error); return; }
+
+    const cargasFiltradas = (data || []).filter((carga) => {
+      if (!vehiculoDelChofer && !usuario?.tipo_vehiculo) return true;
+      if (usuario?.tipo_vehiculo && carga.tipo_vehiculo) {
+        const matchTipo = String(carga.tipo_vehiculo).toLowerCase().trim() === String(usuario.tipo_vehiculo).toLowerCase().trim();
+        if (usuario?.categoria_legal && carga.categoria_legal) {
+          return matchTipo && String(carga.categoria_legal) === String(usuario.categoria_legal);
+        }
+        return matchTipo;
+      }
+      if (!vehiculoDelChofer) return true;
+      return (
+        String(carga.vehiculo || "").toLowerCase().includes(String(vehiculoDelChofer).toLowerCase()) ||
+        String(vehiculoDelChofer).toLowerCase().includes(String(carga.vehiculo || "").toLowerCase())
+      );
+    });
+
+    // ── Evitar re-render si los ids no cambiaron ──────────────────────────
+    const nuevoHash = cargasFiltradas.map(c => c.id).join(",");
+    if (nuevoHash === cargasHashRef.current) return;
+    cargasHashRef.current = nuevoHash;
+
+    // ── Detectar viajes NUEVOS para alarma inmediata ──────────────────────
+    if (onlineRef.current) {
+      const nuevos = cargasFiltradas.filter(c => !viajesSonadosRef.current.has(String(c.id)));
+      if (nuevos.length > 0) {
+        nuevos.forEach(c => viajesSonadosRef.current.add(String(c.id)));
+        reproducirAlarma();
+      }
+    }
+
+    setCargas(cargasFiltradas);
+    // Mantener índice válido sin resetear si ya estábamos viendo un viaje
+    setIndice(prev => (prev >= cargasFiltradas.length ? 0 : prev));
+
+    if (cargasFiltradas.length > 0) {
+      const ids = cargasFiltradas.map(c => c.id);
+      const { data: dataParadas } = await supabase
+        .from("paradas_viaje").select("*").in("carga_id", ids).order("orden", { ascending: true });
+      if (dataParadas) {
+        const agrupadas: Record<string, any[]> = {};
+        dataParadas.forEach(p => {
+          const key = String(p.carga_id);
+          if (!agrupadas[key]) agrupadas[key] = [];
+          agrupadas[key].push(p);
+        });
+        setParadasPorCarga(agrupadas);
+      }
+    }
+
+    setCargando(false);
+  }, [reproducirAlarma]);
+
+  // ─── Ref a cargarCargas — para usar en closures sin recrear suscripciones ─
+  const cargarCargasRef = useRef(cargarCargas);
+  useEffect(() => { cargarCargasRef.current = cargarCargas; }, [cargarCargas]);
+
+  // ─── Suscripción Supabase + polling — se monta UNA sola vez ──────────────
   useEffect(() => {
-    cargarCargas();
+    cargarCargasRef.current();
 
-    const canal = supabase
-      .channel("panel-chofer-cargas")
-      .on("postgres_changes", {
-        event: "INSERT",
-        schema: "public",
-        table: "cargas",
-      }, () => {
-        console.log("[realtime] Nueva carga insertada — recargando");
-        cargarCargas();
+    // Canal realtime — INSERT dispara alarma inmediata
+    canalRef.current = supabase
+      .channel("panel-chofer-realtime")
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "cargas" }, () => {
+        cargarCargasRef.current();
       })
-      .on("postgres_changes", {
-        event: "UPDATE",
-        schema: "public",
-        table: "cargas",
-      }, () => {
-        cargarCargas();
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "cargas" }, () => {
+        cargarCargasRef.current();
       })
-      .subscribe((status) => {
-        console.log("[realtime] panel-chofer status:", status);
-      });
+      .subscribe();
 
-    // Polling cada 8s como fallback
-    const intervalo = setInterval(() => {
-      if (onlineRef.current) cargarCargas();
-    }, 8000);
+    // Polling cada 10s como fallback — no fuente principal
+    intervaloRef.current = setInterval(() => {
+      cargarCargasRef.current();
+    }, 10000);
 
     return () => {
-      supabase.removeChannel(canal);
-      clearInterval(intervalo);
+      if (canalRef.current)    supabase.removeChannel(canalRef.current);
+      if (intervaloRef.current) clearInterval(intervaloRef.current);
       detenerAlarma();
     };
-  }, []);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // ← sin dependencias: se monta UNA vez, usa refs para todo
 
+  // ─── Actualizar online en Supabase ────────────────────────────────────────
   useEffect(() => {
     if (!onlineCargado) return;
-    actualizarEstadoOnline(online);
+    const u = localStorage.getItem("usuario");
+    if (!u) return;
+    const usuario = JSON.parse(u);
+    supabase.from("usuarios").update({ online }).eq("id", usuario.id).then(() => {});
     if (!online) detenerAlarma();
-  }, [online, onlineCargado]);
+  }, [online, onlineCargado, detenerAlarma]);
 
+  // ─── Cerrar mapa al cambiar de viaje ─────────────────────────────────────
   useEffect(() => { setMostrarMapa(false); }, [indice]);
 
-  // ─── Cargar viajes disponibles ────────────────────────────────────────────
-  const cargarCargas = async () => {
-    setCargando(true);
-    try {
-      const usuarioGuardado = localStorage.getItem("usuario");
-      const usuario = usuarioGuardado ? JSON.parse(usuarioGuardado) : null;
-      const vehiculoDelChofer = usuario?.vehiculo || "";
-      setVehiculoChofer(usuario?.tipo_vehiculo || usuario?.vehiculo || "No definido");
-
-      const { data, error } = await supabase
-        .from("cargas")
-        .select("*")
-        .or("estado.is.null,estado.eq.pendiente")
-        .order("created_at", { ascending: true });
-
-      if (error) { console.log(error); alert("Error al cargar viajes"); setCargando(false); return; }
-
-      const cargasFiltradas = (data || []).filter((carga) => {
-        if (!vehiculoDelChofer && !usuario?.tipo_vehiculo) return true;
-        if (usuario?.tipo_vehiculo && carga.tipo_vehiculo) {
-          const matchTipo = String(carga.tipo_vehiculo).toLowerCase().trim() === String(usuario.tipo_vehiculo).toLowerCase().trim();
-          if (usuario?.categoria_legal && carga.categoria_legal) {
-            return matchTipo && String(carga.categoria_legal) === String(usuario.categoria_legal);
-          }
-          return matchTipo;
-        }
-        if (!vehiculoDelChofer) return true;
-        return (
-          String(carga.vehiculo || "").toLowerCase().trim().includes(String(vehiculoDelChofer || "").toLowerCase().trim()) ||
-          String(vehiculoDelChofer || "").toLowerCase().trim().includes(String(carga.vehiculo || "").toLowerCase().trim())
-        );
-      });
-
-      setCargas(cargasFiltradas);
-      // No resetear índice si ya estábamos viendo un viaje y siguen siendo los mismos
-      setIndice((prev) => (prev >= cargasFiltradas.length ? 0 : prev));
-
-      if (cargasFiltradas.length > 0) {
-        const ids = cargasFiltradas.map((c) => c.id);
-        const { data: dataParadas } = await supabase
-          .from("paradas_viaje")
-          .select("*")
-          .in("carga_id", ids)
-          .order("orden", { ascending: true });
-
-        if (dataParadas) {
-          const agrupadas: Record<string, any[]> = {};
-          dataParadas.forEach((p) => {
-            const key = String(p.carga_id);
-            if (!agrupadas[key]) agrupadas[key] = [];
-            agrupadas[key].push(p);
-          });
-          setParadasPorCarga(agrupadas);
-        }
-      }
-
-      setCargando(false);
-    } catch (error) {
-      console.log(error);
-      setCargando(false);
-    }
-  };
-
-  const actualizarEstadoOnline = async (estado: boolean) => {
-    try {
-      const usuarioGuardado = localStorage.getItem("usuario");
-      if (!usuarioGuardado) return;
-      const usuario = JSON.parse(usuarioGuardado);
-      await supabase.from("usuarios").update({ online: estado }).eq("id", usuario.id);
-    } catch (error) { console.log(error); }
-  };
-
+  // ─── Rechazar ────────────────────────────────────────────────────────────
   const rechazarViaje = () => {
     detenerAlarma();
     setMostrarMapa(false);
     const siguiente = indice + 1;
     if (siguiente < cargas.length) {
       setIndice(siguiente);
-      // Sonar para el siguiente viaje
       setTimeout(() => reproducirAlarma(), 300);
     } else {
       setIndice(0);
-      cargarCargas();
+      // Limpiar set de sonados para que si vuelven los mismos viajes suenen
+      viajesSonadosRef.current.clear();
+      cargarCargasRef.current();
     }
   };
 
+  // ─── Aceptar ─────────────────────────────────────────────────────────────
   const aceptarViaje = async () => {
     if (!online) { alert("Tenés que estar ONLINE para aceptar viajes"); return; }
     const carga = cargas[indice];
     if (!carga?.id) return;
     detenerAlarma();
-    const usuarioGuardado = localStorage.getItem("usuario");
-    const usuario = usuarioGuardado ? JSON.parse(usuarioGuardado) : null;
+    const u = localStorage.getItem("usuario");
+    const usuario = u ? JSON.parse(u) : null;
     if (!usuario?.id || usuario?.rol !== "chofer") { alert("Sesión inválida: ingresá como chofer"); return; }
     const { data, error } = await supabase
       .from("cargas")
@@ -297,7 +262,7 @@ export default function PanelChoferPage() {
       .eq("id", carga.id)
       .select()
       .single();
-    if (error) { console.log(error); alert("Este viaje ya fue tomado por otro chofer"); cargarCargas(); return; }
+    if (error) { alert("Este viaje ya fue tomado por otro chofer"); cargarCargasRef.current(); return; }
     localStorage.setItem("viajeActivoId", String(data.id));
     window.location.href = "/viaje-activo";
   };
@@ -308,26 +273,24 @@ export default function PanelChoferPage() {
   };
 
   const getTipoParadaLabel = (tipo: string) => {
-    if (tipo === "retiro") return "📦 Carga / Retiro";
+    if (tipo === "retiro")  return "📦 Carga / Retiro";
     if (tipo === "entrega") return "🏁 Descarga / Entrega final";
     return "📍 Parada intermedia";
   };
 
-  const cargaActual = online ? cargas[indice] : null;
+  const cargaActual    = online ? cargas[indice] : null;
   const paradasActuales = cargaActual ? (paradasPorCarga[String(cargaActual.id)] || []) : [];
-  const paradasParaMapa: ParadaMapa[] = paradasActuales.map((p) => ({
+  const paradasParaMapa: ParadaMapa[] = paradasActuales.map(p => ({
     direccion: p.direccion,
-    tipo: p.tipo as "retiro" | "entrega" | "parada",
-    estado: "pendiente" as const,
+    tipo:      p.tipo as "retiro" | "entrega" | "parada",
+    estado:    "pendiente" as const,
   }));
 
   const BotonOnline = () => (
     <div className="w-full flex justify-center mb-6">
       <button
-        onClick={async () => {
-          await desbloquearAudio();
-          setOnline(!online);
-        }}
+        type="button"
+        onClick={async () => { await desbloquearAudio(); setOnline(v => !v); }}
         className={`px-8 py-4 rounded-3xl font-black text-xl md:text-2xl shadow-2xl transition ${online ? "bg-green-500 text-black" : "bg-red-600 text-white"}`}
       >
         {online ? "🟢 ONLINE" : "🔴 OFFLINE"}
@@ -347,13 +310,11 @@ export default function PanelChoferPage() {
     </div>
   );
 
-  if (!autorizado) {
-    return (
-      <main className="min-h-screen bg-black text-white flex items-center justify-center">
-        <h1 className="text-3xl font-black text-yellow-400 animate-pulse">Cargando...</h1>
-      </main>
-    );
-  }
+  if (!autorizado) return (
+    <main className="min-h-screen bg-black text-white flex items-center justify-center">
+      <h1 className="text-3xl font-black text-yellow-400 animate-pulse">Cargando...</h1>
+    </main>
+  );
 
   return (
     <>
@@ -362,20 +323,18 @@ export default function PanelChoferPage() {
 
         <div className="w-full max-w-5xl flex flex-col gap-6">
 
-          {/* ─── Banner desbloqueo audio — solo si no desbloqueado ────────────── */}
+          {/* Banner desbloqueo audio */}
           {!audioDesbloqueado && (
             <div className="bg-yellow-400 text-black rounded-2xl p-4 flex items-center justify-between gap-4">
-              <p className="font-black text-sm">🔔 Tocá el botón para activar las alertas sonoras de nuevos viajes</p>
-              <button
-                onClick={desbloquearAudio}
-                className="bg-black text-yellow-400 font-black px-4 py-2 rounded-xl text-sm whitespace-nowrap hover:bg-zinc-900 transition"
-              >
+              <p className="font-black text-sm">🔔 Tocá para activar alertas sonoras de nuevos viajes</p>
+              <button type="button" onClick={desbloquearAudio}
+                className="bg-black text-yellow-400 font-black px-4 py-2 rounded-xl text-sm whitespace-nowrap hover:bg-zinc-900 transition">
                 Activar sonido
               </button>
             </div>
           )}
 
-          {/* ─── Tarjeta viaje activo — siempre visible si existe ─────────────── */}
+          {/* Tarjeta viaje activo */}
           {!buscandoViajeActivo && viajeActivo && (
             <div className="bg-green-950 border-4 border-green-400 rounded-3xl p-6 text-center shadow-2xl">
               <p className="text-green-400 font-black text-xs mb-2 tracking-widest">VIAJE EN CURSO</p>
@@ -390,16 +349,14 @@ export default function PanelChoferPage() {
                   Ganancia: <span className="text-yellow-400 font-black">${Number(viajeActivo.pago_chofer).toLocaleString()}</span>
                 </p>
               )}
-              <button
-                onClick={retomar}
-                className="w-full bg-green-500 hover:bg-green-400 text-black font-black text-xl md:text-2xl py-5 rounded-2xl transition hover:scale-105"
-              >
+              <button type="button" onClick={retomar}
+                className="w-full bg-green-500 hover:bg-green-400 text-black font-black text-xl md:text-2xl py-5 rounded-2xl transition hover:scale-105">
                 🚛 Retomar viaje activo
               </button>
             </div>
           )}
 
-          {/* ─── Panel principal ──────────────────────────────────────────────── */}
+          {/* Panel principal */}
           {cargando ? (
             <section className="text-center">
               <BotonOnline />
@@ -414,7 +371,7 @@ export default function PanelChoferPage() {
               <p className="text-zinc-400 text-lg md:text-2xl mb-8">
                 {online ? "No hay viajes compatibles pendientes por ahora." : "Estás offline. Activá ONLINE para recibir viajes."}
               </p>
-              <button onClick={() => { window.location.href = "/billetera-chofer"; }}
+              <button type="button" onClick={() => { window.location.href = "/billetera-chofer"; }}
                 className="w-full max-w-md bg-zinc-800 border-2 border-yellow-400 hover:bg-zinc-700 text-yellow-400 font-black text-xl py-5 rounded-3xl">
                 💼 MI BILLETERA
               </button>
@@ -462,10 +419,11 @@ export default function PanelChoferPage() {
                 <p className="md:col-span-2">📝 <strong>Detalles:</strong> {cargaActual.detalles || "Sin detalles"}</p>
               </div>
 
-              {/* Mapa del recorrido */}
+              {/* Mapa del recorrido — integrado en TILA */}
               <div className="mb-6">
                 <button
-                  onClick={() => setMostrarMapa(!mostrarMapa)}
+                  type="button"
+                  onClick={() => setMostrarMapa(v => !v)}
                   className="w-full bg-zinc-800 hover:bg-zinc-700 border border-yellow-400 text-yellow-400 font-black py-3 rounded-2xl text-sm mb-3 transition"
                 >
                   {mostrarMapa ? "🗺️ Ocultar mapa del recorrido" : "🗺️ Ver mapa del recorrido"}
@@ -486,17 +444,17 @@ export default function PanelChoferPage() {
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-                <button onClick={aceptarViaje} disabled={!online}
+                <button type="button" onClick={aceptarViaje} disabled={!online}
                   className={`font-black text-2xl md:text-3xl py-6 rounded-3xl ${online ? "bg-green-600 hover:bg-green-500 text-black" : "bg-zinc-800 text-zinc-500 cursor-not-allowed"}`}>
                   ACEPTAR
                 </button>
-                <button onClick={rechazarViaje}
+                <button type="button" onClick={rechazarViaje}
                   className="bg-red-600 hover:bg-red-500 text-white font-black text-2xl md:text-3xl py-6 rounded-3xl">
                   RECHAZAR
                 </button>
               </div>
 
-              <button onClick={() => { window.location.href = "/billetera-chofer"; }}
+              <button type="button" onClick={() => { window.location.href = "/billetera-chofer"; }}
                 className="w-full mt-5 bg-zinc-800 border-2 border-yellow-400 hover:bg-zinc-700 text-yellow-400 font-black text-xl md:text-2xl py-5 rounded-3xl">
                 💼 MI BILLETERA
               </button>
@@ -505,11 +463,9 @@ export default function PanelChoferPage() {
               <p className="text-zinc-500 text-center mt-6">Viaje {indice + 1} de {cargas.length}</p>
             </section>
           )}
-
         </div>
       </main>
 
-      {/* Historial separado abajo */}
       {autorizado && (
         <div className="bg-black text-white px-4 py-8">
           <div className="max-w-3xl mx-auto">
