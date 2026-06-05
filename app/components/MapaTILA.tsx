@@ -32,12 +32,11 @@ export interface ParadaMapa {
   estado: "pendiente" | "en_curso" | "completada";
 }
 
-// ─── Nueva interfaz para múltiples choferes en admin ─────────────────────────
 export interface ChoferEnMapa {
   lat: number;
   lng: number;
-  label?: string;   // nombre del chofer o ID viaje
-  estado?: string;  // estado del viaje para color del marcador
+  label?: string;
+  estado?: string;
 }
 
 interface MapaTILAProps {
@@ -49,7 +48,6 @@ interface MapaTILAProps {
   soloLectura?: boolean;
   altura?: string;
   paradas?: ParadaMapa[];
-  // ─── Prop nueva opcional: múltiples choferes (solo admin) ────────────────
   choferes?: ChoferEnMapa[];
 }
 
@@ -69,45 +67,62 @@ export default function MapaTILA({
     libraries: LIBRARIES,
   });
 
-  const mapRef = useRef<google.maps.Map | null>(null);
-  const choferMarkerRef = useRef<google.maps.Marker | null>(null);
-  const geocoderRef = useRef<google.maps.Geocoder | null>(null);
+  const mapRef               = useRef<google.maps.Map | null>(null);
+  const choferMarkerRef      = useRef<google.maps.Marker | null>(null);
+  const geocoderRef          = useRef<google.maps.Geocoder | null>(null);
   const directionsServiceRef = useRef<google.maps.DirectionsService | null>(null);
 
-  const [origenCoords, setOrigenCoords] = useState<google.maps.LatLngLiteral | null>(null);
+  const [origenCoords,  setOrigenCoords]  = useState<google.maps.LatLngLiteral | null>(null);
   const [destinoCoords, setDestinoCoords] = useState<google.maps.LatLngLiteral | null>(null);
   const [paradasCoords, setParadasCoords] = useState<(google.maps.LatLngLiteral | null)[]>([]);
-  const [directions, setDirections] = useState<google.maps.DirectionsResult | null>(null);
+  const [directions,    setDirections]    = useState<google.maps.DirectionsResult | null>(null);
 
-  const tieneParadas = paradas && paradas.length >= 2;
-  // Modo multi-chofer: cuando se pasa prop choferes con al menos 1 elemento
+  // ── Flags para saber si ya intentamos calcular ruta ──────────────────────
+  const rutaCalculadaRef = useRef(false);
+
   const modoMultiChofer = choferes && choferes.length > 0;
+  // tieneParadas = hay array con al menos 2 puntos (multietapa real)
+  const tieneParadas    = paradas && paradas.length >= 2;
 
   const contenedorEstilo = { width: "100%", height: altura, borderRadius: "1rem" };
 
-  // ─── Color de marcador de chofer según estado del viaje ──────────────────
+  // ─── fitBounds — ajusta zoom para mostrar todos los puntos ───────────────
+  const ajustarZoom = useCallback((puntos: google.maps.LatLngLiteral[]) => {
+    if (!mapRef.current || puntos.length === 0) return;
+    if (puntos.length === 1) {
+      mapRef.current.setCenter(puntos[0]);
+      mapRef.current.setZoom(14);
+      return;
+    }
+    const bounds = new google.maps.LatLngBounds();
+    puntos.forEach(p => bounds.extend(p));
+    mapRef.current.fitBounds(bounds, { top: 60, right: 40, bottom: 60, left: 40 });
+  }, []);
+
+  // ─── Color marcador chofer por estado ────────────────────────────────────
   const colorChoferPorEstado = (estado?: string): string => {
     switch (estado) {
-      case "En camino":           return "#facc15"; // amarillo
-      case "Carga retirada":      return "#3b82f6"; // azul
-      case "En ruta":             return "#a855f7"; // violeta
-      case "Descarga completada": return "#ef4444"; // rojo
-      case "Chofer asignado":     return "#22c55e"; // verde
-      default:                    return "#facc15"; // amarillo por defecto
+      case "En camino":           return "#facc15";
+      case "Carga retirada":      return "#3b82f6";
+      case "En ruta":             return "#a855f7";
+      case "Descarga completada": return "#ef4444";
+      case "Chofer asignado":     return "#22c55e";
+      default:                    return "#facc15";
     }
   };
 
-  // ─── Geocoding ────────────────────────────────────────────────────────────
+  // ─── Geocodificar una dirección ───────────────────────────────────────────
   const geocodificar = useCallback(
     (direccion: string, callback: (coords: google.maps.LatLngLiteral | null) => void) => {
       if (!geocoderRef.current) return;
       geocoderRef.current.geocode(
         { address: `${direccion}, Argentina` },
         (results, status) => {
-          if (status === "OK" && results && results[0]) {
+          if (status === "OK" && results?.[0]) {
             const loc = results[0].geometry.location;
             callback({ lat: loc.lat(), lng: loc.lng() });
           } else {
+            console.warn(`[MapaTILA] Geocoding falló para "${direccion}": ${status}`);
             callback(null);
           }
         }
@@ -116,66 +131,154 @@ export default function MapaTILA({
     []
   );
 
-  useEffect(() => {
-    if (!isLoaded || tieneParadas || modoMultiChofer) return;
-    geocoderRef.current = new google.maps.Geocoder();
-    if (origen) geocodificar(origen, setOrigenCoords);
-    if (destino) geocodificar(destino, setDestinoCoords);
-  }, [isLoaded, origen, destino, tieneParadas, modoMultiChofer, geocodificar]);
-
-  useEffect(() => {
-    if (!isLoaded || !tieneParadas || modoMultiChofer) return;
-    geocoderRef.current = new google.maps.Geocoder();
-    const coords: (google.maps.LatLngLiteral | null)[] = new Array(paradas!.length).fill(null);
-    let pendientes = paradas!.length;
-    paradas!.forEach((parada, index) => {
-      geocodificar(parada.direccion, (result) => {
-        coords[index] = result;
-        pendientes--;
-        if (pendientes === 0) setParadasCoords([...coords]);
-      });
-    });
-  }, [isLoaded, tieneParadas, modoMultiChofer, paradas, geocodificar]);
-
-  // ─── Directions API ───────────────────────────────────────────────────────
-  useEffect(() => {
-    if (!isLoaded || !paradaActivaDireccion || !lat || !lng) return;
-    if (soloLectura || tieneParadas || modoMultiChofer) return;
+  // ─── Calcular ruta con DirectionsService ─────────────────────────────────
+  const calcularRuta = useCallback((
+    origin: string | google.maps.LatLngLiteral,
+    destination: string,
+    waypoints: google.maps.DirectionsWaypoint[] = [],
+    onSuccess: (result: google.maps.DirectionsResult) => void
+  ) => {
     if (!directionsServiceRef.current) {
       directionsServiceRef.current = new google.maps.DirectionsService();
     }
     directionsServiceRef.current.route(
       {
-        origin: { lat, lng },
-        destination: `${paradaActivaDireccion}, Argentina`,
+        origin,
+        destination: typeof destination === "string" ? `${destination}, Argentina` : destination,
+        waypoints,
+        optimizeWaypoints: false,
         travelMode: google.maps.TravelMode.DRIVING,
       },
       (result, status) => {
-        if (status === "OK" && result) setDirections(result);
+        if (status === "OK" && result) {
+          onSuccess(result);
+        } else {
+          console.warn(`[MapaTILA] DirectionsService falló: ${status}`, { origin, destination, waypoints });
+        }
       }
     );
-  }, [isLoaded, paradaActivaDireccion, lat, lng, soloLectura, tieneParadas, modoMultiChofer]);
+  }, []);
 
+  // ─── Inicializar geocoder al cargar ───────────────────────────────────────
+  useEffect(() => {
+    if (!isLoaded || modoMultiChofer) return;
+    geocoderRef.current = new google.maps.Geocoder();
+  }, [isLoaded, modoMultiChofer]);
+
+  // ─── MODO MULTIETAPA: geocodificar paradas + ruta ─────────────────────────
   useEffect(() => {
     if (!isLoaded || !tieneParadas || modoMultiChofer) return;
-    if (!directionsServiceRef.current) {
-      directionsServiceRef.current = new google.maps.DirectionsService();
-    }
-    const origin = `${paradas![0].direccion}, Argentina`;
-    const destination = `${paradas![paradas!.length - 1].direccion}, Argentina`;
-    const waypoints = paradas!.slice(1, -1).map((p) => ({
-      location: `${p.direccion}, Argentina`,
-      stopover: true,
-    }));
-    directionsServiceRef.current.route(
-      { origin, destination, waypoints, optimizeWaypoints: false, travelMode: google.maps.TravelMode.DRIVING },
-      (result, status) => {
-        if (status === "OK" && result) setDirections(result);
-      }
-    );
+    if (!geocoderRef.current) geocoderRef.current = new google.maps.Geocoder();
+
+    rutaCalculadaRef.current = false;
+
+    const coords: (google.maps.LatLngLiteral | null)[] = new Array(paradas!.length).fill(null);
+    let pendientes = paradas!.length;
+
+    paradas!.forEach((parada, index) => {
+      geocodificar(parada.direccion, (result) => {
+        coords[index] = result;
+        pendientes--;
+        if (pendientes === 0) {
+          setParadasCoords([...coords]);
+
+          // Ajustar zoom con todos los puntos geocodificados
+          const validos = coords.filter(Boolean) as google.maps.LatLngLiteral[];
+          if (lat && lng) validos.push({ lat, lng });
+          ajustarZoom(validos);
+
+          // Calcular ruta multietapa
+          const origin      = `${paradas![0].direccion}, Argentina`;
+          const destination = paradas![paradas!.length - 1].direccion;
+          const waypoints   = paradas!.slice(1, -1).map(p => ({
+            location: `${p.direccion}, Argentina`,
+            stopover: true,
+          }));
+          calcularRuta(origin, destination, waypoints, (result) => {
+            setDirections(result);
+            rutaCalculadaRef.current = true;
+          });
+        }
+      });
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isLoaded, tieneParadas, modoMultiChofer, paradas]);
 
-  // ─── Marcador único del chofer (modo normal) ──────────────────────────────
+  // ─── MODO SIMPLE: origen → destino (con o sin lat/lng) ───────────────────
+  // Se activa cuando NO hay paradas multietapa y NO es modo multiChofer.
+  // Funciona tanto con lat/lng del chofer como sin él (solo strings).
+  useEffect(() => {
+    if (!isLoaded || tieneParadas || modoMultiChofer) return;
+    if (!origen || !destino) return;
+    if (!geocoderRef.current) geocoderRef.current = new google.maps.Geocoder();
+
+    rutaCalculadaRef.current = false;
+
+    // Si tenemos GPS del chofer → ruta desde posición actual a próxima parada
+    if (lat && lng && paradaActivaDireccion) {
+      calcularRuta(
+        { lat, lng },
+        paradaActivaDireccion,
+        [],
+        (result) => {
+          setDirections(result);
+          rutaCalculadaRef.current = true;
+          ajustarZoom([{ lat, lng }]);
+        }
+      );
+      return;
+    }
+
+    // Sin GPS (o sin paradaActiva) → geocodificar origen y destino, luego ruta
+    let origenResuelto:  google.maps.LatLngLiteral | null = lat && lng ? { lat, lng } : null;
+    let destinoResuelto: google.maps.LatLngLiteral | null = null;
+    let pendientes = 0;
+
+    const intentarRuta = () => {
+      if (pendientes > 0) return;
+      const puntos: google.maps.LatLngLiteral[] = [];
+      if (origenResuelto)  puntos.push(origenResuelto);
+      if (destinoResuelto) puntos.push(destinoResuelto);
+      ajustarZoom(puntos);
+
+      const originParam: string | google.maps.LatLngLiteral =
+        origenResuelto ?? `${origen}, Argentina`;
+
+      calcularRuta(
+        originParam,
+        destino,
+        [],
+        (result) => {
+          setDirections(result);
+          rutaCalculadaRef.current = true;
+        }
+      );
+    };
+
+    // Solo geocodificar origen si no tenemos GPS
+    if (!origenResuelto) {
+      pendientes++;
+      geocodificar(origen, (coords) => {
+        origenResuelto = coords;
+        if (coords) setOrigenCoords(coords);
+        pendientes--;
+        intentarRuta();
+      });
+    }
+
+    // Siempre geocodificar destino para marcador y fitBounds
+    pendientes++;
+    geocodificar(destino, (coords) => {
+      destinoResuelto = coords;
+      if (coords) setDestinoCoords(coords);
+      pendientes--;
+      intentarRuta();
+    });
+
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isLoaded, tieneParadas, modoMultiChofer, origen, destino, paradaActivaDireccion, lat, lng]);
+
+  // ─── Actualizar marcador del chofer cuando cambia GPS ────────────────────
   const actualizarMarcadorChofer = useCallback(
     (mapa: google.maps.Map) => {
       if (!lat || !lng || modoMultiChofer) return;
@@ -199,6 +302,18 @@ export default function MapaTILA({
     [lat, lng, modoMultiChofer]
   );
 
+  // Recalcular ruta cuando el chofer se mueve (viaje activo)
+  useEffect(() => {
+    if (!isLoaded || !lat || !lng || !paradaActivaDireccion || tieneParadas || modoMultiChofer) return;
+    calcularRuta(
+      { lat, lng },
+      paradaActivaDireccion,
+      [],
+      (result) => setDirections(result)
+    );
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lat, lng]);
+
   const onMapLoad = useCallback(
     (mapa: google.maps.Map) => {
       mapRef.current = mapa;
@@ -210,12 +325,25 @@ export default function MapaTILA({
   useEffect(() => {
     if (!mapRef.current || !lat || !lng || modoMultiChofer) return;
     actualizarMarcadorChofer(mapRef.current);
+    mapRef.current.panTo({ lat, lng });
   }, [lat, lng, actualizarMarcadorChofer, modoMultiChofer]);
 
-  useEffect(() => {
-    if (!mapRef.current || !lat || !lng || modoMultiChofer) return;
-    mapRef.current.panTo({ lat, lng });
-  }, [lat, lng, modoMultiChofer]);
+  // ─── fitBounds para admin multiChofer ────────────────────────────────────
+  const onMapLoadMulti = useCallback(
+    (mapa: google.maps.Map) => {
+      mapRef.current = mapa;
+      if (!choferes || choferes.length === 0) return;
+      if (choferes.length === 1) {
+        mapa.setCenter({ lat: choferes[0].lat, lng: choferes[0].lng });
+        mapa.setZoom(13);
+        return;
+      }
+      const bounds = new google.maps.LatLngBounds();
+      choferes.forEach(c => bounds.extend({ lat: c.lat, lng: c.lng }));
+      mapa.fitBounds(bounds, { top: 60, right: 40, bottom: 60, left: 40 });
+    },
+    [choferes]
+  );
 
   // ─── Color marcador parada ────────────────────────────────────────────────
   const colorPorEstado = (estado: string) => {
@@ -224,46 +352,41 @@ export default function MapaTILA({
     return "#6b7280";
   };
 
-  // ─── Centro del mapa en modo multi-chofer ────────────────────────────────
-  const centroMultiChofer = (): google.maps.LatLngLiteral => {
-    if (!choferes || choferes.length === 0) return centroArgentina;
-    const latProm = choferes.reduce((a, c) => a + c.lat, 0) / choferes.length;
-    const lngProm = choferes.reduce((a, c) => a + c.lng, 0) / choferes.length;
-    return { lat: latProm, lng: lngProm };
+  // ─── Centro inicial ───────────────────────────────────────────────────────
+  const centroInicial = (): google.maps.LatLngLiteral => {
+    if (modoMultiChofer && choferes!.length > 0) {
+      const latP = choferes!.reduce((a, c) => a + c.lat, 0) / choferes!.length;
+      const lngP = choferes!.reduce((a, c) => a + c.lng, 0) / choferes!.length;
+      return { lat: latP, lng: lngP };
+    }
+    if (lat && lng) return { lat, lng };
+    return centroArgentina;
+  };
+
+  const zoomInicial = () => {
+    if (modoMultiChofer) return choferes!.length === 1 ? 13 : 6;
+    if (lat && lng)      return 14;
+    return 10; // zoom intermedio mientras geocodifica
   };
 
   // ─── Fallbacks ────────────────────────────────────────────────────────────
-  if (loadError) {
-    return (
-      <div style={{ height: altura }} className="w-full bg-zinc-900 border border-zinc-700 rounded-2xl flex items-center justify-center">
-        <p className="text-zinc-500 text-sm">Error al cargar el mapa</p>
-      </div>
-    );
-  }
+  if (loadError) return (
+    <div style={{ height: altura }} className="w-full bg-zinc-900 border border-zinc-700 rounded-2xl flex items-center justify-center">
+      <p className="text-zinc-500 text-sm">Error al cargar el mapa</p>
+    </div>
+  );
 
-  if (!isLoaded) {
-    return (
-      <div style={{ height: altura }} className="w-full bg-zinc-900 border border-zinc-700 rounded-2xl flex items-center justify-center">
-        <p className="text-yellow-400 font-black animate-pulse">Cargando mapa...</p>
-      </div>
-    );
-  }
-
-  const centro = modoMultiChofer
-    ? centroMultiChofer()
-    : lat && lng
-      ? { lat, lng }
-      : centroArgentina;
-
-  const zoom = modoMultiChofer
-    ? (choferes!.length === 1 ? 13 : 6)
-    : lat && lng ? 14 : 6;
+  if (!isLoaded) return (
+    <div style={{ height: altura }} className="w-full bg-zinc-900 border border-zinc-700 rounded-2xl flex items-center justify-center">
+      <p className="text-yellow-400 font-black animate-pulse">Cargando mapa...</p>
+    </div>
+  );
 
   return (
     <GoogleMap
       mapContainerStyle={contenedorEstilo}
-      center={centro}
-      zoom={zoom}
+      center={centroInicial()}
+      zoom={zoomInicial()}
       options={{
         styles: estiloMapa,
         disableDefaultUI: true,
@@ -272,9 +395,9 @@ export default function MapaTILA({
         mapTypeControl: false,
         fullscreenControl: false,
       }}
-      onLoad={onMapLoad}
+      onLoad={modoMultiChofer ? onMapLoadMulti : onMapLoad}
     >
-      {/* ─── MODO MULTI-CHOFER (admin) ─────────────────────────────────── */}
+      {/* ── MODO MULTI-CHOFER (admin) ──────────────────────────────────── */}
       {modoMultiChofer && choferes!.map((chofer, index) => (
         <Marker
           key={`chofer-${index}`}
@@ -288,17 +411,12 @@ export default function MapaTILA({
             strokeColor: "#000000",
             strokeWeight: 2,
           }}
-          label={{
-            text: String(index + 1),
-            color: "#000000",
-            fontWeight: "bold",
-            fontSize: "11px",
-          }}
+          label={{ text: String(index + 1), color: "#000000", fontWeight: "bold", fontSize: "11px" }}
           zIndex={10}
         />
       ))}
 
-      {/* ─── MODO NORMAL — marcadores multietapa ──────────────────────── */}
+      {/* ── MODO NORMAL: marcadores multietapa ────────────────────────── */}
       {!modoMultiChofer && tieneParadas &&
         paradas!.map((parada, index) => {
           const coords = paradasCoords[index];
@@ -316,17 +434,12 @@ export default function MapaTILA({
                 strokeColor: "#ffffff",
                 strokeWeight: 2,
               }}
-              label={{
-                text: LABELS[index] || String(index),
-                color: "#ffffff",
-                fontWeight: "bold",
-                fontSize: "12px",
-              }}
+              label={{ text: LABELS[index] || String(index), color: "#ffffff", fontWeight: "bold", fontSize: "12px" }}
             />
           );
         })}
 
-      {/* Marcadores simples origen/destino */}
+      {/* ── MODO SIMPLE: marcadores origen/destino ────────────────────── */}
       {!modoMultiChofer && !tieneParadas && origenCoords && (
         <Marker
           position={origenCoords}
@@ -358,7 +471,7 @@ export default function MapaTILA({
         />
       )}
 
-      {/* Ruta */}
+      {/* ── Ruta (todos los modos excepto multiChofer) ────────────────── */}
       {!modoMultiChofer && directions && (
         <DirectionsRenderer
           directions={directions}
