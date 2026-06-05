@@ -116,11 +116,12 @@ export interface ConfigVehiculo {
     const minimoAplicado   = subtotalConCarga < vehiculo.minimo;
     const subtotal         = Math.round(Math.max(subtotalConCarga, vehiculo.minimo));
   
-    const comision      = porcentajeComisionTila / 100;
-    const precioCliente = Math.round(subtotal * (1 + comision));
-    const choferCobra   = subtotal;
-    const comisionTila  = precioCliente - choferCobra;
-  
+    const comisionCliente = 7.5 / 100;
+    const comisionChofer = 7.5 / 100;
+    const precioCliente = Math.round(subtotal * (1 + comisionCliente));
+    const choferCobra = Math.round(subtotal * (1 - comisionChofer));
+    const comisionTila = precioCliente - choferCobra;
+
     console.log("[tarifas v2]", {
       distanciaKm, tipoVehiculo, tipoCarga, horas,
       costoDistancia: Math.round(costoDistancia),
