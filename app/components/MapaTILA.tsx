@@ -24,14 +24,20 @@ const estiloMapa = [
 ];
 
 const centroArgentina = { lat: -34.6037, lng: -58.3816 };
-
-// Labels A, B, C, D, E, F para marcadores de paradas
 const LABELS = ["A", "B", "C", "D", "E", "F"];
 
 export interface ParadaMapa {
   direccion: string;
   tipo: "retiro" | "entrega" | "parada";
   estado: "pendiente" | "en_curso" | "completada";
+}
+
+// ─── Nueva interfaz para múltiples choferes en admin ─────────────────────────
+export interface ChoferEnMapa {
+  lat: number;
+  lng: number;
+  label?: string;   // nombre del chofer o ID viaje
+  estado?: string;  // estado del viaje para color del marcador
 }
 
 interface MapaTILAProps {
@@ -43,6 +49,8 @@ interface MapaTILAProps {
   soloLectura?: boolean;
   altura?: string;
   paradas?: ParadaMapa[];
+  // ─── Prop nueva opcional: múltiples choferes (solo admin) ────────────────
+  choferes?: ChoferEnMapa[];
 }
 
 export default function MapaTILA({
@@ -54,6 +62,7 @@ export default function MapaTILA({
   soloLectura = false,
   altura = "420px",
   paradas,
+  choferes,
 }: MapaTILAProps) {
   const { isLoaded, loadError } = useJsApiLoader({
     googleMapsApiKey: process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || "",
@@ -65,30 +74,32 @@ export default function MapaTILA({
   const geocoderRef = useRef<google.maps.Geocoder | null>(null);
   const directionsServiceRef = useRef<google.maps.DirectionsService | null>(null);
 
-  // Coords geocodificadas para paradas simples (sin array de paradas)
   const [origenCoords, setOrigenCoords] = useState<google.maps.LatLngLiteral | null>(null);
   const [destinoCoords, setDestinoCoords] = useState<google.maps.LatLngLiteral | null>(null);
-
-  // Coords geocodificadas para array de paradas multietapa
   const [paradasCoords, setParadasCoords] = useState<(google.maps.LatLngLiteral | null)[]>([]);
-
   const [directions, setDirections] = useState<google.maps.DirectionsResult | null>(null);
 
   const tieneParadas = paradas && paradas.length >= 2;
+  // Modo multi-chofer: cuando se pasa prop choferes con al menos 1 elemento
+  const modoMultiChofer = choferes && choferes.length > 0;
 
-  const contenedorEstilo = {
-    width: "100%",
-    height: altura,
-    borderRadius: "1rem",
+  const contenedorEstilo = { width: "100%", height: altura, borderRadius: "1rem" };
+
+  // ─── Color de marcador de chofer según estado del viaje ──────────────────
+  const colorChoferPorEstado = (estado?: string): string => {
+    switch (estado) {
+      case "En camino":           return "#facc15"; // amarillo
+      case "Carga retirada":      return "#3b82f6"; // azul
+      case "En ruta":             return "#a855f7"; // violeta
+      case "Descarga completada": return "#ef4444"; // rojo
+      case "Chofer asignado":     return "#22c55e"; // verde
+      default:                    return "#facc15"; // amarillo por defecto
+    }
   };
 
   // ─── Geocoding ────────────────────────────────────────────────────────────
-
   const geocodificar = useCallback(
-    (
-      direccion: string,
-      callback: (coords: google.maps.LatLngLiteral | null) => void
-    ) => {
+    (direccion: string, callback: (coords: google.maps.LatLngLiteral | null) => void) => {
       if (!geocoderRef.current) return;
       geocoderRef.current.geocode(
         { address: `${direccion}, Argentina` },
@@ -105,47 +116,34 @@ export default function MapaTILA({
     []
   );
 
-  // Geocodificar origen/destino simples (cuando no hay array de paradas)
   useEffect(() => {
-    if (!isLoaded || tieneParadas) return;
-
+    if (!isLoaded || tieneParadas || modoMultiChofer) return;
     geocoderRef.current = new google.maps.Geocoder();
-
     if (origen) geocodificar(origen, setOrigenCoords);
     if (destino) geocodificar(destino, setDestinoCoords);
-  }, [isLoaded, origen, destino, tieneParadas, geocodificar]);
+  }, [isLoaded, origen, destino, tieneParadas, modoMultiChofer, geocodificar]);
 
-  // Geocodificar array de paradas multietapa
   useEffect(() => {
-    if (!isLoaded || !tieneParadas) return;
-
+    if (!isLoaded || !tieneParadas || modoMultiChofer) return;
     geocoderRef.current = new google.maps.Geocoder();
-
     const coords: (google.maps.LatLngLiteral | null)[] = new Array(paradas!.length).fill(null);
     let pendientes = paradas!.length;
-
     paradas!.forEach((parada, index) => {
       geocodificar(parada.direccion, (result) => {
         coords[index] = result;
         pendientes--;
-        if (pendientes === 0) {
-          setParadasCoords([...coords]);
-        }
+        if (pendientes === 0) setParadasCoords([...coords]);
       });
     });
-  }, [isLoaded, tieneParadas, paradas, geocodificar]);
+  }, [isLoaded, tieneParadas, modoMultiChofer, paradas, geocodificar]);
 
   // ─── Directions API ───────────────────────────────────────────────────────
-
-  // Ruta simple A→B (sin paradas)
   useEffect(() => {
     if (!isLoaded || !paradaActivaDireccion || !lat || !lng) return;
-    if (soloLectura || tieneParadas) return;
-
+    if (soloLectura || tieneParadas || modoMultiChofer) return;
     if (!directionsServiceRef.current) {
       directionsServiceRef.current = new google.maps.DirectionsService();
     }
-
     directionsServiceRef.current.route(
       {
         origin: { lat, lng },
@@ -156,43 +154,31 @@ export default function MapaTILA({
         if (status === "OK" && result) setDirections(result);
       }
     );
-  }, [isLoaded, paradaActivaDireccion, lat, lng, soloLectura, tieneParadas]);
+  }, [isLoaded, paradaActivaDireccion, lat, lng, soloLectura, tieneParadas, modoMultiChofer]);
 
-  // Ruta multietapa A→B→C→D con waypoints — usa direcciones de texto directamente
   useEffect(() => {
-    if (!isLoaded || !tieneParadas) return;
-
+    if (!isLoaded || !tieneParadas || modoMultiChofer) return;
     if (!directionsServiceRef.current) {
       directionsServiceRef.current = new google.maps.DirectionsService();
     }
-
     const origin = `${paradas![0].direccion}, Argentina`;
     const destination = `${paradas![paradas!.length - 1].direccion}, Argentina`;
     const waypoints = paradas!.slice(1, -1).map((p) => ({
       location: `${p.direccion}, Argentina`,
       stopover: true,
     }));
-
     directionsServiceRef.current.route(
-      {
-        origin,
-        destination,
-        waypoints,
-        optimizeWaypoints: false,
-        travelMode: google.maps.TravelMode.DRIVING,
-      },
+      { origin, destination, waypoints, optimizeWaypoints: false, travelMode: google.maps.TravelMode.DRIVING },
       (result, status) => {
         if (status === "OK" && result) setDirections(result);
       }
     );
-  }, [isLoaded, tieneParadas, paradas]);
+  }, [isLoaded, tieneParadas, modoMultiChofer, paradas]);
 
-  // ─── Marcador del chofer ──────────────────────────────────────────────────
-
+  // ─── Marcador único del chofer (modo normal) ──────────────────────────────
   const actualizarMarcadorChofer = useCallback(
     (mapa: google.maps.Map) => {
-      if (!lat || !lng) return;
-
+      if (!lat || !lng || modoMultiChofer) return;
       if (!choferMarkerRef.current) {
         choferMarkerRef.current = new google.maps.Marker({
           map: mapa,
@@ -208,46 +194,48 @@ export default function MapaTILA({
           zIndex: 10,
         });
       }
-
       choferMarkerRef.current.setPosition({ lat, lng });
     },
-    [lat, lng]
+    [lat, lng, modoMultiChofer]
   );
 
   const onMapLoad = useCallback(
     (mapa: google.maps.Map) => {
       mapRef.current = mapa;
-      actualizarMarcadorChofer(mapa);
+      if (!modoMultiChofer) actualizarMarcadorChofer(mapa);
     },
-    [actualizarMarcadorChofer]
+    [actualizarMarcadorChofer, modoMultiChofer]
   );
 
   useEffect(() => {
-    if (!mapRef.current || !lat || !lng) return;
+    if (!mapRef.current || !lat || !lng || modoMultiChofer) return;
     actualizarMarcadorChofer(mapRef.current);
-  }, [lat, lng, actualizarMarcadorChofer]);
+  }, [lat, lng, actualizarMarcadorChofer, modoMultiChofer]);
 
   useEffect(() => {
-    if (!mapRef.current || !lat || !lng) return;
+    if (!mapRef.current || !lat || !lng || modoMultiChofer) return;
     mapRef.current.panTo({ lat, lng });
-  }, [lat, lng]);
+  }, [lat, lng, modoMultiChofer]);
 
-  // ─── Color de marcador según estado ──────────────────────────────────────
-
+  // ─── Color marcador parada ────────────────────────────────────────────────
   const colorPorEstado = (estado: string) => {
-    if (estado === "completada") return "#22c55e"; // verde
-    if (estado === "en_curso") return "#facc15";   // amarillo
-    return "#6b7280";                               // gris pendiente
+    if (estado === "completada") return "#22c55e";
+    if (estado === "en_curso")   return "#facc15";
+    return "#6b7280";
   };
 
-  // ─── Render ───────────────────────────────────────────────────────────────
+  // ─── Centro del mapa en modo multi-chofer ────────────────────────────────
+  const centroMultiChofer = (): google.maps.LatLngLiteral => {
+    if (!choferes || choferes.length === 0) return centroArgentina;
+    const latProm = choferes.reduce((a, c) => a + c.lat, 0) / choferes.length;
+    const lngProm = choferes.reduce((a, c) => a + c.lng, 0) / choferes.length;
+    return { lat: latProm, lng: lngProm };
+  };
 
+  // ─── Fallbacks ────────────────────────────────────────────────────────────
   if (loadError) {
     return (
-      <div
-        style={{ height: altura }}
-        className="w-full bg-zinc-900 border border-zinc-700 rounded-2xl flex items-center justify-center"
-      >
+      <div style={{ height: altura }} className="w-full bg-zinc-900 border border-zinc-700 rounded-2xl flex items-center justify-center">
         <p className="text-zinc-500 text-sm">Error al cargar el mapa</p>
       </div>
     );
@@ -255,38 +243,66 @@ export default function MapaTILA({
 
   if (!isLoaded) {
     return (
-      <div
-        style={{ height: altura }}
-        className="w-full bg-zinc-900 border border-zinc-700 rounded-2xl flex items-center justify-center"
-      >
+      <div style={{ height: altura }} className="w-full bg-zinc-900 border border-zinc-700 rounded-2xl flex items-center justify-center">
         <p className="text-yellow-400 font-black animate-pulse">Cargando mapa...</p>
       </div>
     );
   }
 
-  const centro = lat && lng ? { lat, lng } : centroArgentina;
+  const centro = modoMultiChofer
+    ? centroMultiChofer()
+    : lat && lng
+      ? { lat, lng }
+      : centroArgentina;
+
+  const zoom = modoMultiChofer
+    ? (choferes!.length === 1 ? 13 : 6)
+    : lat && lng ? 14 : 6;
 
   return (
     <GoogleMap
       mapContainerStyle={contenedorEstilo}
       center={centro}
-      zoom={lat && lng ? 14 : 6}
+      zoom={zoom}
       options={{
         styles: estiloMapa,
         disableDefaultUI: true,
-        zoomControl: false,
+        zoomControl: true,
         streetViewControl: false,
         mapTypeControl: false,
         fullscreenControl: false,
       }}
       onLoad={onMapLoad}
     >
-      {/* Marcadores multietapa A, B, C, D */}
-      {tieneParadas &&
+      {/* ─── MODO MULTI-CHOFER (admin) ─────────────────────────────────── */}
+      {modoMultiChofer && choferes!.map((chofer, index) => (
+        <Marker
+          key={`chofer-${index}`}
+          position={{ lat: chofer.lat, lng: chofer.lng }}
+          title={chofer.label ? `${chofer.label}${chofer.estado ? ` — ${chofer.estado}` : ""}` : `Chofer ${index + 1}`}
+          icon={{
+            path: google.maps.SymbolPath.FORWARD_CLOSED_ARROW,
+            scale: 8,
+            fillColor: colorChoferPorEstado(chofer.estado),
+            fillOpacity: 1,
+            strokeColor: "#000000",
+            strokeWeight: 2,
+          }}
+          label={{
+            text: String(index + 1),
+            color: "#000000",
+            fontWeight: "bold",
+            fontSize: "11px",
+          }}
+          zIndex={10}
+        />
+      ))}
+
+      {/* ─── MODO NORMAL — marcadores multietapa ──────────────────────── */}
+      {!modoMultiChofer && tieneParadas &&
         paradas!.map((parada, index) => {
           const coords = paradasCoords[index];
           if (!coords) return null;
-
           return (
             <Marker
               key={index}
@@ -310,8 +326,8 @@ export default function MapaTILA({
           );
         })}
 
-      {/* Marcadores simples origen/destino (cuando no hay array de paradas) */}
-      {!tieneParadas && origenCoords && (
+      {/* Marcadores simples origen/destino */}
+      {!modoMultiChofer && !tieneParadas && origenCoords && (
         <Marker
           position={origenCoords}
           title={`Retiro: ${origen}`}
@@ -326,8 +342,7 @@ export default function MapaTILA({
           label={{ text: "A", color: "#ffffff", fontWeight: "bold", fontSize: "12px" }}
         />
       )}
-
-      {!tieneParadas && destinoCoords && (
+      {!modoMultiChofer && !tieneParadas && destinoCoords && (
         <Marker
           position={destinoCoords}
           title={`Entrega: ${destino}`}
@@ -344,7 +359,7 @@ export default function MapaTILA({
       )}
 
       {/* Ruta */}
-      {directions && (
+      {!modoMultiChofer && directions && (
         <DirectionsRenderer
           directions={directions}
           options={{
