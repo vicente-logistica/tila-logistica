@@ -418,7 +418,7 @@ export default function MapaTILA({
   );
 
   return (
-    <div>
+    <div style={{ width: "100%" }}>
       <GoogleMap
         mapContainerStyle={contenedorEstilo}
         center={centroInicial()}
@@ -496,6 +496,7 @@ export default function MapaTILA({
         {/* Ruta Directions (principal) */}
         {!modoMultiChofer && directions && (
           <DirectionsRenderer
+            key={`dir-${directions.request?.origin?.toString()}`}
             directions={directions}
             options={{
               suppressMarkers: true,
@@ -523,7 +524,8 @@ export default function MapaTILA({
         <div className="mt-2 bg-zinc-900 border border-zinc-700 rounded-xl p-3 text-xs font-mono space-y-1">
           <p className="text-zinc-400 font-black mb-1">🔍 DIAGNÓSTICO MAPA</p>
           <p><span className="text-zinc-500">modo:</span> <span className="text-yellow-400">{diagnostico.modoActivo}</span></p>
-          <p><span className="text-zinc-500">directions:</span> <span className={diagnostico.directionsStatus === "OK" ? "text-green-400" : "text-red-400"}>{diagnostico.directionsStatus}</span></p>
+          <p><span className="text-zinc-500">directions status:</span> <span className={diagnostico.directionsStatus === "OK" ? "text-green-400" : "text-red-400"}>{diagnostico.directionsStatus}</span></p>
+          <p><span className="text-zinc-500">directions state:</span> <span className={directions ? "text-green-400" : "text-red-400"}>{directions ? `OK (${directions.routes?.length ?? 0} rutas)` : "null"}</span></p>
           <p><span className="text-zinc-500">polyline fallback:</span> <span className={diagnostico.polylineFallback ? "text-yellow-400" : "text-zinc-500"}>{diagnostico.polylineFallback ? `sí (${diagnostico.puntosPolyline} pts)` : "no"}</span></p>
           <p><span className="text-zinc-500">geocoding origen:</span> <span className={diagnostico.geocodingOrigen === "OK" || diagnostico.geocodingOrigen === "GPS" ? "text-green-400" : "text-red-400"}>{diagnostico.geocodingOrigen}</span></p>
           <p><span className="text-zinc-500">geocoding destino:</span> <span className={diagnostico.geocodingDestino === "OK" ? "text-green-400" : "text-red-400"}>{diagnostico.geocodingDestino}</span></p>
