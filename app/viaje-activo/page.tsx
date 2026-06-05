@@ -356,6 +356,7 @@ export default function ViajeActivoPage() {
             paradaActivaDireccion={paradaActiva?.direccion}
             paradas={paradasParaMapa.length > 0 ? paradasParaMapa : undefined}
             altura="420px"
+            mostrarDiagnostico={true}
           />
         </div>
 
