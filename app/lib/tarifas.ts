@@ -21,13 +21,13 @@ export interface ConfigVehiculo {
   }
   
   export const VEHICULOS: Record<string, ConfigVehiculo> = {
-    tractor_semi_playo:   { valorKm: 2550, valorHora: 50000, minimo: 300000 },
-    camion_grande_semi:   { valorKm: 2550, valorHora: 50000, minimo: 300000 },
+    tractor_semi_playo:   { valorKm: 2550, valorHora: 50000, minimo: 500000 },
+    camion_grande_semi:   { valorKm: 2550, valorHora: 50000, minimo: 500000 },
     camion_mediano:       { valorKm: 1800, valorHora: 30000, minimo: 150000 },
     utilitario:           { valorKm: 900,  valorHora: 15000, minimo: 50000  },
     // Aliases — nombres exactos usados en Supabase campo tipo_vehiculo
-    "Camión tractor":     { valorKm: 2550, valorHora: 50000, minimo: 300000 },
-    "Bitrén":             { valorKm: 2550, valorHora: 50000, minimo: 300000 },
+    "Camión tractor":     { valorKm: 2550, valorHora: 50000, minimo: 500000 },
+    "Bitrén":             { valorKm: 2550, valorHora: 50000, minimo: 700000 },
     "Camión rígido":      { valorKm: 1800, valorHora: 30000, minimo: 150000 },
     "Furgón":             { valorKm: 900,  valorHora: 15000, minimo: 50000  },
     "Pick-up":            { valorKm: 900,  valorHora: 15000, minimo: 50000  },
