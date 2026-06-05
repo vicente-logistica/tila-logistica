@@ -23,16 +23,24 @@ export interface ConfigVehiculo {
   export const VEHICULOS: Record<string, ConfigVehiculo> = {
     tractor_semi_playo:   { valorKm: 2550, valorHora: 50000, minimo: 500000 },
     camion_grande_semi:   { valorKm: 2550, valorHora: 50000, minimo: 500000 },
-    camion_mediano:       { valorKm: 1800, valorHora: 30000, minimo: 150000 },
-    utilitario:           { valorKm: 900,  valorHora: 15000, minimo: 50000  },
-    // Aliases — nombres exactos usados en Supabase campo tipo_vehiculo
+  
+    camion_mediano:       { valorKm: 2200, valorHora: 45000, minimo: 180000 },
+  
+    utilitario:           { valorKm: 1800, valorHora: 27000, minimo: 31050 },
+  
+    // Aliases
     "Camión tractor":     { valorKm: 2550, valorHora: 50000, minimo: 500000 },
     "Bitrén":             { valorKm: 2550, valorHora: 50000, minimo: 700000 },
-    "Camión rígido":      { valorKm: 1800, valorHora: 30000, minimo: 150000 },
-    "Furgón":             { valorKm: 900,  valorHora: 15000, minimo: 50000  },
-    "Pick-up":            { valorKm: 900,  valorHora: 15000, minimo: 50000  },
-    "Utilitario":         { valorKm: 900,  valorHora: 15000, minimo: 50000  },
-    "Moto":               { valorKm: 400,  valorHora: 8000,  minimo: 15000  },
+  
+    "Camión rígido":      { valorKm: 2200, valorHora: 45000, minimo: 180000 },
+  
+    "Furgón":             { valorKm: 2000, valorHora: 36000, minimo: 41400 },
+  
+    "Pick-up":            { valorKm: 1900, valorHora: 30000, minimo: 34500 },
+  
+    "Utilitario":         { valorKm: 1800, valorHora: 27000, minimo: 31050 },
+  
+    "Moto":               { valorKm: 700,  valorHora: 10000, minimo: 15000 },
   };
   
   // ─── Factores por tipo de carga ───────────────────────────────────────────────
