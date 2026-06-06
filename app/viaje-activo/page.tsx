@@ -97,6 +97,7 @@ export default function ViajeActivoPage() {
   const [mostrarChat, setMostrarChat]           = useState(false);
   const [mostrarDetalles, setMostrarDetalles]   = useState(false);
   const [mostrarNavegadores, setMostrarNavegadores] = useState(false);
+  const [mostrarSoporte, setMostrarSoporte]         = useState(false);
   const [navegadorPreferido, setNavegadorPreferido] = useState<string | null>(null);
 
   const viajeTerminado = useRef(false);
@@ -312,12 +313,29 @@ export default function ViajeActivoPage() {
     }
     const now = new Date().toISOString();
     const upd: any = { estado: nuevoEstado };
-    if (nuevoEstado === "En camino")       upd.hora_inicio      = now;
-    if (nuevoEstado === "Chofer asignado") upd.hora_aceptacion  = now;
-    if (nuevoEstado === "Viaje finalizado") { upd.tracking = false; upd.hora_finalizacion = now; viajeTerminado.current = true; }
+    if (nuevoEstado === "En camino")       upd.hora_inicio     = now;
+    if (nuevoEstado === "Chofer asignado") upd.hora_aceptacion = now;
+    if (nuevoEstado === "Viaje finalizado") {
+      upd.tracking = false; upd.hora_finalizacion = now; viajeTerminado.current = true;
+    }
     const { data, error } = await supabase.from("cargas").update(upd).eq("id", viaje.id).select().single();
     if (error) { alert("Error al actualizar estado"); viajeTerminado.current = false; return; }
     setViaje(data);
+
+    // ── Navegación automática según nueva etapa ───────────────────────────
+    // "En camino": chofer va al retiro
+    if (nuevoEstado === "En camino") {
+      const destRetiro = paradas.find(p => p.tipo === "retiro")?.direccion ?? viaje.origen;
+      handleNavegar(destRetiro);
+    }
+    // "En ruta": chofer va al destino (después de retirar carga)
+    if (nuevoEstado === "En ruta") {
+      const destEntrega = paradas.length > 0
+        ? (paradas.find((p, i) => i >= paradaActivaIndex && p.tipo !== "retiro")?.direccion ?? viaje.destino)
+        : viaje.destino;
+      handleNavegar(destEntrega);
+    }
+
     if (nuevoEstado === "Viaje finalizado") {
       await acreditarBilletera(data);
       localStorage.removeItem("viajeActivoId");
@@ -332,42 +350,37 @@ export default function ViajeActivoPage() {
     { id: "waze",        label: "Waze",        emoji: "📡" },
   ];
 
-  const buildNavUrl = (navId: string, dest: string, lat?: number | null, lng?: number | null): string => {
-    const origin  = lat && lng ? `${lat},${lng}` : "";
+  // buildNavUrl — sin origin/ll: el dispositivo usa su propio GPS
+  // Google Maps y Waze capturan la ubicación del dispositivo automáticamente
+  const buildNavUrl = (navId: string, dest: string): string => {
     const destEnc = encodeURIComponent(dest + ", Argentina");
-    const latS    = lat ? String(lat) : "";
-    const lngS    = lng ? String(lng) : "";
     if (navId === "waze") {
-      // Waze: si tenemos GPS del chofer usamos navigate desde posición actual
-      return lat && lng
-        ? `https://waze.com/ul?ll=${latS}%2C${lngS}&navigate=yes&q=${destEnc}`
-        : `https://waze.com/ul?q=${destEnc}&navigate=yes`;
+      return `https://waze.com/ul?q=${destEnc}&navigate=yes`;
     }
-    // Google Maps (default para cualquier otro valor incluyendo sygic/tomtom heredados)
-    return origin
-      ? `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(origin)}&destination=${destEnc}&travelmode=driving`
-      : `https://www.google.com/maps/dir/?api=1&destination=${destEnc}&travelmode=driving`;
+    // Google Maps — travelmode=driving, sin origin
+    return `https://www.google.com/maps/dir/?api=1&destination=${destEnc}&travelmode=driving`;
   };
 
-  const abrirNavegador = (navId: string) => {
+  const abrirNavegador = (navId: string, destOverride?: string) => {
     if (!viaje) return;
-    const dest = destinoRuta ?? viaje.destino;
-    const url  = buildNavUrl(navId, dest, viaje.lat, viaje.lng);
+    const dest = destOverride ?? destinoRuta ?? viaje.destino;
+    const url  = buildNavUrl(navId, dest);
     window.open(url, `_nav_${Date.now()}`);
     setMostrarNavegadores(false);
   };
 
-  const handleNavegar = () => {
+  // Abre el navegador preferido o muestra selector
+  // destOverride: forzar un destino específico (ej: al cambiar etapa)
+  const handleNavegar = (destOverride?: string) => {
     if (!viaje) return;
     if (viaje.estado === "Descarga completada" || viaje.estado === "Viaje finalizado") return;
-    // Tratar sygic/tomtom heredados como no configurado
     const nav = navegadorPreferido;
     const navValido = nav && nav !== "preguntar_siempre" && nav !== "sygic_truck" && nav !== "tomtom_truck"
       ? nav : null;
     if (!navValido) {
       setMostrarNavegadores(true);
     } else {
-      abrirNavegador(navValido);
+      abrirNavegador(navValido, destOverride);
     }
   };
 
@@ -503,7 +516,7 @@ export default function ViajeActivoPage() {
           <div className="flex gap-2">
             <button
               type="button"
-              onClick={() => setMostrarChat(v => !v)}
+              onClick={() => { setMostrarChat(v => !v); setMostrarSoporte(false); }}
               className={`flex-1 py-2 rounded-xl text-xs font-black transition ${mostrarChat ? "bg-blue-600 text-white" : "bg-zinc-800 text-zinc-300 hover:bg-zinc-700"}`}
             >
               💬 Chat
@@ -517,11 +530,10 @@ export default function ViajeActivoPage() {
             </button>
             <button
               type="button"
-              onClick={handleNavegar}
-              disabled={viaje.estado === "Descarga completada" || viaje.estado === "Viaje finalizado"}
-              className="flex-1 py-2 rounded-xl text-xs font-black bg-zinc-800 text-zinc-300 hover:bg-zinc-700 transition disabled:opacity-40"
+              onClick={() => { setMostrarSoporte(v => !v); setMostrarChat(false); }}
+              className={`flex-1 py-2 rounded-xl text-xs font-black transition ${mostrarSoporte ? "bg-orange-600 text-white" : "bg-zinc-800 text-zinc-300 hover:bg-zinc-700"}`}
             >
-              🧭 Navegar
+              🛟 Soporte
             </button>
           </div>
         </div>
@@ -601,6 +613,25 @@ export default function ViajeActivoPage() {
         </div>
       )}
 
+      {/* ─── PANEL SOPORTE TILA — chofer ↔ admin ──────────────────────── */}
+      {mostrarSoporte && viaje?.id && usuarioRef.current?.id && (
+        <div className="absolute bottom-0 left-0 right-0 z-30 max-h-[60vh] overflow-y-auto bg-zinc-900 border-t border-orange-600 rounded-t-3xl">
+          <div className="flex items-center justify-between px-4 pt-3 pb-2 border-b border-zinc-800">
+            <div>
+              <p className="text-orange-400 font-black text-sm">🛟 Soporte TILA</p>
+              <p className="text-zinc-500 text-xs">Problemas operativos · Incidentes · Soporte técnico</p>
+            </div>
+            <button type="button" onClick={() => setMostrarSoporte(false)} className="text-zinc-400 font-black text-sm px-2">✕</button>
+          </div>
+          <ChatAsistencia
+            viajeId={viaje.id}
+            usuarioId={usuarioRef.current.id}
+            usuarioRol="chofer"
+            usuarioNombre={usuarioRef.current.nombre || "Chofer"}
+          />
+        </div>
+      )}
+
       {/* ─── MODAL SELECCIÓN NAVEGADOR ────────────────────────────────── */}
       {mostrarNavegadores && (
         <div className="absolute inset-0 z-50 bg-black/80 flex items-end p-4">
@@ -610,9 +641,9 @@ export default function ViajeActivoPage() {
               <button type="button" onClick={() => setMostrarNavegadores(false)}
                 className="text-zinc-400 font-black text-sm px-2">✕</button>
             </div>
-            {/* Aviso legal */}
-            <div className="bg-zinc-800 rounded-xl px-3 py-2 text-xs text-zinc-400 border border-zinc-700">
-              ⚠️ La navegación es responsabilidad del conductor. Utilizá tu navegador profesional preferido.
+            {/* Aviso legal oficial */}
+            <div className="bg-zinc-800 rounded-xl px-3 py-2 text-xs text-zinc-400 border border-yellow-700/40">
+              ⚠️ TILA no se responsabiliza por el navegador utilizado por el conductor. La elección de ruta, restricciones viales, multas, accesos y decisiones de conducción son responsabilidad exclusiva del conductor.
             </div>
             {/* Destino actual */}
             {(destinoRuta ?? viaje?.destino) && (
