@@ -32,6 +32,11 @@ export default function PanelChoferPage() {
 
   const [audioDesbloqueado, setAudioDesbloqueado] = useState(false);
 
+  // ─── Configuración de navegación ─────────────────────────────────────────
+  const [mostrarConfigNav, setMostrarConfigNav] = useState(false);
+  const [navegadorPreferido, setNavegadorPreferido] = useState<string | null>(null);
+  const [guardandoNav, setGuardandoNav] = useState(false);
+
   // ─── Refs estables — no causan re-renders ─────────────────────────────────
   const audioRef          = useRef<HTMLAudioElement | null>(null);
   const onlineRef         = useRef(false);
@@ -109,8 +114,17 @@ export default function PanelChoferPage() {
         const u = localStorage.getItem("usuario");
         if (!u) return;
         const usuario = JSON.parse(u);
-        const { data, error } = await supabase.from("usuarios").select("online").eq("id", usuario.id).single();
-        if (!error && data) setOnline(data.online ?? false);
+        const { data, error } = await supabase
+          .from("usuarios")
+          .select("online, navegador_preferido")
+          .eq("id", usuario.id).single();
+        if (!error && data) {
+          setOnline(data.online ?? false);
+          // Tratar sygic/tomtom heredados como null (no soportados en MVP)
+          const nav = data.navegador_preferido;
+          const navValido = nav && nav !== "sygic_truck" && nav !== "tomtom_truck" ? nav : null;
+          setNavegadorPreferido(navValido);
+        }
       } finally {
         setOnlineCargado(true);
       }
@@ -159,7 +173,9 @@ export default function PanelChoferPage() {
       const nuevos = cargasFiltradas.filter(c => !viajesSonadosRef.current.has(String(c.id)));
       if (nuevos.length > 0) {
         nuevos.forEach(c => viajesSonadosRef.current.add(String(c.id)));
-        reproducirAlarma();
+        // Solo sonar desde cargarCargas si NO vino del canal realtime (polling)
+        // El canal realtime ya disparó la alarma de inmediato
+        if (!sonandoRef.current) reproducirAlarma();
       }
     }
 
@@ -193,10 +209,12 @@ export default function PanelChoferPage() {
   useEffect(() => {
     cargarCargasRef.current();
 
-    // Canal realtime — INSERT dispara alarma inmediata
+    // Canal realtime — INSERT dispara alarma INMEDIATA antes de cargar datos
     canalRef.current = supabase
       .channel("panel-chofer-realtime")
       .on("postgres_changes", { event: "INSERT", schema: "public", table: "cargas" }, () => {
+        // Disparar alarma de inmediato — sin esperar cargarCargas
+        if (onlineRef.current) reproducirAlarma();
         cargarCargasRef.current();
       })
       .on("postgres_changes", { event: "UPDATE", schema: "public", table: "cargas" }, () => {
@@ -265,6 +283,28 @@ export default function PanelChoferPage() {
     if (error) { alert("Este viaje ya fue tomado por otro chofer"); cargarCargasRef.current(); return; }
     localStorage.setItem("viajeActivoId", String(data.id));
     window.location.href = "/viaje-activo";
+  };
+
+  const NAVEGADORES_CONFIG = [
+    { id: "google_maps",       label: "Google Maps",     emoji: "🗺️", desc: "Navegador estándar, amplia cobertura" },
+    { id: "waze",              label: "Waze",             emoji: "📡", desc: "Tráfico en tiempo real, comunidad activa" },
+    { id: "preguntar_siempre", label: "Preguntar siempre", emoji: "❓", desc: "Elegir en cada viaje" },
+  ];
+
+  const guardarNavegador = async (navId: string) => {
+    setGuardandoNav(true);
+    try {
+      const u = localStorage.getItem("usuario");
+      if (!u) return;
+      const usuario = JSON.parse(u);
+      const { error } = await supabase
+        .from("usuarios")
+        .update({ navegador_preferido: navId })
+        .eq("id", usuario.id);
+      if (!error) setNavegadorPreferido(navId);
+    } finally {
+      setGuardandoNav(false);
+    }
   };
 
   const retomar = () => {
@@ -375,6 +415,48 @@ export default function PanelChoferPage() {
                 className="w-full max-w-md bg-zinc-800 border-2 border-yellow-400 hover:bg-zinc-700 text-yellow-400 font-black text-xl py-5 rounded-3xl">
                 💼 MI BILLETERA
               </button>
+              {/* ─── Configuración de navegación ─────────────────────── */}
+              <div className="w-full max-w-md mt-4">
+                <button type="button" onClick={() => setMostrarConfigNav(v => !v)}
+                  className="w-full flex items-center justify-between bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 px-4 py-3 rounded-2xl text-sm font-black text-zinc-300 transition">
+                  <span>⚙️ Configuración de navegación</span>
+                  <span>{mostrarConfigNav ? "▲" : "▼"}</span>
+                </button>
+                {mostrarConfigNav && (
+                  <div className="bg-zinc-900 border border-zinc-700 rounded-2xl p-4 mt-2 space-y-3">
+                    <p className="text-zinc-400 text-xs font-black">NAVEGADOR PREFERIDO</p>
+                    <div className="bg-zinc-800 rounded-xl px-3 py-2 text-xs text-zinc-400 border border-zinc-700">
+                      ⚠️ La navegación es responsabilidad del conductor. Utilizá tu navegador profesional preferido.
+                      TILA mantiene el tracking interno independientemente del navegador elegido.
+                    </div>
+                    <div className="space-y-2">
+                      {NAVEGADORES_CONFIG.map(nav => (
+                        <button key={nav.id} type="button"
+                          onClick={() => guardarNavegador(nav.id)}
+                          disabled={guardandoNav}
+                          className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-black transition border ${
+                            navegadorPreferido === nav.id
+                              ? "bg-yellow-400 text-black border-yellow-400"
+                              : "bg-zinc-800 text-zinc-300 border-zinc-700 hover:bg-zinc-700"
+                          }`}>
+                          <span className="text-xl flex-shrink-0">{nav.emoji}</span>
+                          <div className="text-left">
+                            <p className="leading-tight">{nav.label}</p>
+                            <p className={`text-xs font-normal ${navegadorPreferido === nav.id ? "text-black/70" : "text-zinc-500"}`}>{nav.desc}</p>
+                          </div>
+                          {navegadorPreferido === nav.id && <span className="ml-auto text-black">✓</span>}
+                        </button>
+                      ))}
+                    </div>
+                    {navegadorPreferido && navegadorPreferido !== "preguntar_siempre" && (
+                      <p className="text-green-400 text-xs text-center font-black">
+                        ✓ Se abrirá {NAVEGADORES_CONFIG.find(n => n.id === navegadorPreferido)?.label} al navegar
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+
               <BloquesSoporte />
               <div className="mt-5 flex justify-center"><BotonCerrarSesion /></div>
             </section>
