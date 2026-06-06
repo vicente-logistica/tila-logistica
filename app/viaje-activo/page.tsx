@@ -328,33 +328,25 @@ export default function ViajeActivoPage() {
 
   // ─── Navegación externa ──────────────────────────────────────────────────
   const NAVEGADORES = [
-    { id: "google_maps",  label: "Google Maps",   emoji: "🗺️" },
-    { id: "waze",         label: "Waze",           emoji: "📡" },
-    { id: "sygic_truck",  label: "Sygic Truck GPS",emoji: "🚛" },
-    { id: "tomtom_truck", label: "TomTom Truck",   emoji: "🧭" },
+    { id: "google_maps", label: "Google Maps", emoji: "🗺️" },
+    { id: "waze",        label: "Waze",        emoji: "📡" },
   ];
 
   const buildNavUrl = (navId: string, dest: string, lat?: number | null, lng?: number | null): string => {
-    const origin = lat && lng ? `${lat},${lng}` : "";
+    const origin  = lat && lng ? `${lat},${lng}` : "";
     const destEnc = encodeURIComponent(dest + ", Argentina");
-    const latS = lat ? String(lat) : "";
-    const lngS = lng ? String(lng) : "";
-    switch (navId) {
-      case "google_maps":
-        return origin
-          ? `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(origin)}&destination=${destEnc}&travelmode=driving`
-          : `https://www.google.com/maps/dir/?api=1&destination=${destEnc}&travelmode=driving`;
-      case "waze":
-        return `https://waze.com/ul?ll=${latS},${lngS}&navigate=yes&q=${destEnc}`;
-      case "sygic_truck":
-        return `com.sygic.truck://coordinate|${lngS}|${latS}|${dest}`;
-      case "tomtom_truck":
-        return `https://www.google.com/maps/dir/?api=1&destination=${destEnc}&travelmode=driving`;
-      default:
-        return origin
-          ? `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(origin)}&destination=${destEnc}&travelmode=driving`
-          : `https://www.google.com/maps/dir/?api=1&destination=${destEnc}&travelmode=driving`;
+    const latS    = lat ? String(lat) : "";
+    const lngS    = lng ? String(lng) : "";
+    if (navId === "waze") {
+      // Waze: si tenemos GPS del chofer usamos navigate desde posición actual
+      return lat && lng
+        ? `https://waze.com/ul?ll=${latS}%2C${lngS}&navigate=yes&q=${destEnc}`
+        : `https://waze.com/ul?q=${destEnc}&navigate=yes`;
     }
+    // Google Maps (default para cualquier otro valor incluyendo sygic/tomtom heredados)
+    return origin
+      ? `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(origin)}&destination=${destEnc}&travelmode=driving`
+      : `https://www.google.com/maps/dir/?api=1&destination=${destEnc}&travelmode=driving`;
   };
 
   const abrirNavegador = (navId: string) => {
@@ -367,13 +359,15 @@ export default function ViajeActivoPage() {
 
   const handleNavegar = () => {
     if (!viaje) return;
-    // Descarga completada: no abrir navegación
     if (viaje.estado === "Descarga completada" || viaje.estado === "Viaje finalizado") return;
+    // Tratar sygic/tomtom heredados como no configurado
     const nav = navegadorPreferido;
-    if (!nav || nav === "preguntar_siempre") {
+    const navValido = nav && nav !== "preguntar_siempre" && nav !== "sygic_truck" && nav !== "tomtom_truck"
+      ? nav : null;
+    if (!navValido) {
       setMostrarNavegadores(true);
     } else {
-      abrirNavegador(nav);
+      abrirNavegador(navValido);
     }
   };
 
@@ -628,13 +622,15 @@ export default function ViajeActivoPage() {
             <div className="grid grid-cols-2 gap-3">
               {NAVEGADORES.map(nav => (
                 <button key={nav.id} type="button" onClick={() => abrirNavegador(nav.id)}
-                  className="flex items-center gap-2 bg-zinc-800 hover:bg-zinc-700 border border-zinc-600 rounded-2xl px-4 py-3 font-black text-sm text-white transition">
-                  <span className="text-xl">{nav.emoji}</span>
+                  className="flex items-center gap-3 bg-zinc-800 hover:bg-zinc-700 border border-zinc-600 rounded-2xl px-4 py-4 font-black text-sm text-white transition">
+                  <span className="text-2xl">{nav.emoji}</span>
                   <span className="text-left leading-tight">{nav.label}</span>
                 </button>
               ))}
             </div>
-            <p className="text-zinc-600 text-xs text-center">TILA mantiene el tracking interno independientemente del navegador elegido.</p>
+            <p className="text-zinc-600 text-xs text-center">
+              TILA mantiene el tracking interno. La navegación es responsabilidad del conductor.
+            </p>
           </div>
         </div>
       )}
