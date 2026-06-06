@@ -331,6 +331,7 @@ export default function ViajeActivoPage() {
           paradaActivaDireccion={destinoRuta}
           paradas={paradasParaMapa.length > 0 ? paradasParaMapa : undefined}
           altura="100dvh"
+          modoNavegacion={true}
         />
       </div>
 
