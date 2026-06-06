@@ -8,9 +8,9 @@ import MapaTILA, { ParadaMapa } from "../components/MapaTILA";
 import ChatAsistencia from "../components/ChatAsistencia";
 
 const ESTADOS_ORDEN = [
-  { nombre: "En camino",           color: "bg-yellow-400 text-black",  label: "EN CAMINO" },
+  { nombre: "En camino",           color: "bg-yellow-400 text-black",  label: "INICIAR VIAJE" },
   { nombre: "Carga retirada",      color: "bg-blue-600 text-white",    label: "CARGA RETIRADA" },
-  { nombre: "En ruta",             color: "bg-purple-600 text-white",  label: "EN RUTA" },
+  { nombre: "En ruta",             color: "bg-purple-600 text-white",  label: "INICIAR TRAMO A DESTINO" },
   { nombre: "Descarga completada", color: "bg-red-600 text-white",     label: "DESCARGA COMPLETADA" },
   { nombre: "Viaje finalizado",    color: "bg-green-600 text-white",   label: "FINALIZAR VIAJE" },
 ];
