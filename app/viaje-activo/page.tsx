@@ -23,6 +23,48 @@ const getTipoParadaLabel = (tipo: string) => {
   return "📍 Parada";
 };
 
+
+// ─── Instrucción operativa por estado ────────────────────────────────────────
+interface InstruccionViaje {
+  emoji: string;
+  titulo: string;
+  subtitulo: string;
+  colorBorde: string;
+}
+
+function getInstruccion(
+  estado: string,
+  paradaActiva: { tipo: string; direccion: string } | null,
+  paradas: any[],
+  paradaActivaIndex: number
+): InstruccionViaje {
+  const labelParada =
+    paradas.length > 0 && paradaActivaIndex < paradas.length
+      ? paradas[paradaActivaIndex]?.tipo === "retiro"
+        ? "retiro"
+        : paradas[paradaActivaIndex]?.tipo === "entrega"
+        ? "entrega"
+        : `parada ${String.fromCharCode(65 + paradaActivaIndex)}`
+      : null;
+
+  switch (estado) {
+    case "Chofer asignado":
+      return { emoji: "🚛", titulo: "Iniciá el viaje", subtitulo: "Dirigite al punto de retiro", colorBorde: "border-green-500" };
+    case "En camino":
+      return { emoji: "📦", titulo: "En camino al retiro", subtitulo: labelParada ? `Llegá al ${labelParada} y confirmá` : "Llegá al retiro y confirmá la carga", colorBorde: "border-yellow-400" };
+    case "Carga retirada":
+      return { emoji: "✅", titulo: "Carga retirada", subtitulo: "Iniciá el traslado al destino", colorBorde: "border-blue-500" };
+    case "En ruta":
+      return { emoji: "🏁", titulo: "En ruta al destino", subtitulo: labelParada ? `Dirigite a la ${labelParada}` : "Dirigite al punto de entrega", colorBorde: "border-purple-500" };
+    case "Descarga completada":
+      return { emoji: "🏆", titulo: "Descarga completada", subtitulo: "Confirmá la finalización del viaje", colorBorde: "border-red-500" };
+    case "Viaje finalizado":
+      return { emoji: "🎉", titulo: "Viaje finalizado", subtitulo: "Excelente trabajo", colorBorde: "border-green-400" };
+    default:
+      return { emoji: "🚛", titulo: estado || "Viaje activo", subtitulo: "Seguí las instrucciones", colorBorde: "border-zinc-600" };
+  }
+}
+
 const esUuidValido = (valor: any) =>
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(valor || ""));
 
@@ -151,6 +193,11 @@ export default function ViajeActivoPage() {
 
   const bloqueadoPorParadas =
     botonActivo?.nombre === "Viaje finalizado" && paradas.length > 0 && !todasParadasCompletadas;
+
+  // Instrucción operativa actual
+  const instruccion = useMemo(() =>
+    getInstruccion(viaje?.estado || "", paradaActiva, paradas, paradaActivaIndex),
+  [viaje?.estado, paradaActiva, paradas, paradaActivaIndex]);
 
   // ─── Realtime ─────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -360,14 +407,23 @@ export default function ViajeActivoPage() {
       <div className="absolute bottom-0 left-0 right-0 z-20 p-3">
         <div className="bg-black/90 backdrop-blur-sm rounded-3xl p-4 border border-zinc-800 space-y-3">
 
-          {/* Próxima parada */}
-          {paradaActiva && (
-            <div className="flex items-center gap-3">
+          {/* Tarjeta instrucción operativa */}
+          <div className={`flex items-center gap-3 rounded-2xl px-3 py-2 border ${instruccion.colorBorde} bg-zinc-900/80`}>
+            <span className="text-2xl flex-shrink-0">{instruccion.emoji}</span>
+            <div className="min-w-0 flex-1">
+              <p className="text-white font-black text-sm leading-tight">{instruccion.titulo}</p>
+              <p className="text-zinc-400 text-xs truncate">{instruccion.subtitulo}</p>
+            </div>
+            {paradaActiva && (
               <span className={`text-xs font-black px-2 py-1 rounded-lg flex-shrink-0 ${paradaActiva.tipo === "RETIRO" ? "bg-blue-600 text-white" : "bg-green-600 text-white"}`}>
                 {paradaActiva.tipo}
               </span>
-              <p className="text-white font-black text-sm truncate">📍 {paradaActiva.direccion}</p>
-            </div>
+            )}
+          </div>
+
+          {/* Dirección objetivo */}
+          {paradaActiva && (
+            <p className="text-zinc-300 text-xs font-black truncate px-1">📍 {paradaActiva.direccion}</p>
           )}
 
           {/* Confirmar parada si corresponde */}
