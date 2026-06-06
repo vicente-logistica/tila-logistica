@@ -344,20 +344,28 @@ export default function MapaTILA({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lat, lng]);
 
-  // ─── modoNavegacion: recalcular ruta SOLO al cambiar destino ─────────────
-  const prevDestinoRef = useRef<string | null>(null);
+  // ─── modoNavegacion: recalcular ruta cuando cambia destino O llega primer GPS
+  const prevDestinoNavRef  = useRef<string | null>(null);
+  const primerGpsNavRef    = useRef(false);
   useEffect(() => {
     if (!isLoaded || !modoNavegacion || !lat || !lng || !paradaActivaDireccion || tieneParadas || modoMultiChofer) return;
-    if (prevDestinoRef.current === paradaActivaDireccion) return; // mismo destino, no recalcular
-    prevDestinoRef.current = paradaActivaDireccion;
+    const destinoCambio = prevDestinoNavRef.current !== paradaActivaDireccion;
+    const primerGps     = !primerGpsNavRef.current;
+    if (!destinoCambio && !primerGps) return; // nada cambió relevante
+    prevDestinoNavRef.current = paradaActivaDireccion;
+    primerGpsNavRef.current   = true;
 
+    // Geocodificar destino para marcador + ruta
     const fallback: google.maps.LatLngLiteral[] = [{ lat, lng }];
     geocodificar(paradaActivaDireccion, (coords) => {
-      if (coords) fallback.push(coords);
+      if (coords) {
+        fallback.push(coords);
+        setDestinoCoords(coords); // marcador del objetivo visible
+      }
       calcularRuta({ lat, lng }, paradaActivaDireccion, [], fallback);
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [paradaActivaDireccion, modoNavegacion]);
+  }, [paradaActivaDireccion, lat, lng, modoNavegacion]);
 
   // ─── Marcador chofer ──────────────────────────────────────────────────────
   const actualizarMarcadorChofer = useCallback((mapa: google.maps.Map) => {
@@ -516,9 +524,9 @@ export default function MapaTILA({
         {!modoMultiChofer && !tieneParadas && destinoCoords && (
           <Marker
             position={destinoCoords}
-            title={`Entrega: ${destino}`}
-            icon={{ path: google.maps.SymbolPath.CIRCLE, scale: 10, fillColor: "#22c55e", fillOpacity: 1, strokeColor: "#ffffff", strokeWeight: 2 }}
-            label={{ text: "B", color: "#ffffff", fontWeight: "bold", fontSize: "12px" }}
+            title={paradaActivaDireccion ? `Objetivo: ${paradaActivaDireccion}` : `Entrega: ${destino}`}
+            icon={{ path: google.maps.SymbolPath.CIRCLE, scale: 12, fillColor: "#22c55e", fillOpacity: 1, strokeColor: "#ffffff", strokeWeight: 2 }}
+            label={{ text: modoNavegacion ? "●" : "B", color: "#ffffff", fontWeight: "bold", fontSize: "12px" }}
           />
         )}
 
