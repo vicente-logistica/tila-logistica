@@ -363,14 +363,15 @@ export default function PanelChoferPage() {
 
         <div className="w-full max-w-5xl flex flex-col gap-6">
 
-          {/* Banner desbloqueo audio */}
-          {!audioDesbloqueado && (
-            <div className="bg-yellow-400 text-black rounded-2xl p-4 flex items-center justify-between gap-4">
-              <p className="font-black text-sm">🔔 Tocá para activar alertas sonoras de nuevos viajes</p>
-              <button type="button" onClick={desbloquearAudio}
-                className="bg-black text-yellow-400 font-black px-4 py-2 rounded-xl text-sm whitespace-nowrap hover:bg-zinc-900 transition">
-                Activar sonido
-              </button>
+          {/* Chip de sonido — compacto y discreto */}
+          {!audioDesbloqueado ? (
+            <button type="button" onClick={desbloquearAudio}
+              className="self-center bg-zinc-800 hover:bg-zinc-700 border border-zinc-600 text-zinc-300 font-black px-4 py-2 rounded-full text-xs transition flex items-center gap-2">
+              🔔 Activar alertas
+            </button>
+          ) : (
+            <div className="self-center flex items-center gap-2 bg-zinc-900 border border-green-700 px-3 py-1.5 rounded-full text-xs text-green-400 font-black">
+              🟢 Alertas activas
             </div>
           )}
 
