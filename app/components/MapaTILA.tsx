@@ -61,6 +61,7 @@ interface MapaTILAProps {
   paradas?: ParadaMapa[];
   choferes?: ChoferEnMapa[];
   mostrarDiagnostico?: boolean;
+  modoNavegacion?: boolean;
 }
 
 export default function MapaTILA({
@@ -74,6 +75,7 @@ export default function MapaTILA({
   paradas,
   choferes,
   mostrarDiagnostico = false,
+  modoNavegacion = false,
 }: MapaTILAProps) {
   const { isLoaded, loadError } = useJsApiLoader({
     googleMapsApiKey: process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || "",
@@ -318,11 +320,13 @@ export default function MapaTILA({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isLoaded, tieneParadas, modoMultiChofer, origen, destino, paradaActivaDireccion]);
 
-  // ─── Actualizar ruta cuando el chofer se mueve ────────────────────────────
+  // ─── Recalcular ruta al moverse (solo si NO es modoNavegacion) ──────────
+  // modoNavegacion: la ruta se recalcula solo al cambiar paradaActivaDireccion
   const prevLatRef = useRef<number | null>(null);
   const prevLngRef = useRef<number | null>(null);
   useEffect(() => {
     if (!isLoaded || !lat || !lng || !paradaActivaDireccion || tieneParadas || modoMultiChofer) return;
+    if (modoNavegacion) return; // en modo navegación no recalcular por GPS
     // Solo recalcular si la posición cambió más de ~50 metros
     if (prevLatRef.current !== null) {
       const dlat = Math.abs(lat - (prevLatRef.current ?? 0));
@@ -339,6 +343,21 @@ export default function MapaTILA({
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lat, lng]);
+
+  // ─── modoNavegacion: recalcular ruta SOLO al cambiar destino ─────────────
+  const prevDestinoRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!isLoaded || !modoNavegacion || !lat || !lng || !paradaActivaDireccion || tieneParadas || modoMultiChofer) return;
+    if (prevDestinoRef.current === paradaActivaDireccion) return; // mismo destino, no recalcular
+    prevDestinoRef.current = paradaActivaDireccion;
+
+    const fallback: google.maps.LatLngLiteral[] = [{ lat, lng }];
+    geocodificar(paradaActivaDireccion, (coords) => {
+      if (coords) fallback.push(coords);
+      calcularRuta({ lat, lng }, paradaActivaDireccion, [], fallback);
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [paradaActivaDireccion, modoNavegacion]);
 
   // ─── Marcador chofer ──────────────────────────────────────────────────────
   const actualizarMarcadorChofer = useCallback((mapa: google.maps.Map) => {
@@ -382,8 +401,14 @@ export default function MapaTILA({
   useEffect(() => {
     if (!mapRef.current || !lat || !lng || modoMultiChofer) return;
     actualizarMarcadorChofer(mapRef.current);
-    mapRef.current.panTo({ lat, lng });
-  }, [lat, lng, actualizarMarcadorChofer, modoMultiChofer]);
+    if (modoNavegacion) {
+      // Navegación: setCenter instantáneo sin animación, zoom fijo 15
+      mapRef.current.setCenter({ lat, lng });
+      if (mapRef.current.getZoom() !== 15) mapRef.current.setZoom(15);
+    } else {
+      mapRef.current.panTo({ lat, lng });
+    }
+  }, [lat, lng, actualizarMarcadorChofer, modoMultiChofer, modoNavegacion]);
 
   // ─── Color parada ─────────────────────────────────────────────────────────
   const colorPorEstado = (estado: string) => {
