@@ -357,56 +357,91 @@ export default function PanelClientePage() {
           <Link href="/publicar" className="inline-block bg-yellow-400 text-black font-black px-8 py-4 rounded-2xl">Publicar carga</Link>
         </div>
       ) : (
-        <div className="space-y-3 mb-6">
+        <div className="space-y-4 mb-6">
           {viajesActivos.map(viaje => {
-            const chofer   = choferPorViaje[String(viaje.id)];
-            const paradas  = paradasPorViaje[String(viaje.id)] || [];
-            const finalizado = viaje.estado === "Viaje finalizado";
+            const chofer  = choferPorViaje[String(viaje.id)];
+            const paradas = paradasPorViaje[String(viaje.id)] || [];
+            const tieneGps = viaje.lat != null && viaje.lng != null;
+            // Vehículo: fallback a tipo_vehiculo del viaje si no hay tabla vehiculos aún
+            const vehiculoLabel = chofer?.vehiculo || viaje.tipo_vehiculo || null;
+            const patenteLabel  = viaje.patente || null;
+            const precio = viaje.precio_cliente ? Number(viaje.precio_cliente) : null;
+
             return (
-              <div key={viaje.id} className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4">
-                {/* Código + estado */}
-                <div className="flex items-center justify-between mb-2">
-                  <p className="text-zinc-500 text-xs font-black">VIAJE #{viaje.id}</p>
+              <div key={viaje.id} className="bg-zinc-900 border border-zinc-800 rounded-2xl overflow-hidden">
+
+                {/* ── ZONA SUPERIOR: código + estado ── */}
+                <div className="flex items-center justify-between px-4 pt-3 pb-2 border-b border-zinc-800">
+                  <p className="text-zinc-500 text-xs font-black tracking-widest">VIAJE #{viaje.id}</p>
                   <span className={`text-xs font-black px-2 py-1 rounded-lg ${colorEstado(viaje.estado || "pendiente")}`}>
                     {viaje.estado || "Pendiente"}
                   </span>
                 </div>
 
-                {/* Ruta */}
-                <p className="text-yellow-400 font-black text-base mb-1 truncate">{viaje.origen} → {viaje.destino}</p>
-                <p className="text-zinc-500 text-xs mb-3">{formatearFecha(viaje.created_at)}{viaje.km_estimados ? ` · ${viaje.km_estimados} km` : ""}</p>
+                <div className="px-4 pt-3 pb-4 space-y-3">
+                  {/* Ruta principal */}
+                  <p className="text-yellow-400 font-black text-lg leading-tight">
+                    {viaje.origen}
+                  </p>
+                  <p className="text-zinc-400 text-xs font-black -mt-2">→ {viaje.destino}</p>
 
-                {/* Chofer */}
-                {chofer && (
-                  <div className="flex items-center gap-2 mb-3 text-xs text-zinc-400">
-                    <span className={`w-2 h-2 rounded-full flex-shrink-0 ${chofer.online ? "bg-green-500" : "bg-zinc-600"}`} />
-                    <span>🚛 {chofer.nombre}</span>
-                    {viaje.velocidad_kmh != null && <span className="text-yellow-400">{viaje.velocidad_kmh} km/h</span>}
-                    <span>{tiempoRelativo(chofer.ultima_senal_at)}</span>
+                  {/* Fecha + km + precio */}
+                  <div className="flex items-center gap-3 text-xs text-zinc-500">
+                    <span>{formatearFecha(viaje.created_at)}</span>
+                    {viaje.km_estimados && <span>· {viaje.km_estimados} km</span>}
+                    {precio && <span className="text-green-400 font-black ml-auto">${precio.toLocaleString()}</span>}
                   </div>
-                )}
 
-                {/* Paradas mini */}
-                {paradas.length > 0 && (
-                  <div className="flex gap-1 mb-3 overflow-x-auto">
-                    {paradas.map((p, i) => (
-                      <span key={p.id} className={`flex-shrink-0 text-xs px-2 py-1 rounded-lg font-black ${
-                        p.estado === "completada" ? "bg-green-900/50 text-green-400" :
-                        p.estado === "en_curso"   ? "bg-yellow-400/20 text-yellow-400" :
-                        "bg-zinc-800 text-zinc-500"
-                      }`}>{String.fromCharCode(65+i)}</span>
-                    ))}
-                  </div>
-                )}
+                  {/* Chofer */}
+                  {chofer ? (
+                    <div className="bg-zinc-800 rounded-xl p-3 space-y-1.5">
+                      <div className="flex items-center gap-2">
+                        <span className={`w-2 h-2 rounded-full flex-shrink-0 ${chofer.online ? "bg-green-500" : "bg-zinc-600"}`} />
+                        <p className="text-white font-black text-sm">{chofer.nombre}</p>
+                      </div>
+                      <div className="flex items-center gap-3 text-xs text-zinc-400">
+                        {vehiculoLabel
+                          ? <span>🚛 {vehiculoLabel}{patenteLabel ? ` · ${patenteLabel}` : ""}</span>
+                          : <span className="text-zinc-600">Vehículo pendiente de validación</span>
+                        }
+                      </div>
+                      <div className="flex items-center gap-3 text-xs">
+                        {tieneGps && viaje.velocidad_kmh != null && (
+                          <span className="text-yellow-400 font-black">{viaje.velocidad_kmh} km/h</span>
+                        )}
+                        <span className="text-zinc-500">
+                          {tieneGps ? "📡 " : ""}{tiempoRelativo(chofer.ultima_senal_at)}
+                        </span>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="bg-zinc-800 rounded-xl px-3 py-2">
+                      <p className="text-zinc-500 text-xs">⏳ Esperando asignación de chofer</p>
+                    </div>
+                  )}
 
-                {/* Botón */}
-                <button
-                  type="button"
-                  onClick={() => setViajeSeleccionado(viaje)}
-                  className="w-full py-3 rounded-xl font-black text-sm bg-yellow-400 text-black hover:bg-yellow-300 transition"
-                >
-                  {viaje.lat && viaje.lng ? "📡 Ver ubicación en vivo" : "👁️ Ver seguimiento"}
-                </button>
+                  {/* Paradas mini */}
+                  {paradas.length > 0 && (
+                    <div className="flex gap-1 overflow-x-auto">
+                      {paradas.map((p, i) => (
+                        <span key={p.id} className={`flex-shrink-0 text-xs px-2 py-1 rounded-lg font-black ${
+                          p.estado === "completada" ? "bg-green-900/50 text-green-400" :
+                          p.estado === "en_curso"   ? "bg-yellow-400/20 text-yellow-400" :
+                          "bg-zinc-800 text-zinc-500"
+                        }`}>{String.fromCharCode(65+i)}</span>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Botón principal */}
+                  <button
+                    type="button"
+                    onClick={() => setViajeSeleccionado(viaje)}
+                    className="w-full py-3.5 rounded-xl font-black text-sm bg-yellow-400 text-black hover:bg-yellow-300 active:scale-[0.98] transition"
+                  >
+                    {tieneGps ? "📡 Ver ubicación en vivo" : "👁️ Ver seguimiento"}
+                  </button>
+                </div>
               </div>
             );
           })}
