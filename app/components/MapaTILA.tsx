@@ -371,17 +371,19 @@ export default function MapaTILA({
   const actualizarMarcadorChofer = useCallback((mapa: google.maps.Map) => {
     if (!lat || !lng || modoMultiChofer) return;
     if (!choferMarkerRef.current) {
+      // Punto azul tipo Google Maps con halo semitransparente
+      // strokeWeight grande simula el halo sin necesitar segundo marcador
       choferMarkerRef.current = new google.maps.Marker({
         map: mapa,
         icon: {
-          path: google.maps.SymbolPath.FORWARD_CLOSED_ARROW,
-          scale: 7,
+          path: google.maps.SymbolPath.CIRCLE,
+          scale: 10,
           fillColor: "#facc15",
           fillOpacity: 1,
-          strokeColor: "#000000",
-          strokeWeight: 2,
+          strokeColor: "rgba(250,204,21,0.30)",
+          strokeWeight: 16,
         },
-        title: "Chofer",
+        title: "Posición actual",
         zIndex: 10,
       });
     }
@@ -477,14 +479,14 @@ export default function MapaTILA({
             position={{ lat: chofer.lat, lng: chofer.lng }}
             title={chofer.label ?? `Chofer ${index + 1}`}
             icon={{
-              path: google.maps.SymbolPath.FORWARD_CLOSED_ARROW,
-              scale: 8,
+              path: google.maps.SymbolPath.CIRCLE,
+              scale: 10,
               fillColor: colorChoferPorEstado(chofer.estado),
               fillOpacity: 1,
-              strokeColor: "#000000",
-              strokeWeight: 2,
+              strokeColor: "rgba(0,0,0,0.4)",
+              strokeWeight: 14,
             }}
-            label={{ text: String(index + 1), color: "#000000", fontWeight: "bold", fontSize: "11px" }}
+            label={{ text: String(index + 1), color: "#000000", fontWeight: "bold", fontSize: "10px" }}
             zIndex={10}
           />
         ))}
