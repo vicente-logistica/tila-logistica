@@ -96,6 +96,8 @@ export default function ViajeActivoPage() {
   // ─── UI toggles ──────────────────────────────────────────────────────────
   const [mostrarChat, setMostrarChat]           = useState(false);
   const [mostrarDetalles, setMostrarDetalles]   = useState(false);
+  const [mostrarNavegadores, setMostrarNavegadores] = useState(false);
+  const [navegadorPreferido, setNavegadorPreferido] = useState<string | null>(null);
 
   const viajeTerminado = useRef(false);
   const usuarioRef     = useRef<any>(null);
@@ -260,6 +262,14 @@ export default function ViajeActivoPage() {
     const { data, error } = await supabase.from("cargas").select("*").eq("id", viajeId).single();
     if (error) { alert("Error al cargar viaje"); return; }
     setViaje(data);
+    // Cargar navegador preferido del chofer
+    const u = localStorage.getItem("usuario");
+    if (u) {
+      const usuario = JSON.parse(u);
+      const { data: perfil } = await supabase
+        .from("usuarios").select("navegador_preferido").eq("id", usuario.id).single();
+      if (perfil?.navegador_preferido) setNavegadorPreferido(perfil.navegador_preferido);
+    }
     const { data: dp } = await supabase.from("paradas_viaje").select("*")
       .eq("carga_id", Number(viajeId)).order("orden", { ascending: true });
     if (dp?.length) {
@@ -316,14 +326,55 @@ export default function ViajeActivoPage() {
     }
   };
 
-  const abrirMapaExterno = () => {
+  // ─── Navegación externa ──────────────────────────────────────────────────
+  const NAVEGADORES = [
+    { id: "google_maps",  label: "Google Maps",   emoji: "🗺️" },
+    { id: "waze",         label: "Waze",           emoji: "📡" },
+    { id: "sygic_truck",  label: "Sygic Truck GPS",emoji: "🚛" },
+    { id: "tomtom_truck", label: "TomTom Truck",   emoji: "🧭" },
+  ];
+
+  const buildNavUrl = (navId: string, dest: string, lat?: number | null, lng?: number | null): string => {
+    const origin = lat && lng ? `${lat},${lng}` : "";
+    const destEnc = encodeURIComponent(dest + ", Argentina");
+    const latS = lat ? String(lat) : "";
+    const lngS = lng ? String(lng) : "";
+    switch (navId) {
+      case "google_maps":
+        return origin
+          ? `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(origin)}&destination=${destEnc}&travelmode=driving`
+          : `https://www.google.com/maps/dir/?api=1&destination=${destEnc}&travelmode=driving`;
+      case "waze":
+        return `https://waze.com/ul?ll=${latS},${lngS}&navigate=yes&q=${destEnc}`;
+      case "sygic_truck":
+        return `com.sygic.truck://coordinate|${lngS}|${latS}|${dest}`;
+      case "tomtom_truck":
+        return `https://www.google.com/maps/dir/?api=1&destination=${destEnc}&travelmode=driving`;
+      default:
+        return origin
+          ? `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(origin)}&destination=${destEnc}&travelmode=driving`
+          : `https://www.google.com/maps/dir/?api=1&destination=${destEnc}&travelmode=driving`;
+    }
+  };
+
+  const abrirNavegador = (navId: string) => {
     if (!viaje) return;
-    const origin = viaje.lat && viaje.lng ? `${viaje.lat},${viaje.lng}` : "";
-    const dest   = destinoRuta ?? viaje.destino;
-    const url    = origin
-      ? `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(origin)}&destination=${encodeURIComponent(dest + ", Argentina")}&travelmode=driving`
-      : `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(dest + ", Argentina")}&travelmode=driving`;
-    window.open(url, `_maps_${Date.now()}`);
+    const dest = destinoRuta ?? viaje.destino;
+    const url  = buildNavUrl(navId, dest, viaje.lat, viaje.lng);
+    window.open(url, `_nav_${Date.now()}`);
+    setMostrarNavegadores(false);
+  };
+
+  const handleNavegar = () => {
+    if (!viaje) return;
+    // Descarga completada: no abrir navegación
+    if (viaje.estado === "Descarga completada" || viaje.estado === "Viaje finalizado") return;
+    const nav = navegadorPreferido;
+    if (!nav || nav === "preguntar_siempre") {
+      setMostrarNavegadores(true);
+    } else {
+      abrirNavegador(nav);
+    }
   };
 
   // ─── Guards ───────────────────────────────────────────────────────────────
@@ -472,10 +523,11 @@ export default function ViajeActivoPage() {
             </button>
             <button
               type="button"
-              onClick={abrirMapaExterno}
-              className="flex-1 py-2 rounded-xl text-xs font-black bg-zinc-800 text-zinc-300 hover:bg-zinc-700 transition"
+              onClick={handleNavegar}
+              disabled={viaje.estado === "Descarga completada" || viaje.estado === "Viaje finalizado"}
+              className="flex-1 py-2 rounded-xl text-xs font-black bg-zinc-800 text-zinc-300 hover:bg-zinc-700 transition disabled:opacity-40"
             >
-              🗺️ Externo
+              🧭 Navegar
             </button>
           </div>
         </div>
@@ -551,6 +603,38 @@ export default function ViajeActivoPage() {
               </div>
             </div>
 
+          </div>
+        </div>
+      )}
+
+      {/* ─── MODAL SELECCIÓN NAVEGADOR ────────────────────────────────── */}
+      {mostrarNavegadores && (
+        <div className="absolute inset-0 z-50 bg-black/80 flex items-end p-4">
+          <div className="w-full bg-zinc-900 border border-zinc-700 rounded-3xl p-5 space-y-3">
+            <div className="flex items-center justify-between mb-1">
+              <p className="text-yellow-400 font-black text-base">🧭 Elegí tu navegador</p>
+              <button type="button" onClick={() => setMostrarNavegadores(false)}
+                className="text-zinc-400 font-black text-sm px-2">✕</button>
+            </div>
+            {/* Aviso legal */}
+            <div className="bg-zinc-800 rounded-xl px-3 py-2 text-xs text-zinc-400 border border-zinc-700">
+              ⚠️ La navegación es responsabilidad del conductor. Utilizá tu navegador profesional preferido.
+            </div>
+            {/* Destino actual */}
+            {(destinoRuta ?? viaje?.destino) && (
+              <p className="text-zinc-300 text-xs px-1">📍 Destino: <span className="text-white font-black">{destinoRuta ?? viaje.destino}</span></p>
+            )}
+            {/* Opciones */}
+            <div className="grid grid-cols-2 gap-3">
+              {NAVEGADORES.map(nav => (
+                <button key={nav.id} type="button" onClick={() => abrirNavegador(nav.id)}
+                  className="flex items-center gap-2 bg-zinc-800 hover:bg-zinc-700 border border-zinc-600 rounded-2xl px-4 py-3 font-black text-sm text-white transition">
+                  <span className="text-xl">{nav.emoji}</span>
+                  <span className="text-left leading-tight">{nav.label}</span>
+                </button>
+              ))}
+            </div>
+            <p className="text-zinc-600 text-xs text-center">TILA mantiene el tracking interno independientemente del navegador elegido.</p>
           </div>
         </div>
       )}
