@@ -257,6 +257,7 @@ export default function PublicarPage() {
     }
 
     setPublicando(false);
+    // Compatibilidad legacy — panel-cliente ya no depende de esto
     localStorage.setItem("viajeActivoId", String(data.id));
     router.push("/panel-cliente");
   };
