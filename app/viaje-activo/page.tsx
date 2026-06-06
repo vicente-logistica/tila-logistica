@@ -238,8 +238,15 @@ export default function ViajeActivoPage() {
     const nuevas = [...paradas];
     nuevas[paradaActivaIndex] = { ...p, estado: "completada", completada_at: new Date().toISOString() };
     setParadas(nuevas);
-    setParadaActivaIndex(paradaActivaIndex + 1);
+    const nuevoIndice = paradaActivaIndex + 1;
+    setParadaActivaIndex(nuevoIndice);
     setConfirmandoParada(false);
+    // Navegar automáticamente al próximo objetivo
+    if (nuevoIndice < paradas.length) {
+      iniciarNavegacion(paradas[nuevoIndice].direccion);
+    } else {
+      iniciarNavegacion(viaje.destino);
+    }
   };
 
   const acreditarBilletera = async (data: any) => {
