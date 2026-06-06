@@ -59,8 +59,7 @@ function SeguimientoViaje({
   usuarioId: string; usuarioNombre: string;
   onCerrar: () => void;
 }) {
-  const [mapaAmpliado, setMapaAmpliado] = useState(false);
-  const [mostrarChat, setMostrarChat]   = useState(false);
+  const [mostrarChat, setMostrarChat] = useState(false);
 
   const paradasParaMapa: ParadaMapa[] = paradas.map(p => ({
     direccion: p.direccion,
@@ -68,54 +67,91 @@ function SeguimientoViaje({
     estado:    p.estado as "pendiente" | "en_curso" | "completada",
   }));
 
+  const tieneGps = viaje?.lat != null && viaje?.lng != null;
+  // Altura del mapa = pantalla completa menos header (~56px) menos bottom (~120px)
+  const alturaMapaStr = "calc(100dvh - 180px)";
+
   return (
-    <div className="fixed inset-0 z-50 bg-black flex flex-col">
+    <div className="fixed inset-0 z-50 bg-black flex flex-col" style={{ height: "100dvh" }}>
+
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800 bg-zinc-900 flex-shrink-0">
-        <div>
-          <p className="text-yellow-400 font-black text-sm">VIAJE #{viaje.id}</p>
-          <p className="text-zinc-300 text-xs truncate max-w-[240px]">{viaje.origen} → {viaje.destino}</p>
+        <div className="flex items-center gap-3">
+          <button type="button" onClick={onCerrar}
+            className="text-zinc-400 hover:text-yellow-400 font-black text-sm px-1">
+            ← Volver
+          </button>
+          <div>
+            <p className="text-yellow-400 font-black text-sm">VIAJE #{viaje.id}</p>
+            <p className="text-zinc-400 text-xs truncate max-w-[200px]">{viaje.origen} → {viaje.destino}</p>
+          </div>
         </div>
-        <div className="flex items-center gap-2">
-          <span className={`text-xs font-black px-2 py-1 rounded-lg ${colorEstado(viaje.estado)}`}>
-            {viaje.estado || "Pendiente"}
-          </span>
-          <button type="button" onClick={onCerrar} className="text-zinc-400 font-black px-2 py-1">✕</button>
-        </div>
+        <span className={`text-xs font-black px-2 py-1 rounded-lg flex-shrink-0 ${colorEstado(viaje.estado)}`}>
+          {viaje.estado || "Pendiente"}
+        </span>
       </div>
 
-      {/* Mapa */}
-      <div className="flex-1 relative">
-        <MapaTILA
-          lat={viaje?.lat} lng={viaje?.lng}
-          origen={viaje.origen} destino={viaje.destino}
-          soloLectura={true} altura="100%"
-          paradas={paradasParaMapa.length >= 2 ? paradasParaMapa : undefined}
-        />
+      {/* Mapa o fallback */}
+      <div
+        className="relative flex-shrink-0 bg-zinc-900"
+        style={{ height: alturaMapaStr }}
+      >
+        {tieneGps ? (
+          <MapaTILA
+            lat={Number(viaje.lat)}
+            lng={Number(viaje.lng)}
+            origen={viaje.origen}
+            destino={viaje.destino}
+            soloLectura={true}
+            altura={alturaMapaStr}
+            paradas={paradasParaMapa.length >= 2 ? paradasParaMapa : undefined}
+          />
+        ) : (
+          /* Sin GPS: mostrar mapa de origen/destino o mensaje claro */
+          viaje.origen && viaje.destino ? (
+            <MapaTILA
+              lat={null}
+              lng={null}
+              origen={viaje.origen}
+              destino={viaje.destino}
+              soloLectura={true}
+              altura={alturaMapaStr}
+              paradas={paradasParaMapa.length >= 2 ? paradasParaMapa : undefined}
+            />
+          ) : (
+            <div className="flex items-center justify-center h-full">
+              <div className="text-center px-6">
+                <p className="text-4xl mb-3">📡</p>
+                <p className="text-zinc-300 font-black">Esperando ubicación del chofer</p>
+                <p className="text-zinc-500 text-sm mt-1">El mapa se actualizará cuando el chofer comparta su posición</p>
+              </div>
+            </div>
+          )
+        )}
 
-        {/* Info flotante sobre el mapa */}
-        {viaje?.lat && viaje?.lng && choferInfo && (
-          <div className="absolute top-3 left-3 right-3 z-10 bg-black/80 backdrop-blur-sm rounded-2xl px-3 py-2">
+        {/* Badge info chofer flotante */}
+        {choferInfo && (
+          <div className="absolute top-2 left-2 right-2 z-10 bg-black/85 backdrop-blur-sm rounded-xl px-3 py-2">
             <div className="flex items-center justify-between text-xs">
-              <span className="text-zinc-400">🚛 {choferInfo.nombre || "Chofer"}</span>
-              <span className="text-yellow-400 font-black">
-                {viaje.velocidad_kmh != null ? `${viaje.velocidad_kmh} km/h` : "—"}
-              </span>
+              <span className="text-zinc-300">🚛 {choferInfo.nombre || "Chofer"}</span>
+              {tieneGps && viaje.velocidad_kmh != null && (
+                <span className="text-yellow-400 font-black">{viaje.velocidad_kmh} km/h</span>
+              )}
               <span className="text-zinc-500">{tiempoRelativo(choferInfo.ultima_senal_at)}</span>
             </div>
           </div>
         )}
 
-        {!viaje?.lat && (
-          <div className="absolute top-3 left-3 right-3 z-10 bg-black/80 rounded-xl px-3 py-2 text-center">
-            <p className="text-zinc-400 text-xs">📡 Esperando ubicación del chofer...</p>
+        {!tieneGps && (
+          <div className="absolute bottom-2 left-2 right-2 z-10 bg-black/80 rounded-xl px-3 py-2 text-center">
+            <p className="text-zinc-400 text-xs">📡 Esperando GPS del chofer...</p>
           </div>
         )}
       </div>
 
       {/* Bottom panel */}
-      <div className="bg-zinc-900 border-t border-zinc-800 px-4 py-3 space-y-2 flex-shrink-0">
-        {/* Paradas activas */}
+      <div className="flex-1 bg-zinc-900 border-t border-zinc-800 px-4 py-3 space-y-2 overflow-y-auto">
+        {/* Paradas */}
         {paradas.length > 0 && (
           <div className="flex gap-2 overflow-x-auto pb-1">
             {paradas.map((p, i) => (
@@ -137,10 +173,10 @@ function SeguimientoViaje({
             className={`flex-1 py-2.5 rounded-xl text-xs font-black transition ${mostrarChat ? "bg-blue-600 text-white" : "bg-zinc-800 text-zinc-300"}`}>
             💬 Chat
           </button>
-          <Link href="/publicar"
-            className="flex-1 py-2.5 rounded-xl text-xs font-black bg-yellow-400 text-black text-center">
-            + Nuevo viaje
-          </Link>
+          <button type="button" onClick={onCerrar}
+            className="flex-1 py-2.5 rounded-xl text-xs font-black bg-zinc-800 text-zinc-300 transition hover:bg-zinc-700">
+            ← Mis viajes
+          </button>
         </div>
       </div>
 
