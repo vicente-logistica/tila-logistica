@@ -362,32 +362,21 @@ export default function ViajeActivoPage() {
 
       {/* ─── BOTTOM FLOTANTE ─────────────────────────────────────────────── */}
       <div className="absolute bottom-0 left-0 right-0 z-20 p-3">
-        <div className="bg-black/92 backdrop-blur-sm rounded-3xl px-4 pt-3 pb-4 border border-zinc-800 space-y-3">
+        <div className="bg-black/92 backdrop-blur-sm rounded-3xl px-4 pt-3 pb-4 border border-zinc-800 space-y-2">
 
-          {/* Instrucción + badge */}
-          <div className={`flex items-center gap-3 rounded-xl px-3 py-2 border ${instruccion.colorBorde} bg-zinc-900/60`}>
-            <span className="text-xl flex-shrink-0">{instruccion.emoji}</span>
-            <div className="min-w-0 flex-1">
-              <p className="text-white font-black text-sm leading-tight">{instruccion.titulo}</p>
-              <p className="text-zinc-400 text-xs truncate">{instruccion.subtitulo}</p>
-            </div>
+          {/* Instrucción corta + dirección */}
+          <div className="px-1">
+            <p className="text-zinc-400 text-xs">{instruccion.subtitulo}</p>
             {paradaActiva && (
-              <span className={`text-xs font-black px-2 py-1 rounded-lg flex-shrink-0 ${paradaActiva.tipo === "RETIRO" ? "bg-blue-600 text-white" : "bg-green-600 text-white"}`}>
-                {paradaActiva.tipo}
-              </span>
+              <p className="text-white font-black text-sm truncate">{paradaActiva.direccion}</p>
             )}
           </div>
-
-          {/* Dirección objetivo */}
-          {paradaActiva && (
-            <p className="text-zinc-300 text-xs truncate px-1">📍 {paradaActiva.direccion}</p>
-          )}
 
           {/* Confirmar parada */}
           {paradas.length > 0 && !todasParadasCompletadas && paradaActivaIndex < paradas.length && (
             <button type="button" onClick={confirmarParadaCompletada} disabled={confirmandoParada}
               className={`w-full py-3 rounded-2xl font-black text-sm transition ${confirmandoParada ? "bg-zinc-700 text-zinc-400" : "bg-blue-600 hover:bg-blue-500 text-white"}`}>
-              {confirmandoParada ? "Confirmando..." : `✅ Confirmar ${LABELS[paradaActivaIndex] || ""} completada`}
+              {confirmandoParada ? "Confirmando..." : `✅ Confirmar parada ${LABELS[paradaActivaIndex] || ""}`}
             </button>
           )}
 
@@ -397,27 +386,27 @@ export default function ViajeActivoPage() {
               className={`w-full py-4 rounded-2xl font-black text-lg transition ${
                 bloqueadoPorParadas ? "bg-zinc-800 text-zinc-500 cursor-not-allowed"
                 : `${botonActivo.color} hover:opacity-90 active:scale-[0.98]`
-              } ${viaje.estado === botonActivo.nombre ? "ring-2 ring-white" : ""}`}>
+              }`}>
               {botonActivo.label}{bloqueadoPorParadas ? " 🔒" : ""}
             </button>
           )}
 
-          {/* Botones secundarios — solo íconos */}
+          {/* Secundarios — solo íconos */}
           <div className="flex gap-2 pt-1">
             <button type="button"
               onClick={() => { setMostrarChat(v => !v); setMostrarSoporte(false); setMostrarDetalles(false); }}
-              className={`flex-1 py-2.5 rounded-xl text-xs font-black transition flex items-center justify-center gap-1.5 ${mostrarChat ? "bg-blue-600 text-white" : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700"}`}>
-              💬 <span>Cliente</span>
+              className={`flex-1 py-2 rounded-xl text-lg transition ${mostrarChat ? "bg-blue-600" : "bg-zinc-800 hover:bg-zinc-700"}`}>
+              💬
             </button>
             <button type="button"
               onClick={() => { setMostrarDetalles(v => !v); setMostrarChat(false); setMostrarSoporte(false); }}
-              className={`flex-1 py-2.5 rounded-xl text-xs font-black transition flex items-center justify-center gap-1.5 ${mostrarDetalles ? "bg-zinc-600 text-white" : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700"}`}>
-              📋 <span>Detalles</span>
+              className={`flex-1 py-2 rounded-xl text-lg transition ${mostrarDetalles ? "bg-zinc-600" : "bg-zinc-800 hover:bg-zinc-700"}`}>
+              📋
             </button>
             <button type="button"
               onClick={() => { setMostrarSoporte(v => !v); setMostrarChat(false); setMostrarDetalles(false); }}
-              className={`flex-1 py-2.5 rounded-xl text-xs font-black transition flex items-center justify-center gap-1.5 ${mostrarSoporte ? "bg-orange-600 text-white" : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700"}`}>
-              🛟 <span>Soporte</span>
+              className={`flex-1 py-2 rounded-xl text-lg transition ${mostrarSoporte ? "bg-orange-600" : "bg-zinc-800 hover:bg-zinc-700"}`}>
+              🛟
             </button>
           </div>
         </div>
