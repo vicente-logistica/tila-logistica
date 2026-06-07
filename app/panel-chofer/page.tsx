@@ -40,6 +40,8 @@ export default function PanelChoferPage() {
 
   const [viajeActivo, setViajeActivo]               = useState<any>(null);
   const [buscandoViajeActivo, setBuscandoViajeActivo] = useState(true);
+  // true cuando el browser bloqueó autoplay — muestra overlay "Tocar para activar sonido"
+  const [necesitaDesbloqueo, setNecesitaDesbloqueo] = useState(false);
 
   const audioDesbloqueadoRef = useRef(false);
 
@@ -66,35 +68,48 @@ export default function PanelChoferPage() {
   useEffect(() => { onlineRef.current = online; }, [online]);
 
   // ─── Audio ────────────────────────────────────────────────────────────────
-  const reproducirAlarma = useCallback(() => {
-    console.log("[ALARMA] intento reproducir", {
-      audio: !!audioRef.current,
-      sonando: sonandoRef.current,
-      desbloqueado: audioDesbloqueadoRef.current,
-    });
-    if (!audioRef.current || sonandoRef.current) return;
-    audioRef.current.currentTime = 0;
-    audioRef.current.volume = 1;
-    audioRef.current.play()
+
+  /** Inicia la alarma de viaje disponible en loop continuo.
+   *  No reinicia si ya está sonando. Loop se fuerza por JS para máxima compatibilidad. */
+  const iniciarAlarmaViaje = useCallback(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    if (sonandoRef.current) return; // ya suena — no reiniciar
+    console.log("🔊 Iniciando alarma viaje");
+    sonandoRef.current = true;   // marcar ANTES de play — evita race condition con llamadas concurrentes
+    audio.loop = true;           // forzar loop por JS, no solo atributo HTML
+    audio.volume = 1;
+    audio.currentTime = 0;
+    audio.play()
       .then(() => {
-        sonandoRef.current = true;
-        console.log("[ALARMA] play ok");
+        console.log("[ALARMA] play ok — loop:", audio.loop);
+        setNecesitaDesbloqueo(false); // limpiar overlay si estaba visible
       })
-      .catch(e => {
-        console.warn("[ALARMA] play bloqueado:", e);
+      .catch(err => {
+        sonandoRef.current = false; // revertir si el navegador bloquea
+        console.warn("No se pudo iniciar alarma", err);
+        // Si el browser bloqueó autoplay → mostrar overlay de desbloqueo manual
+        if (err?.name === "NotAllowedError" || String(err).includes("NotAllowedError")) {
+          console.log("[ALARMA] autoplay bloqueado — mostrando overlay de desbloqueo");
+          setNecesitaDesbloqueo(true);
+        }
       });
   }, []);
 
-  const detenerAlarma = useCallback(() => {
-    if (!audioRef.current) return;
-    audioRef.current.pause();
-    audioRef.current.currentTime = 0;
+  /** Detiene la alarma de viaje. Llamar en aceptar, rechazar u offline. */
+  const detenerAlarmaViaje = useCallback(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    console.log("🔇 Deteniendo alarma viaje");
+    audio.pause();
+    audio.currentTime = 0;
     sonandoRef.current = false;
   }, []);
 
+  /** Desbloquea el audio de alarma con un play silencioso en el contexto del gesto del usuario. */
   const desbloquearAudio = useCallback(async () => {
     if (!audioRef.current || audioDesbloqueadoRef.current) return;
-    audioDesbloqueadoRef.current = true; // guard inmediato — evita doble-call en mobile (onTouchStart + onClick)
+    audioDesbloqueadoRef.current = true; // guard inmediato — evita doble-call en mobile
     try {
       audioRef.current.volume = 0;
       await audioRef.current.play();
@@ -102,12 +117,11 @@ export default function PanelChoferPage() {
       audioRef.current.currentTime = 0;
       audioRef.current.volume = 1;
       console.log("[ALARMA] audio desbloqueado ok");
-      // No disparar alarma aquí — el control de cuándo sonar lo tiene intentarToggleOnline / cargarCargas
     } catch (e) {
-      audioDesbloqueadoRef.current = false; // reset para reintentar si falla
+      audioDesbloqueadoRef.current = false;
       console.warn("[ALARMA] desbloqueo bloqueado por navegador:", e);
     }
-  }, [reproducirAlarma]);
+  }, []);
 
   // ─── Viaje activo ─────────────────────────────────────────────────────────
   useEffect(() => {
@@ -259,7 +273,7 @@ export default function PanelChoferPage() {
         nuevos.forEach(c => viajesSonadosRef.current.add(String(c.id)));
         rechazosConsecutivosRef.current = 0; // viaje real nuevo → resetear contador
         console.log("[ALARMA] cargarCargas: nuevos viajes detectados", { n: nuevos.length });
-        reproducirAlarma();
+        iniciarAlarmaViaje();
       }
     } else if (onlineRef.current && silenciadoRef.current) {
       // Silenciado tras 3 rechazos — registrar IDs sin alarmar
@@ -286,7 +300,7 @@ export default function PanelChoferPage() {
     }
 
     setCargando(false);
-  }, [reproducirAlarma]);
+  }, [iniciarAlarmaViaje]);
 
   // ─── Ref a cargarCargas — para usar en closures sin recrear suscripciones ─
   const cargarCargasRef = useRef(cargarCargas);
@@ -319,7 +333,7 @@ export default function PanelChoferPage() {
     return () => {
       if (canalRef.current)    supabase.removeChannel(canalRef.current);
       if (intervaloRef.current) clearInterval(intervaloRef.current);
-      detenerAlarma();
+      detenerAlarmaViaje();
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // ← sin dependencias: se monta UNA vez, usa refs para todo
@@ -331,15 +345,15 @@ export default function PanelChoferPage() {
     if (!u) return;
     const usuario = JSON.parse(u);
     supabase.from("usuarios").update({ online }).eq("id", usuario.id).then(() => {});
-    if (!online) detenerAlarma();
-  }, [online, onlineCargado, detenerAlarma]);
+    if (!online) detenerAlarmaViaje();
+  }, [online, onlineCargado, detenerAlarmaViaje]);
 
   // ─── Cerrar mapa al cambiar de viaje ─────────────────────────────────────
   useEffect(() => { setMostrarMapa(false); }, [indice]);
 
   // ─── Rechazar ────────────────────────────────────────────────────────────
   const rechazarViaje = () => {
-    detenerAlarma();
+    detenerAlarmaViaje();
     setMostrarMapa(false);
     rechazosConsecutivosRef.current += 1;
     const siguiente = indice + 1;
@@ -354,7 +368,7 @@ export default function PanelChoferPage() {
       // Hay más viajes disponibles y no llegamos al límite — alarmar para el siguiente
       console.log("[RECHAZAR] siguiente viaje:", siguiente);
       setIndice(siguiente);
-      setTimeout(() => reproducirAlarma(), 300);
+      setTimeout(() => iniciarAlarmaViaje(), 300);
     } else {
       // Sin más viajes en la lista local — recargar
       console.log("[RECHAZAR] sin más viajes — limpiando y recargando");
@@ -376,7 +390,7 @@ export default function PanelChoferPage() {
     }
     const carga = cargas[indice];
     if (!carga?.id) return;
-    detenerAlarma();
+    detenerAlarmaViaje();
     rechazosConsecutivosRef.current = 0;
     silenciadoRef.current = false;
     const u = localStorage.getItem("usuario");
@@ -542,6 +556,28 @@ export default function PanelChoferPage() {
 
   return (
     <>
+      {/* ── Overlay de desbloqueo de audio ──────────────────────────────────────
+          Aparece cuando el browser bloqueó autoplay (NotAllowedError).
+          El chofer DEBE tocar este botón para que la alarma empiece a sonar.
+          Al tocarlo: fuerza re-desbloqueo del audio element + arranca alarma. */}
+      {necesitaDesbloqueo && (
+        <div className="fixed inset-0 z-[9999] bg-black/80 flex items-center justify-center p-6">
+          <button
+            type="button"
+            className="bg-yellow-400 text-black font-black text-2xl py-8 px-8 rounded-3xl shadow-2xl animate-pulse max-w-sm w-full leading-snug"
+            onClick={async () => {
+              console.log("[ALARMA] overlay tocado — forzando desbloqueo y arranque");
+              audioDesbloqueadoRef.current = false; // resetear para forzar re-unlock aunque ya se intentó
+              await desbloquearAudio();
+              setNecesitaDesbloqueo(false);
+              if (onlineRef.current) iniciarAlarmaViaje();
+            }}
+          >
+            🔔 Tocar para activar<br />el sonido de alertas
+          </button>
+        </div>
+      )}
+
       {/* eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions */}
       <main className="min-h-screen bg-black text-white px-4 py-6 flex items-center justify-center"
         onClick={desbloquearAudio} onTouchStart={desbloquearAudio}>
@@ -745,6 +781,8 @@ export default function PanelChoferPage() {
           </div>
         </div>
       )}
+
+
     </>
   );
 }

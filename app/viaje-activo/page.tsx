@@ -49,6 +49,20 @@ const fmt = (iso: string | null | undefined) => {
 // ─── Aviso legal ──────────────────────────────────────────────────────────────
 const AVISO_LEGAL = "TILA no se responsabiliza por el navegador utilizado por el conductor. La elección de ruta, restricciones viales, multas, accesos, desvíos y decisiones de conducción son responsabilidad exclusiva del conductor.";
 
+// ─── Sonido finalización — función sincrónica pura, fuera del componente ──────
+// Al estar fuera del componente, no hay closures ni async que interfieran con el
+// user-gesture token del browser. Se llama DIRECTO desde el onClick del botón.
+function reproducirFinalizadoChofer() {
+  console.log("🎉 CLICK FINALIZAR: intentando audio");
+  const audio = new Audio("/sounds/alerta-viaje.mp3?v=final");
+  audio.volume = 1;
+  audio.currentTime = 0;
+  audio.loop = false;
+  audio.play()
+    .then(() => console.log("🎉 CLICK FINALIZAR: audio OK"))
+    .catch(err => console.warn("🎉 CLICK FINALIZAR: audio ERROR", err));
+}
+
 export default function ViajeActivoPage() {
   const { autorizado } = useProtegerRuta("chofer");
   const router = useRouter();
@@ -75,13 +89,25 @@ export default function ViajeActivoPage() {
   const [destNavPendiente, setDestNavPendiente] = useState<string | null>(null);
   const [navegadorPreferido, setNavegadorPreferido] = useState<string | null>(null);
 
-  const viajeTerminado    = useRef(false);
-  const usuarioRef        = useRef<any>(null);
-  const festejoSonadoRef  = useRef(false); // garantiza que el sonido de éxito suena UNA sola vez
+  const viajeTerminado       = useRef(false);
+  const usuarioRef           = useRef<any>(null);
+  const festejoSonadoRef     = useRef(false);
+  const finalizadoAudioRef   = useRef<HTMLAudioElement | null>(null);
 
   useEffect(() => {
     const u = localStorage.getItem("usuario");
     if (u) usuarioRef.current = JSON.parse(u);
+  }, []);
+
+  useEffect(() => {
+    finalizadoAudioRef.current = new Audio("/sounds/alerta-viaje.mp3?v=final");
+    finalizadoAudioRef.current.preload = "auto";
+    finalizadoAudioRef.current.volume = 1;
+    finalizadoAudioRef.current.loop = false;
+    return () => {
+      finalizadoAudioRef.current?.pause();
+      finalizadoAudioRef.current = null;
+    };
   }, []);
 
   // ─── Battery ─────────────────────────────────────────────────────────────
@@ -287,10 +313,7 @@ export default function ViajeActivoPage() {
   const actualizarEstado = async (nuevoEstado: string) => {
     if (!viaje?.id) return;
     if (bloqueadoPorParadas) { alert("Completá todas las paradas antes de finalizar"); return; }
-    if (nuevoEstado === "Viaje finalizado" && !festejoSonadoRef.current) {
-      festejoSonadoRef.current = true;
-      new Audio("/sounds/finalizado.mp3").play().catch(() => {});
-    }
+
     const now = new Date().toISOString();
     const upd: any = { estado: nuevoEstado };
     if (nuevoEstado === "En camino")        upd.hora_inicio      = now;
@@ -404,11 +427,29 @@ export default function ViajeActivoPage() {
 
           {/* Botón principal */}
           {botonActivo && (
-            <button type="button" onClick={() => actualizarEstado(botonActivo.nombre)} disabled={bloqueadoPorParadas}
+            <button
+              type="button"
+              disabled={bloqueadoPorParadas}
               className={`w-full py-4 rounded-2xl font-black text-lg transition ${
                 bloqueadoPorParadas ? "bg-zinc-800 text-zinc-500 cursor-not-allowed"
                 : `${botonActivo.color} hover:opacity-90 active:scale-[0.98]`
-              }`}>
+              }`}
+              onClick={() => {
+                if (botonActivo?.nombre === "Viaje finalizado") {
+                  console.log("FINALIZAR CLICK");
+                  const audio = finalizadoAudioRef.current;
+                  console.log("audioRef", audio);
+                  if (audio) {
+                    audio.pause();
+                    audio.currentTime = 0;
+                    audio.play()
+                      .then(() => { console.log("FINALIZADO PLAY OK"); })
+                      .catch((err) => { console.error("FINALIZADO PLAY ERROR", err); });
+                  }
+                }
+                actualizarEstado(botonActivo.nombre);
+              }}
+            >
               {botonActivo.label}{bloqueadoPorParadas ? " 🔒" : ""}
             </button>
           )}

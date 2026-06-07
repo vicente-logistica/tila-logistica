@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../lib/supabase";
 import { useProtegerRuta } from "../hooks/useProtegerRuta";
 import MapaTILA from "../components/MapaTILA";
@@ -315,9 +315,13 @@ export default function PanelClientePage() {
   const [mostrarHistorial, setMostrarHistorial]   = useState(false);
   const [alerta, setAlerta]                   = useState<string | null>(null);
 
-  const audioRef           = useRef<HTMLAudioElement | null>(null);
-  const ultimoEstadoRef    = useRef<Record<string, string>>({});
-  const festejoClienteRef  = useRef<Set<string>>(new Set()); // IDs ya celebrados — evita repetir por polling
+  const audioRef              = useRef<HTMLAudioElement | null>(null);
+  // audioFinalizadoRef es un objeto Audio creado en useEffect — NO elemento DOM
+  // así persiste aunque la vista cambie entre SeguimientoViaje / festejo / panel normal
+  const audioFinalizadoRef    = useRef<HTMLAudioElement | null>(null);
+  const audioDesbloquedoRef   = useRef(false); // guard — desbloquear ambos una sola vez
+  const ultimoEstadoRef       = useRef<Record<string, string>>({});
+  const festejoClienteRef     = useRef<Set<string>>(new Set()); // IDs ya celebrados — evita repetir por polling
   const [festejoViaje, setFestejoViaje] = useState<any>(null); // viaje que disparó el festejo del cliente
 
   const usuario = useMemo(() => {
@@ -328,6 +332,34 @@ export default function PanelClientePage() {
 
   const viajesActivos   = useMemo(() => viajes.filter(v => ESTADOS_ACTIVOS.includes(v.estado || "pendiente")), [viajes]);
   const viajesHistorial = useMemo(() => viajes.filter(v => ESTADOS_HISTORIAL.includes(v.estado)), [viajes]);
+
+  /** Desbloquea ambos audio elements con un play silencioso en el contexto de gesto del usuario.
+   *  Llamar en cualquier botón/tap del cliente para que audio.mp3 pueda sonar luego. */
+  const desbloquearAudios = useCallback(async () => {
+    if (audioDesbloquedoRef.current) return;
+    audioDesbloquedoRef.current = true;
+    const silentUnlock = async (audio: HTMLAudioElement | null) => {
+      if (!audio) return;
+      try {
+        audio.volume = 0;
+        await audio.play();
+        audio.pause();
+        audio.currentTime = 0;
+        audio.volume = 1;
+      } catch { /* ignorar — el navegador puede denegar silently */ }
+    };
+    await Promise.all([silentUnlock(audioRef.current), silentUnlock(audioFinalizadoRef.current)]);
+    console.log("[CLIENTE-AUDIO] ambos audios desbloqueados");
+  }, []);
+
+  // Crear el objeto Audio de finalizado en el cliente (no en SSR) y pre-cargarlo
+  useEffect(() => {
+    const af = new Audio("/sounds/alerta-viaje.mp3?v=cliente-final");
+    af.preload = "auto";
+    af.volume = 1;
+    audioFinalizadoRef.current = af;
+    return () => { af.pause(); };
+  }, []);
 
   const cargarViajes = async () => {
     if (!usuario?.id) return;
@@ -349,7 +381,16 @@ export default function PanelClientePage() {
           // Festejo especial de entrega — una sola vez por viaje
           festejoClienteRef.current.add(String(v.id));
           setFestejoViaje(v);
-          new Audio("/sounds/finalizado.mp3").play().catch(() => {});
+          // Reproducir via objeto Audio persistente (no depende del DOM ni de la vista activa)
+          const af = audioFinalizadoRef.current;
+          if (af) {
+            console.log("🎉 Intentando sonido finalizado", "cliente");
+            af.volume = 1;
+            af.currentTime = 0;
+            af.play()
+              .then(() => console.log("🎉 Sonido finalizado OK", "cliente"))
+              .catch(e => console.warn("🎉 Sonido finalizado bloqueado/error", e));
+          }
           setTimeout(() => setFestejoViaje(null), 7000);
         } else {
           // Alerta genérica para otros cambios de estado
@@ -466,8 +507,12 @@ export default function PanelClientePage() {
   );
 
   return (
-    <main className="min-h-screen bg-black text-white p-4 pb-10">
+    /* eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions */
+    <main className="min-h-screen bg-black text-white p-4 pb-10"
+      onClick={desbloquearAudios} onTouchStart={desbloquearAudios}>
+      {/* Audio de alerta genérica (cambios de estado) */}
       <audio ref={audioRef} src="/sounds/alerta-viaje.mp3" preload="auto" />
+      {/* audioFinalizadoRef es un objeto Audio JS creado en useEffect — no necesita elemento DOM */}
 
       {/* Alerta cambio de estado */}
       {alerta && (
