@@ -8,7 +8,7 @@ type Rol = "admin" | "chofer" | "cliente";
 const panelPorRol: Record<Rol, string> = {
   admin: "/admin",
   chofer: "/panel-chofer",
-  cliente: "/publicar",
+  cliente: "/panel-cliente",
 };
 
 export function useProtegerRuta(rolRequerido: Rol) {
