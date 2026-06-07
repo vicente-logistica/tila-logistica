@@ -36,6 +36,7 @@ export default function PanelChoferPage() {
   const [accionesRequeridas, setAccionesRequeridas] = useState<string[]>([]);
   const [onlineCargado, setOnlineCargado]   = useState(false);
   const [mostrarMapa, setMostrarMapa]       = useState(false);
+  const [mostrarHistorial, setMostrarHistorial] = useState(false);
 
   const [viajeActivo, setViajeActivo]               = useState<any>(null);
   const [buscandoViajeActivo, setBuscandoViajeActivo] = useState(true);
@@ -489,22 +490,12 @@ export default function PanelChoferPage() {
 
   return (
     <>
-      <main className="min-h-screen bg-black text-white px-4 py-6 flex items-center justify-center">
+      {/* eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions */}
+      <main className="min-h-screen bg-black text-white px-4 py-6 flex items-center justify-center"
+        onClick={desbloquearAudio} onTouchStart={desbloquearAudio}>
         <audio ref={audioRef} src="/sounds/alerta-viaje.mp3" loop preload="auto" />
 
         <div className="w-full max-w-5xl flex flex-col gap-6">
-
-          {/* Chip de sonido — compacto y discreto */}
-          {!audioDesbloqueado ? (
-            <button type="button" onClick={desbloquearAudio}
-              className="self-center bg-zinc-800 hover:bg-zinc-700 border border-zinc-600 text-zinc-300 font-black px-4 py-2 rounded-full text-xs transition flex items-center gap-2">
-              🔔 Activar alertas
-            </button>
-          ) : (
-            <div className="self-center flex items-center gap-2 bg-zinc-900 border border-green-700 px-3 py-1.5 rounded-full text-xs text-green-400 font-black">
-              🟢 Alertas activas
-            </div>
-          )}
 
           {/* Tarjeta viaje activo */}
           {!buscandoViajeActivo && viajeActivo && (
@@ -684,12 +675,21 @@ export default function PanelChoferPage() {
       </main>
 
       {autorizado && (
-        <div className="bg-black text-white px-4 py-8">
+        <div className="bg-black text-white px-4 py-4">
           <div className="max-w-3xl mx-auto">
-            <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-6">
-              <h2 className="text-2xl font-black text-yellow-400 mb-6">📋 Mis viajes</h2>
-              <HistorialChofer />
-            </div>
+            <button
+              type="button"
+              onClick={() => setMostrarHistorial(v => !v)}
+              className="w-full flex items-center justify-between bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 px-5 py-4 rounded-3xl text-left transition"
+            >
+              <span className="text-yellow-400 font-black text-lg">📋 Mis viajes</span>
+              <span className="text-zinc-500 font-black">{mostrarHistorial ? "▲ Ocultar" : "▼ Ver historial"}</span>
+            </button>
+            {mostrarHistorial && (
+              <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-6 mt-2">
+                <HistorialChofer />
+              </div>
+            )}
           </div>
         </div>
       )}

@@ -5,6 +5,7 @@ import { supabase } from "../lib/supabase";
 import {
   DOCS_PERSONALES,
   DOCS_VEHICULO,
+  FOTOS_VEHICULO,
   TIPOS_VEHICULO_CHOFER,
   VehiculoRow,
   labelVehiculo,
@@ -309,6 +310,21 @@ export default function GestionVehiculosChofer({ choferId, categoriaLegal, onAct
                 listo={!!(vehiculoActivo as any)[doc.campo]}
                 subiendo={subiendo === doc.tipo}
                 onFile={f => subirDocVehiculo(doc.tipo, doc.bucket, doc.campo, f)} />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Fotos del vehículo — 4 ángulos, guardadas en documentacion_chofer */}
+      {vehiculoActivo && (
+        <div>
+          <p className="text-zinc-500 text-xs font-black mb-2">FOTOS DEL VEHÍCULO (4 ángulos)</p>
+          <div className="grid grid-cols-2 gap-2">
+            {FOTOS_VEHICULO.map(doc => (
+              <DocUpload key={doc.tipo} label={doc.label}
+                listo={!!docsPersonales[doc.tipo]}
+                subiendo={subiendo === doc.tipo}
+                onFile={f => subirDocPersonal(doc.tipo, doc.bucket, f)} />
             ))}
           </div>
         </div>
