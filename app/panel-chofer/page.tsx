@@ -63,22 +63,6 @@ export default function PanelChoferPage() {
   useEffect(() => { onlineRef.current = online; }, [online]);
 
   // ─── Audio ────────────────────────────────────────────────────────────────
-  const desbloquearAudio = useCallback(async () => {
-    if (!audioRef.current || audioDesbloqueadoRef.current) return;
-    audioDesbloqueadoRef.current = true; // guard inmediato — evita doble-call en mobile (onTouchStart + onClick)
-    try {
-      audioRef.current.volume = 0;
-      await audioRef.current.play();
-      audioRef.current.pause();
-      audioRef.current.currentTime = 0;
-      audioRef.current.volume = 1;
-      console.log("[ALARMA] audio desbloqueado ok");
-    } catch (e) {
-      audioDesbloqueadoRef.current = false; // reset para reintentar si falla
-      console.warn("[ALARMA] desbloqueo bloqueado por navegador:", e);
-    }
-  }, []);
-
   const reproducirAlarma = useCallback(() => {
     console.log("[ALARMA] intento reproducir", {
       audio: !!audioRef.current,
@@ -104,6 +88,27 @@ export default function PanelChoferPage() {
     audioRef.current.currentTime = 0;
     sonandoRef.current = false;
   }, []);
+
+  const desbloquearAudio = useCallback(async () => {
+    if (!audioRef.current || audioDesbloqueadoRef.current) return;
+    audioDesbloqueadoRef.current = true; // guard inmediato — evita doble-call en mobile (onTouchStart + onClick)
+    try {
+      audioRef.current.volume = 0;
+      await audioRef.current.play();
+      audioRef.current.pause();
+      audioRef.current.currentTime = 0;
+      audioRef.current.volume = 1;
+      console.log("[ALARMA] audio desbloqueado ok");
+      // Si hay viaje activo y online, disparar alarma ahora que el audio está habilitado
+      if (onlineRef.current && !sonandoRef.current) {
+        console.log("[ALARMA] disparando alarma post-desbloqueo");
+        reproducirAlarma();
+      }
+    } catch (e) {
+      audioDesbloqueadoRef.current = false; // reset para reintentar si falla
+      console.warn("[ALARMA] desbloqueo bloqueado por navegador:", e);
+    }
+  }, [reproducirAlarma]);
 
   // ─── Viaje activo ─────────────────────────────────────────────────────────
   useEffect(() => {
@@ -408,6 +413,17 @@ export default function PanelChoferPage() {
 
   const cargaActual    = online ? cargas[indice] : null;
   const paradasActuales = cargaActual ? (paradasPorCarga[String(cargaActual.id)] || []) : [];
+
+  // ─── Disparar alarma cuando online + hay viaje disponible ────────────────
+  // Cubre el caso: chofer entra con viaje existente, va ONLINE, cargaActual
+  // pasa de null a un viaje — ningún otro path dispara la alarma en ese momento.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (online && cargaActual && !sonandoRef.current) {
+      console.log("[ALARMA] cargaActual disponible con online=true, disparando alarma", { id: cargaActual.id });
+      reproducirAlarma();
+    }
+  }, [online, cargaActual?.id, reproducirAlarma]); // eslint-disable-line react-hooks/exhaustive-deps
   const paradasParaMapa: ParadaMapa[] = paradasActuales.map(p => ({
     direccion: p.direccion,
     tipo:      p.tipo as "retiro" | "entrega" | "parada",
