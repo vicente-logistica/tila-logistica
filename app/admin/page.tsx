@@ -87,6 +87,7 @@ const TarjetaUsuario = ({
   esUnicoAdmin,
   usuarioActualId,
   onActualizar,
+  onActualizarAprobacionChofer,
   onResetPassword,
   onEliminar,
   onRestaurar,
@@ -95,6 +96,7 @@ const TarjetaUsuario = ({
   esUnicoAdmin: boolean;
   usuarioActualId: string;
   onActualizar: (id: string, campo: string, valor: string) => void;
+  onActualizarAprobacionChofer?: (id: string, estado: string) => void;
   onResetPassword: (id: string, nombre: string) => void;
   onEliminar: (id: string, nombre: string, esAdmin: boolean) => void;
   onRestaurar: (id: string) => void;
@@ -123,6 +125,11 @@ const TarjetaUsuario = ({
 
   const estaEliminado = usuario.eliminado === true;
   const esSelf = usuario.id === usuarioActualId;
+
+  const cambiarEstadoChofer = (estado: string) => {
+    if (onActualizarAprobacionChofer) onActualizarAprobacionChofer(usuario.id, estado);
+    else onActualizar(usuario.id, "estado_aprobacion", estado);
+  };
 
   return (
     <div className={`border rounded-2xl p-5 ${estaEliminado ? "border-red-900 bg-red-950/20 opacity-60" : "border-zinc-800 bg-black"}`}>
@@ -192,10 +199,10 @@ const TarjetaUsuario = ({
         <div className="grid grid-cols-2 gap-2">
           {/* Acciones por rol */}
           {usuario.rol === "chofer" && <>
-            <button onClick={() => onActualizar(usuario.id, "estado_aprobacion", "aprobado")} className="bg-green-700 text-white font-black py-2 rounded-xl text-xs">✅ Aprobar</button>
-            <button onClick={() => onActualizar(usuario.id, "estado_aprobacion", "rechazado")} className="bg-red-700 text-white font-black py-2 rounded-xl text-xs">❌ Rechazar</button>
-            <button onClick={() => onActualizar(usuario.id, "estado_aprobacion", "suspendido")} className="bg-orange-600 text-white font-black py-2 rounded-xl text-xs">⛔ Suspender</button>
-            <button onClick={() => onActualizar(usuario.id, "estado_aprobacion", "pendiente")} className="bg-zinc-600 text-white font-black py-2 rounded-xl text-xs">🔄 Reactivar</button>
+            <button onClick={() => cambiarEstadoChofer("aprobado")} className="bg-green-700 text-white font-black py-2 rounded-xl text-xs">✅ Aprobar</button>
+            <button onClick={() => cambiarEstadoChofer("rechazado")} className="bg-red-700 text-white font-black py-2 rounded-xl text-xs">❌ Rechazar</button>
+            <button onClick={() => cambiarEstadoChofer("suspendido")} className="bg-orange-600 text-white font-black py-2 rounded-xl text-xs">⛔ Suspender</button>
+            <button onClick={() => cambiarEstadoChofer("pendiente")} className="bg-zinc-600 text-white font-black py-2 rounded-xl text-xs">🔄 Reactivar</button>
           </>}
 
           {usuario.rol === "cliente" && <>
@@ -229,6 +236,7 @@ const TIPOS_DOC_LABELS: Record<string, string> = {
   foto_lateral_der: "Lat. Der", foto_trasera: "Trasera",
 };
 const DOCS_REQUERIDOS_ADMIN = ["dni_frente", "dni_dorso", "licencia", "seguro", "cedula", "foto_frente", "foto_lateral_izq", "foto_lateral_der", "foto_trasera"];
+const MENSAJE_APROBACION_MANUAL = "Documentación incompleta — aprobación manual bajo responsabilidad del administrador";
 
 const TarjetaChofer = ({ chofer, onActualizarAprobacion }: { chofer: any; onActualizarAprobacion: (id: string, estado: string) => void }) => {
   const [documentos, setDocumentos] = useState<Record<string, string>>({});
@@ -313,15 +321,17 @@ const TarjetaChofer = ({ chofer, onActualizarAprobacion }: { chofer: any; onActu
           ))}
         </div>
         {!puedeAprobar && (
-          <p className="text-red-400 text-xs font-black mt-2">⚠️ Falta documentación — no se puede aprobar</p>
+          <p className="text-orange-400 text-xs font-black mt-2 border border-orange-500 rounded-lg p-2">
+            ⚠️ Documentación incompleta — podés aprobar manualmente bajo tu responsabilidad
+          </p>
         )}
       </div>
     )}
 
     <div className="grid grid-cols-2 gap-2">
       <button
-        onClick={() => puedeAprobar ? onActualizarAprobacion(chofer.id, "aprobado") : alert("El chofer no tiene documentación completa. No se puede aprobar.")}
-        className={`font-black py-2 rounded-xl text-sm ${puedeAprobar ? "bg-green-600 text-white" : "bg-zinc-700 text-zinc-500 cursor-not-allowed"}`}>
+        onClick={() => onActualizarAprobacion(chofer.id, "aprobado")}
+        className="bg-green-600 hover:bg-green-500 text-white font-black py-2 rounded-xl text-sm">
         ✅ Aprobar
       </button>
       <button onClick={() => onActualizarAprobacion(chofer.id, "rechazado")} className="bg-red-700 text-white font-black py-2 rounded-xl text-sm">❌ Rechazar</button>
@@ -938,6 +948,17 @@ export default function AdminPage() {
   };
 
   const actualizarAprobacionChofer = async (id: string, estado: string) => {
+    const estadosPermitidos = ["aprobado", "pendiente", "rechazado", "suspendido"];
+    if (!estadosPermitidos.includes(estado)) {
+      alert("Estado no permitido: " + estado);
+      return;
+    }
+    if (estado === "aprobado") {
+      const { data } = await supabase.from("documentacion_chofer").select("tipo").eq("chofer_id", id);
+      const tipos = new Set((data || []).map((d: any) => d.tipo));
+      const docsCompletos = DOCS_REQUERIDOS_ADMIN.every(t => tipos.has(t));
+      if (!docsCompletos) alert(MENSAJE_APROBACION_MANUAL);
+    }
     await actualizarCampoUsuario(id, "estado_aprobacion", estado);
   };
 
@@ -1024,6 +1045,7 @@ export default function AdminPage() {
                 esUnicoAdmin={adminCount <= 1}
                 usuarioActualId={usuarioActual?.id || ""}
                 onActualizar={actualizarCampoUsuario}
+                onActualizarAprobacionChofer={actualizarAprobacionChofer}
                 onResetPassword={resetearPassword}
                 onEliminar={marcarEliminado}
                 onRestaurar={restaurarUsuario}
