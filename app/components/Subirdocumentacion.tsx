@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { supabase } from "../lib/supabase";
+import { subirDocChofer } from "../lib/vehiculos";
 
 interface Documento {
   tipo: string;
@@ -50,19 +51,19 @@ export default function SubirDocumentacion({ choferIdExterno, soloLectura = fals
 
   const cargarDocumentos = async () => {
     if (!choferId) return;
-    console.log("[SubirDocumentacion] cargarDocumentos", { choferId });
+    console.log("[TILA-DOC] cargarDocumentos", { choferId });
     const { data, error } = await supabase
       .from("documentacion_chofer")
       .select("tipo, url")
       .eq("chofer_id", choferId);
-    console.log("[SubirDocumentacion] cargarDocumentos resultado", {
+    console.log("[TILA-DOC] cargarDocumentos resultado", {
       ok: !error,
       count: data?.length ?? 0,
       data,
       error: error ? { message: error.message, code: error.code, details: error.details } : null,
     });
     if (error) {
-      alert("Error cargar documentacion_chofer: " + error.message);
+      alert(error.message);
       return;
     }
     if (data) {
@@ -73,98 +74,34 @@ export default function SubirDocumentacion({ choferIdExterno, soloLectura = fals
   };
 
   const subirArchivo = async (tipo: string, bucket: string, archivo: File) => {
-    if (!choferId) {
-      console.warn("[SubirDocumentacion] subirArchivo sin choferId", { tipo, bucket });
-      alert("No se encontró ID del chofer");
-      return;
-    }
-    setSubiendo(prev => ({ ...prev, [tipo]: true }));
-
-    const ext = archivo.name.split(".").pop();
-    const path = `${choferId}/${tipo}.${ext}`;
-
-    console.log("[SubirDocumentacion] ANTES upload", {
+    console.log("[TILA-DOC] PASO 1 — archivo seleccionado (SubirDocumentacion)", {
       choferId,
       tipo,
       bucket,
-      path,
       archivo: { name: archivo.name, size: archivo.size, type: archivo.type },
     });
 
-    const { data: dataUpload, error: errorUpload } = await supabase.storage
-      .from(bucket)
-      .upload(path, archivo, { upsert: true });
+    if (!choferId) {
+      console.warn("[TILA-DOC] subirArchivo sin choferId", { tipo, bucket });
+      alert("No se encontró ID del chofer");
+      return;
+    }
 
-    console.log("[SubirDocumentacion] DESPUÉS upload", {
-      ok: !errorUpload,
-      dataUpload,
-      errorUpload: errorUpload
-        ? { message: errorUpload.message, name: errorUpload.name, statusCode: (errorUpload as any).statusCode }
-        : null,
+    setSubiendo(prev => ({ ...prev, [tipo]: true }));
+
+    const url = await subirDocChofer(supabase, choferId, tipo, bucket, archivo);
+
+    console.log("[TILA-DOC] subirArchivo resultado (SubirDocumentacion)", {
+      tipo,
+      urlOk: !!url,
+      url,
     });
 
-    if (errorUpload) {
-      alert("Error al subir: " + errorUpload.message);
+    if (!url) {
       setSubiendo(prev => ({ ...prev, [tipo]: false }));
       return;
     }
 
-    const { data: urlData } = supabase.storage.from(bucket).getPublicUrl(path);
-    const url = urlData.publicUrl;
-
-    console.log("[SubirDocumentacion] DESPUÉS getPublicUrl", { path, bucket, urlData, url });
-
-    const payload = { chofer_id: choferId, tipo, url };
-    const { data: dataUpsert, error: errorDB } = await supabase
-      .from("documentacion_chofer")
-      .upsert([payload], { onConflict: "chofer_id,tipo" });
-
-    console.log("[SubirDocumentacion] DESPUÉS upsert documentacion_chofer", {
-      payload,
-      ok: !errorDB,
-      dataUpsert,
-      errorDB: errorDB
-        ? { message: errorDB.message, code: errorDB.code, details: errorDB.details, hint: errorDB.hint }
-        : null,
-    });
-
-    if (errorDB) {
-      alert("Error upsert documentacion_chofer: " + errorDB.message);
-      console.log("[SubirDocumentacion] upsert falló — intentando insert", { payload });
-      const { data: dataInsert, error: errorInsert } = await supabase
-        .from("documentacion_chofer")
-        .insert([payload]);
-      console.log("[SubirDocumentacion] DESPUÉS insert fallback", {
-        ok: !errorInsert,
-        dataInsert,
-        errorInsert: errorInsert
-          ? { message: errorInsert.message, code: errorInsert.code, details: errorInsert.details }
-          : null,
-      });
-      if (errorInsert) {
-        alert("Error insert documentacion_chofer: " + errorInsert.message);
-        console.log("[SubirDocumentacion] insert falló — intentando update", { payload });
-        const { data: dataUpdate, error: errorUpdate } = await supabase
-          .from("documentacion_chofer")
-          .update({ url })
-          .eq("chofer_id", choferId)
-          .eq("tipo", tipo);
-        console.log("[SubirDocumentacion] DESPUÉS update fallback", {
-          ok: !errorUpdate,
-          dataUpdate,
-          errorUpdate: errorUpdate
-            ? { message: errorUpdate.message, code: errorUpdate.code, details: errorUpdate.details }
-            : null,
-        });
-        if (errorUpdate) {
-          alert("Error update documentacion_chofer: " + errorUpdate.message);
-          setSubiendo(prev => ({ ...prev, [tipo]: false }));
-          return;
-        }
-      }
-    }
-
-    console.log("[SubirDocumentacion] subida OK — actualizando estado local", { tipo, url });
     setDocumentos(prev => ({ ...prev, [tipo]: url }));
     setSubiendo(prev => ({ ...prev, [tipo]: false }));
   };
@@ -247,13 +184,17 @@ function ItemDocumento({ doc, url, subiendo, soloLectura, onSeleccionar }: {
 
   const manejarCambio = (e: React.ChangeEvent<HTMLInputElement>) => {
     const archivo = e.target.files?.[0];
-    console.log("[SubirDocumentacion] ItemDocumento onChange", {
+    console.log("[TILA-DOC] PASO 1 — archivo seleccionado (SubirDocumentacion ItemDocumento)", {
       tipo: doc.tipo,
+      label: doc.label,
       archivo: archivo
         ? { name: archivo.name, size: archivo.size, type: archivo.type }
         : null,
     });
-    if (!archivo) return;
+    if (!archivo) {
+      alert("No se recibió archivo del dispositivo");
+      return;
+    }
     const reader = new FileReader();
     reader.onload = ev => setPreview(ev.target?.result as string);
     reader.readAsDataURL(archivo);

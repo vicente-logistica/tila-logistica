@@ -9,7 +9,6 @@ import {
   VehiculoRow,
   labelVehiculo,
   subirDocChofer,
-  actualizarCampoVehiculo,
 } from "../lib/vehiculos";
 import { evaluarChoferOnline, hoyIso } from "../lib/validacion-chofer";
 
@@ -128,11 +127,13 @@ export default function GestionVehiculosChofer({ choferId, categoriaLegal, onAct
   };
 
   const subirDocPersonal = async (tipo: string, bucket: string, archivo: File) => {
-    console.log("[GestionVehiculosChofer] subirDocPersonal inicio", { choferId, tipo, bucket, archivo: { name: archivo.name, size: archivo.size, type: archivo.type } });
+    console.log("[TILA-DOC] PASO 1 — archivo seleccionado (GestionVehiculosChofer personal)", {
+      choferId, tipo, bucket,
+      archivo: { name: archivo.name, size: archivo.size, type: archivo.type },
+    });
     setSubiendo(tipo);
     const url = await subirDocChofer(supabase, choferId, tipo, bucket, archivo);
-    console.log("[GestionVehiculosChofer] subirDocPersonal fin", { tipo, urlOk: !!url, url });
-    if (!url) console.warn("[GestionVehiculosChofer] subirDocPersonal falló — url null (ver logs subirDocChofer)");
+    console.log("[TILA-DOC] subirDocPersonal fin", { tipo, urlOk: !!url, url });
     setSubiendo(null);
     await cargar();
     onActualizado?.();
@@ -140,15 +141,23 @@ export default function GestionVehiculosChofer({ choferId, categoriaLegal, onAct
 
   const subirDocVehiculo = async (tipo: string, bucket: string, campo: keyof VehiculoRow, archivo: File) => {
     if (!vehiculoActivo) { alert("Seleccioná un vehículo primero"); return; }
-    console.log("[GestionVehiculosChofer] subirDocVehiculo inicio", { choferId, vehiculoId: vehiculoActivo.id, tipo, bucket, campo, archivo: { name: archivo.name, size: archivo.size, type: archivo.type } });
+    console.log("[TILA-DOC] PASO 1 — archivo seleccionado (GestionVehiculosChofer vehículo)", {
+      choferId, vehiculoId: vehiculoActivo.id, tipo, bucket, campo,
+      archivo: { name: archivo.name, size: archivo.size, type: archivo.type },
+    });
     setSubiendo(tipo);
     const url = await subirDocChofer(supabase, choferId, tipo, bucket, archivo);
-    console.log("[GestionVehiculosChofer] subirDocVehiculo post subirDocChofer", { tipo, urlOk: !!url, url });
+    console.log("[TILA-DOC] subirDocVehiculo post subirDocChofer", { tipo, urlOk: !!url, url });
     if (url) {
-      await actualizarCampoVehiculo(supabase, vehiculoActivo.id, campo, url);
-      console.log("[GestionVehiculosChofer] subirDocVehiculo campo vehiculos actualizado", { campo, url });
-    } else {
-      console.warn("[GestionVehiculosChofer] subirDocVehiculo falló — url null (ver logs subirDocChofer)");
+      const { error: errVehiculo } = await supabase
+        .from("vehiculos")
+        .update({ [campo]: url, updated_at: new Date().toISOString() })
+        .eq("id", vehiculoActivo.id);
+      console.log("[TILA-DOC] update vehiculos campo", {
+        campo, url, ok: !errVehiculo,
+        error: errVehiculo ? { message: errVehiculo.message, code: errVehiculo.code } : null,
+      });
+      if (errVehiculo) alert(errVehiculo.message);
     }
     setSubiendo(null);
     await cargar();
@@ -320,11 +329,15 @@ function DocUpload({ label, listo, subiendo, onFile }: {
       <input type="file" accept="image/*,.pdf" className="hidden" disabled={subiendo}
         onChange={e => {
           const f = e.target.files?.[0];
-          console.log("[GestionVehiculosChofer] DocUpload onChange", {
+          console.log("[TILA-DOC] PASO 1 — archivo seleccionado (GestionVehiculosChofer DocUpload)", {
             label,
             archivo: f ? { name: f.name, size: f.size, type: f.type } : null,
           });
-          if (f) onFile(f);
+          if (!f) {
+            alert("No se recibió archivo del dispositivo");
+            return;
+          }
+          onFile(f);
           e.target.value = "";
         }} />
     </label>

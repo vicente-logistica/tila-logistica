@@ -69,7 +69,7 @@ export async function subirDocChofer(
   const ext = archivo.name.split(".").pop() || "bin";
   const path = `${choferId}/${tipo}.${ext}`;
 
-  console.log("[subirDocChofer] ANTES upload", {
+  console.log("[TILA-DOC] PASO 2 — ANTES upload Storage", {
     choferId,
     tipo,
     bucket,
@@ -82,53 +82,60 @@ export async function subirDocChofer(
     },
   });
 
-  const { data: dataUpload, error: errorUpload } = await supabase.storage
-    .from(bucket)
-    .upload(path, archivo, { upsert: true });
+  try {
+    const { data: dataUpload, error: errorUpload } = await supabase.storage
+      .from(bucket)
+      .upload(path, archivo, { upsert: true });
 
-  console.log("[subirDocChofer] DESPUÉS upload", {
-    ok: !errorUpload,
-    dataUpload,
-    errorUpload: errorUpload
-      ? { message: errorUpload.message, name: errorUpload.name, statusCode: (errorUpload as any).statusCode }
-      : null,
-  });
+    console.log("[TILA-DOC] PASO 2 — DESPUÉS upload Storage", {
+      ok: !errorUpload,
+      dataUpload,
+      errorUpload: errorUpload
+        ? { message: errorUpload.message, name: errorUpload.name, statusCode: (errorUpload as any).statusCode }
+        : null,
+    });
 
-  if (errorUpload) {
-    alert("Error Storage upload: " + errorUpload.message);
+    if (errorUpload) {
+      alert(errorUpload.message);
+      return null;
+    }
+
+    const { data: urlData } = supabase.storage.from(bucket).getPublicUrl(path);
+    const url = urlData.publicUrl as string;
+
+    console.log("[TILA-DOC] PASO 3 — getPublicUrl", {
+      path,
+      bucket,
+      urlData,
+      url,
+    });
+
+    const payload = { chofer_id: choferId, tipo, url };
+    const { data: dataUpsert, error: errorUpsert } = await supabase
+      .from("documentacion_chofer")
+      .upsert([payload], { onConflict: "chofer_id,tipo" });
+
+    console.log("[TILA-DOC] PASO 4 — upsert documentacion_chofer", {
+      payload,
+      ok: !errorUpsert,
+      dataUpsert,
+      errorUpsert: errorUpsert
+        ? { message: errorUpsert.message, code: errorUpsert.code, details: errorUpsert.details, hint: errorUpsert.hint }
+        : null,
+    });
+
+    if (errorUpsert) {
+      alert(errorUpsert.message);
+      return null;
+    }
+
+    console.log("[TILA-DOC] OK — subida completa", { tipo, url });
+    return url;
+  } catch (err: any) {
+    console.error("[TILA-DOC] EXCEPCIÓN en subirDocChofer", err);
+    alert(err?.message || String(err));
     return null;
   }
-
-  const { data: urlData } = supabase.storage.from(bucket).getPublicUrl(path);
-  const url = urlData.publicUrl as string;
-
-  console.log("[subirDocChofer] DESPUÉS getPublicUrl", {
-    path,
-    bucket,
-    urlData,
-    url,
-  });
-
-  const payload = { chofer_id: choferId, tipo, url };
-  const { data: dataUpsert, error: errorUpsert } = await supabase
-    .from("documentacion_chofer")
-    .upsert([payload], { onConflict: "chofer_id,tipo" });
-
-  console.log("[subirDocChofer] DESPUÉS upsert documentacion_chofer", {
-    payload,
-    ok: !errorUpsert,
-    dataUpsert,
-    errorUpsert: errorUpsert
-      ? { message: errorUpsert.message, code: errorUpsert.code, details: errorUpsert.details, hint: errorUpsert.hint }
-      : null,
-  });
-
-  if (errorUpsert) {
-    alert("Error upsert documentacion_chofer: " + errorUpsert.message);
-    return null;
-  }
-
-  return url;
 }
 
 export async function actualizarCampoVehiculo(
