@@ -315,8 +315,10 @@ export default function PanelClientePage() {
   const [mostrarHistorial, setMostrarHistorial]   = useState(false);
   const [alerta, setAlerta]                   = useState<string | null>(null);
 
-  const audioRef        = useRef<HTMLAudioElement | null>(null);
-  const ultimoEstadoRef = useRef<Record<string, string>>({});
+  const audioRef           = useRef<HTMLAudioElement | null>(null);
+  const ultimoEstadoRef    = useRef<Record<string, string>>({});
+  const festejoClienteRef  = useRef<Set<string>>(new Set()); // IDs ya celebrados — evita repetir por polling
+  const [festejoViaje, setFestejoViaje] = useState<any>(null); // viaje que disparó el festejo del cliente
 
   const usuario = useMemo(() => {
     if (typeof window === "undefined") return null;
@@ -338,14 +340,23 @@ export default function PanelClientePage() {
     const todos = data || [];
     setViajes(todos);
 
-    // Alerta sonora en cambio de estado
+    // Alerta sonora y festejo en cambio de estado
     todos.forEach(v => {
       const prev   = ultimoEstadoRef.current[String(v.id)];
       const actual = v.estado || "pendiente";
       if (prev && prev !== actual) {
-        setAlerta(actual);
-        audioRef.current?.play().catch(() => {});
-        setTimeout(() => setAlerta(null), 4000);
+        if (actual === "Viaje finalizado" && !festejoClienteRef.current.has(String(v.id))) {
+          // Festejo especial de entrega — una sola vez por viaje
+          festejoClienteRef.current.add(String(v.id));
+          setFestejoViaje(v);
+          new Audio("/sounds/finalizado.mp3").play().catch(() => {});
+          setTimeout(() => setFestejoViaje(null), 7000);
+        } else {
+          // Alerta genérica para otros cambios de estado
+          setAlerta(actual);
+          audioRef.current?.play().catch(() => {});
+          setTimeout(() => setAlerta(null), 4000);
+        }
       }
       ultimoEstadoRef.current[String(v.id)] = actual;
     });
@@ -413,6 +424,34 @@ export default function PanelClientePage() {
   }, [viajes]);
 
   if (!autorizado) return null;
+
+  // ── Festejo entrega para el cliente ───────────────────────────────────────
+  if (festejoViaje) return (
+    <main className="min-h-screen bg-black flex items-center justify-center p-6"
+      onClick={() => setFestejoViaje(null)}>
+      <div className="relative bg-green-950 border-4 border-green-400 rounded-3xl p-8 text-center shadow-2xl max-w-sm w-full overflow-hidden">
+        {/* Decoración de fondo */}
+        <div className="absolute inset-0 flex flex-wrap items-center justify-center pointer-events-none select-none opacity-10 text-5xl gap-2 p-4">
+          {["📦","✅","🎉","📦","✅","🎉","📦","✅","🎉","📦","✅","🎉"].map((e, i) => <span key={i}>{e}</span>)}
+        </div>
+        {/* Contenido — orientado al cliente */}
+        <div className="relative z-10">
+          <div className="text-6xl mb-4 animate-bounce">✅</div>
+          <h1 className="text-2xl md:text-3xl font-black text-white mb-2 leading-tight">
+            Carga entregada con éxito
+          </h1>
+          <p className="text-lg font-black text-green-400 mb-2">Tu mercadería llegó a destino</p>
+          <p className="text-yellow-400 font-black text-base mb-6">¡Gracias por usar TILA!</p>
+          {festejoViaje.origen && (
+            <p className="text-zinc-400 text-xs mb-4 truncate">
+              {festejoViaje.origen} → {festejoViaje.destino}
+            </p>
+          )}
+          <p className="text-zinc-600 text-xs">Tocá para continuar</p>
+        </div>
+      </div>
+    </main>
+  );
 
   if (viajeSeleccionado) return (
     <SeguimientoViaje

@@ -328,21 +328,19 @@ export default function ViajeActivoPage() {
       <div className="relative bg-green-950 border-4 border-green-400 rounded-3xl p-8 text-center shadow-2xl max-w-xl w-full overflow-hidden">
         {/* Decoración de fondo */}
         <div className="absolute inset-0 flex flex-wrap items-center justify-center pointer-events-none select-none opacity-10 text-6xl gap-2 p-4">
-          {["🎊","🌟","🎉","✨","🎊","🌟","🎉","✨","🎊","🌟","🎉","✨"].map((e, i) => <span key={i}>{e}</span>)}
+          {["💼","💰","🎉","🌟","💼","💰","🎉","🌟","💼","💰","🎉","🌟"].map((e, i) => <span key={i}>{e}</span>)}
         </div>
-        {/* Contenido */}
+        {/* Contenido — orientado al chofer */}
         <div className="relative z-10">
-          <div className="text-6xl mb-4 animate-bounce">🎉</div>
-          <h1 className="text-3xl md:text-4xl font-black text-white mb-2 leading-tight">
-            Carga entregada con éxito
-          </h1>
-          <p className="text-2xl md:text-3xl font-black text-yellow-400 mb-6">¡Felicitaciones!</p>
-          <div className="bg-green-900 border border-green-500 rounded-2xl px-6 py-4 mb-6 inline-block">
+          <div className="text-7xl mb-3 animate-bounce">💼</div>
+          <h1 className="text-4xl md:text-5xl font-black text-white mb-2">🎉 VIAJE FINALIZADO 🎉</h1>
+          <p className="text-2xl font-black text-yellow-400 mb-6">¡Felicitaciones!</p>
+          <div className="bg-green-900 border border-green-500 rounded-2xl px-6 py-4 mb-4 inline-block">
             <p className="text-zinc-400 text-xs font-black mb-1">GANANCIA ACREDITADA</p>
             <p className="text-4xl font-black text-green-400">${Number(viaje?.pago_chofer || 0).toLocaleString()}</p>
           </div>
-          <p className="text-zinc-400 text-sm mb-1">🚛 Excelente trabajo</p>
-          <p className="text-zinc-600 text-xs">Volviendo al panel en unos segundos...</p>
+          <p className="text-zinc-300 text-lg font-bold mb-1">Excelente trabajo 🚛</p>
+          <p className="text-zinc-500 text-sm">Volviendo al panel...</p>
         </div>
       </div>
     </main>
