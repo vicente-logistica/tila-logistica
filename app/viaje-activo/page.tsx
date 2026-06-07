@@ -75,8 +75,9 @@ export default function ViajeActivoPage() {
   const [destNavPendiente, setDestNavPendiente] = useState<string | null>(null);
   const [navegadorPreferido, setNavegadorPreferido] = useState<string | null>(null);
 
-  const viajeTerminado = useRef(false);
-  const usuarioRef     = useRef<any>(null);
+  const viajeTerminado    = useRef(false);
+  const usuarioRef        = useRef<any>(null);
+  const festejoSonadoRef  = useRef(false); // garantiza que el sonido de éxito suena UNA sola vez
 
   useEffect(() => {
     const u = localStorage.getItem("usuario");
@@ -286,7 +287,10 @@ export default function ViajeActivoPage() {
   const actualizarEstado = async (nuevoEstado: string) => {
     if (!viaje?.id) return;
     if (bloqueadoPorParadas) { alert("Completá todas las paradas antes de finalizar"); return; }
-    if (nuevoEstado === "Viaje finalizado") new Audio("/sounds/alerta-viaje.mp3").play().catch(() => {});
+    if (nuevoEstado === "Viaje finalizado" && !festejoSonadoRef.current) {
+      festejoSonadoRef.current = true;
+      new Audio("/sounds/finalizado.mp3").play().catch(() => {});
+    }
     const now = new Date().toISOString();
     const upd: any = { estado: nuevoEstado };
     if (nuevoEstado === "En camino")        upd.hora_inicio      = now;
@@ -321,12 +325,25 @@ export default function ViajeActivoPage() {
   if (cargando)    return <main className="min-h-screen bg-black flex items-center justify-center"><p className="text-yellow-400 font-black text-2xl animate-pulse">Cargando viaje...</p></main>;
   if (festejo)     return (
     <main className="min-h-screen bg-black flex items-center justify-center p-6">
-      <div className="bg-green-600 border-4 border-white rounded-3xl p-8 text-center shadow-2xl animate-pulse max-w-xl w-full">
-        <h1 className="text-5xl font-black mb-4">🎉 VIAJE FINALIZADO 🎉</h1>
-        <div className="text-7xl mb-4 animate-bounce">💼💰</div>
-        <p className="text-2xl font-bold mb-2">Excelente trabajo 🚛</p>
-        <p className="text-4xl font-black text-yellow-300 mb-4">${Number(viaje?.pago_chofer || 0).toLocaleString()}</p>
-        <p className="text-lg">Volviendo al panel...</p>
+      <div className="relative bg-green-950 border-4 border-green-400 rounded-3xl p-8 text-center shadow-2xl max-w-xl w-full overflow-hidden">
+        {/* Decoración de fondo */}
+        <div className="absolute inset-0 flex flex-wrap items-center justify-center pointer-events-none select-none opacity-10 text-6xl gap-2 p-4">
+          {["🎊","🌟","🎉","✨","🎊","🌟","🎉","✨","🎊","🌟","🎉","✨"].map((e, i) => <span key={i}>{e}</span>)}
+        </div>
+        {/* Contenido */}
+        <div className="relative z-10">
+          <div className="text-6xl mb-4 animate-bounce">🎉</div>
+          <h1 className="text-3xl md:text-4xl font-black text-white mb-2 leading-tight">
+            Carga entregada con éxito
+          </h1>
+          <p className="text-2xl md:text-3xl font-black text-yellow-400 mb-6">¡Felicitaciones!</p>
+          <div className="bg-green-900 border border-green-500 rounded-2xl px-6 py-4 mb-6 inline-block">
+            <p className="text-zinc-400 text-xs font-black mb-1">GANANCIA ACREDITADA</p>
+            <p className="text-4xl font-black text-green-400">${Number(viaje?.pago_chofer || 0).toLocaleString()}</p>
+          </div>
+          <p className="text-zinc-400 text-sm mb-1">🚛 Excelente trabajo</p>
+          <p className="text-zinc-600 text-xs">Volviendo al panel en unos segundos...</p>
+        </div>
       </div>
     </main>
   );

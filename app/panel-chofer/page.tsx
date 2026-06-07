@@ -57,8 +57,11 @@ export default function PanelChoferPage() {
   const canalRef          = useRef<ReturnType<typeof supabase.channel> | null>(null);
   const intervaloRef      = useRef<ReturnType<typeof setInterval> | null>(null);
   // Ids de viajes ya sonados — para no repetir alarma para el mismo viaje
-  const viajesSonadosRef  = useRef<Set<string>>(new Set());
-  const sonandoRef        = useRef(false);
+  const viajesSonadosRef        = useRef<Set<string>>(new Set());
+  const sonandoRef              = useRef(false);
+  // Control de rechazos consecutivos y silencio temporal
+  const rechazosConsecutivosRef = useRef(0);
+  const silenciadoRef           = useRef(false); // true tras 3 rechazos; se resetea en INSERT o al volver ONLINE
 
   useEffect(() => { onlineRef.current = online; }, [online]);
 
@@ -99,11 +102,7 @@ export default function PanelChoferPage() {
       audioRef.current.currentTime = 0;
       audioRef.current.volume = 1;
       console.log("[ALARMA] audio desbloqueado ok");
-      // Si hay viaje activo y online, disparar alarma ahora que el audio está habilitado
-      if (onlineRef.current && !sonandoRef.current) {
-        console.log("[ALARMA] disparando alarma post-desbloqueo");
-        reproducirAlarma();
-      }
+      // No disparar alarma aquí — el control de cuándo sonar lo tiene intentarToggleOnline / cargarCargas
     } catch (e) {
       audioDesbloqueadoRef.current = false; // reset para reintentar si falla
       console.warn("[ALARMA] desbloqueo bloqueado por navegador:", e);
@@ -247,23 +246,24 @@ export default function PanelChoferPage() {
       );
     });
 
-    // ── Disparar alarma si online y hay viajes — ANTES del hash check ────
-    // Cubre: chofer ya tiene viajes, va ONLINE, polling siguiente no ve cambio
-    // de hash y hace early-return sin llegar al bloque de alarma anterior.
-    if (onlineRef.current && cargasFiltradas.length > 0 && !sonandoRef.current) {
-      console.log("[ALARMA] cargarCargas: online + viajes disponibles", { n: cargasFiltradas.length });
-      reproducirAlarma();
-    }
-
     // ── Evitar re-render si los ids no cambiaron ──────────────────────────
     const nuevoHash = cargasFiltradas.map(c => c.id).join(",");
     if (nuevoHash === cargasHashRef.current) return;
     cargasHashRef.current = nuevoHash;
 
-    // ── Registrar viajes nuevos (para lógica de sonados) ─────────────────
-    if (onlineRef.current) {
+    // ── Alarmar SOLO en IDs genuinamente nuevos (no vistos antes) ─────────
+    // Evita re-disparar por renders, polling o reconexiones sin cambio real.
+    if (onlineRef.current && !silenciadoRef.current) {
       const nuevos = cargasFiltradas.filter(c => !viajesSonadosRef.current.has(String(c.id)));
-      nuevos.forEach(c => viajesSonadosRef.current.add(String(c.id)));
+      if (nuevos.length > 0) {
+        nuevos.forEach(c => viajesSonadosRef.current.add(String(c.id)));
+        rechazosConsecutivosRef.current = 0; // viaje real nuevo → resetear contador
+        console.log("[ALARMA] cargarCargas: nuevos viajes detectados", { n: nuevos.length });
+        reproducirAlarma();
+      }
+    } else if (onlineRef.current && silenciadoRef.current) {
+      // Silenciado tras 3 rechazos — registrar IDs sin alarmar
+      cargasFiltradas.forEach(c => viajesSonadosRef.current.add(String(c.id)));
     }
 
     setCargas(cargasFiltradas);
@@ -300,8 +300,10 @@ export default function PanelChoferPage() {
     canalRef.current = supabase
       .channel("panel-chofer-realtime")
       .on("postgres_changes", { event: "INSERT", schema: "public", table: "cargas" }, () => {
-        // Disparar alarma de inmediato — sin esperar cargarCargas
-        if (onlineRef.current) reproducirAlarma();
+        // INSERT real → siempre resetear silencio y contador de rechazos
+        silenciadoRef.current = false;
+        rechazosConsecutivosRef.current = 0;
+        // cargarCargas detectará el ID nuevo y disparará la alarma
         cargarCargasRef.current();
       })
       .on("postgres_changes", { event: "UPDATE", schema: "public", table: "cargas" }, () => {
@@ -337,19 +339,28 @@ export default function PanelChoferPage() {
 
   // ─── Rechazar ────────────────────────────────────────────────────────────
   const rechazarViaje = () => {
-    console.log("[RECHAZAR] viaje rechazado localmente", { indice, total: cargas.length });
     detenerAlarma();
     setMostrarMapa(false);
+    rechazosConsecutivosRef.current += 1;
     const siguiente = indice + 1;
-    if (siguiente < cargas.length) {
+    console.log("[RECHAZAR] viaje rechazado", { indice, total: cargas.length, rechazos: rechazosConsecutivosRef.current });
+
+    if (rechazosConsecutivosRef.current >= 3) {
+      // 3 rechazos consecutivos — silenciar hasta nueva novedad real (INSERT) o que el chofer vuelva a ONLINE
+      console.log("[RECHAZAR] 3 rechazos consecutivos — silenciando alarma");
+      silenciadoRef.current = true;
+      setIndice(0); // volver al primero sin alarma (viajes siguen visibles)
+    } else if (siguiente < cargas.length) {
+      // Hay más viajes disponibles y no llegamos al límite — alarmar para el siguiente
       console.log("[RECHAZAR] siguiente viaje:", siguiente);
       setIndice(siguiente);
       setTimeout(() => reproducirAlarma(), 300);
     } else {
+      // Sin más viajes en la lista local — recargar
       console.log("[RECHAZAR] sin más viajes — limpiando y recargando");
       setIndice(0);
       viajesSonadosRef.current.clear();
-      cargasHashRef.current = ""; // forzar re-evaluación en cargarCargas para que el viaje suene de nuevo
+      cargasHashRef.current = "";
       cargarCargasRef.current();
     }
   };
@@ -366,6 +377,8 @@ export default function PanelChoferPage() {
     const carga = cargas[indice];
     if (!carga?.id) return;
     detenerAlarma();
+    rechazosConsecutivosRef.current = 0;
+    silenciadoRef.current = false;
     const u = localStorage.getItem("usuario");
     const usuario = u ? JSON.parse(u) : null;
     if (!usuario?.id || usuario?.rol !== "chofer") { alert("Sesión inválida: ingresá como chofer"); return; }
@@ -417,16 +430,11 @@ export default function PanelChoferPage() {
   const cargaActual    = online ? cargas[indice] : null;
   const paradasActuales = cargaActual ? (paradasPorCarga[String(cargaActual.id)] || []) : [];
 
-  // ─── Disparar alarma cuando online + hay viaje disponible ────────────────
-  // Cubre el caso: chofer entra con viaje existente, va ONLINE, cargaActual
-  // pasa de null a un viaje — ningún otro path dispara la alarma en ese momento.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => {
-    if (online && cargaActual && !sonandoRef.current) {
-      console.log("[ALARMA] cargaActual disponible con online=true, disparando alarma", { id: cargaActual.id });
-      reproducirAlarma();
-    }
-  }, [online, cargaActual?.id, reproducirAlarma]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Nota: no hay useEffect de alarma por cargaActual — la alarma se controla exclusivamente desde:
+  // 1. cargarCargas() cuando detecta IDs nuevos no vistos antes
+  // 2. intentarToggleOnline() al activarse ONLINE
+  // 3. evento INSERT del canal realtime
+  // Esto evita disparos por renders normales, polling o cambios de estado sin novedad real.
   const paradasParaMapa: ParadaMapa[] = paradasActuales.map(p => ({
     direccion: p.direccion,
     tipo:      p.tipo as "retiro" | "entrega" | "parada",
@@ -462,12 +470,15 @@ export default function PanelChoferPage() {
       setMostrarGestion(true);
       return;
     }
+    // Resetear estado de silencio y rechazos al activar online
+    silenciadoRef.current = false;
+    rechazosConsecutivosRef.current = 0;
+    viajesSonadosRef.current.clear();  // tratar todos los viajes existentes como nuevos
+    cargasHashRef.current = "";         // forzar re-evaluación completa en cargarCargas
+    onlineRef.current = true;           // sincronizar antes de cargarCargas (la ref se actualiza en useEffect)
     setOnline(true);
-    // Audio ya desbloqueado en este mismo click — disparar alarma si hay viajes
-    if (cargas.length > 0 && !sonandoRef.current) {
-      console.log("[ALARMA] intentarToggleOnline: online=true con viajes, disparando alarma");
-      setTimeout(() => { if (!sonandoRef.current) reproducirAlarma(); }, 100);
-    }
+    // cargarCargas detectará los viajes como "nuevos" (IDs no en viajesSonados) y alarmará si hay alguno
+    setTimeout(() => { cargarCargasRef.current(); }, 150);
   };
 
   const BloqueGestion = () => (
