@@ -14,8 +14,10 @@ const DOCUMENTOS: Documento[] = [
   { tipo: "dni_frente", label: "DNI Frente", bucket: "documentacion-choferes", icono: "🪪" },
   { tipo: "dni_dorso", label: "DNI Dorso", bucket: "documentacion-choferes", icono: "🪪" },
   { tipo: "licencia", label: "Licencia de conducir", bucket: "documentacion-choferes", icono: "📋" },
+  { tipo: "antecedentes", label: "Certificado de antecedentes", bucket: "documentacion-choferes", icono: "📋" },
   { tipo: "seguro", label: "Seguro del vehículo", bucket: "documentacion-choferes", icono: "🛡️" },
   { tipo: "cedula", label: "Cédula del vehículo", bucket: "documentacion-choferes", icono: "📄" },
+  { tipo: "vtv_rto", label: "VTV / RTO", bucket: "documentacion-choferes", icono: "📄" },
   { tipo: "foto_frente", label: "Foto frente vehículo", bucket: "vehiculos", icono: "🚛" },
   { tipo: "foto_lateral_izq", label: "Foto lateral izquierda", bucket: "vehiculos", icono: "🚛" },
   { tipo: "foto_lateral_der", label: "Foto lateral derecha", bucket: "vehiculos", icono: "🚛" },
@@ -23,15 +25,14 @@ const DOCUMENTOS: Documento[] = [
 ];
 
 interface SubirDocumentacionProps {
-  choferIdExterno?: string; // si se pasa desde afuera (registro)
-  soloLectura?: boolean;    // para admin: solo ver sin subir
+  choferIdExterno?: string;
+  soloLectura?: boolean;
 }
 
 export default function SubirDocumentacion({ choferIdExterno, soloLectura = false }: SubirDocumentacionProps) {
   const [documentos, setDocumentos] = useState<Record<string, string>>({});
   const [subiendo, setSubiendo] = useState<Record<string, boolean>>({});
   const [choferId, setChoferId] = useState<string | null>(choferIdExterno || null);
-  const inputRefs = useRef<Record<string, HTMLInputElement | null>>({});
 
   useEffect(() => {
     if (!choferIdExterno) {
@@ -80,13 +81,11 @@ export default function SubirDocumentacion({ choferIdExterno, soloLectura = fals
     const { data: urlData } = supabase.storage.from(bucket).getPublicUrl(path);
     const url = urlData.publicUrl;
 
-    // Upsert en documentacion_chofer
     const { error: errorDB } = await supabase
       .from("documentacion_chofer")
       .upsert([{ chofer_id: choferId, tipo, url }], { onConflict: "chofer_id,tipo" });
 
     if (errorDB) {
-      // Si falla upsert por constraint, intentar insert o update
       const { error: errorInsert } = await supabase
         .from("documentacion_chofer")
         .insert([{ chofer_id: choferId, tipo, url }]);
@@ -110,7 +109,6 @@ export default function SubirDocumentacion({ choferIdExterno, soloLectura = fals
 
   return (
     <div className="space-y-6">
-      {/* Progreso */}
       <div className="bg-zinc-800 rounded-2xl p-4">
         <div className="flex items-center justify-between mb-2">
           <p className="text-zinc-400 text-sm font-black">DOCUMENTACIÓN COMPLETA</p>
@@ -130,7 +128,6 @@ export default function SubirDocumentacion({ choferIdExterno, soloLectura = fals
         )}
       </div>
 
-      {/* Documentos */}
       <div>
         <h3 className="text-lg font-black text-yellow-400 mb-3">📋 Documentos personales</h3>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -141,14 +138,12 @@ export default function SubirDocumentacion({ choferIdExterno, soloLectura = fals
               url={documentos[doc.tipo]}
               subiendo={subiendo[doc.tipo]}
               soloLectura={soloLectura}
-              inputRef={el => { inputRefs.current[doc.tipo] = el; }}
               onSeleccionar={archivo => subirArchivo(doc.tipo, doc.bucket, archivo)}
             />
           ))}
         </div>
       </div>
 
-      {/* Fotos vehículo */}
       <div>
         <h3 className="text-lg font-black text-yellow-400 mb-3">🚛 Fotos del vehículo</h3>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -159,7 +154,6 @@ export default function SubirDocumentacion({ choferIdExterno, soloLectura = fals
               url={documentos[doc.tipo]}
               subiendo={subiendo[doc.tipo]}
               soloLectura={soloLectura}
-              inputRef={el => { inputRefs.current[doc.tipo] = el; }}
               onSeleccionar={archivo => subirArchivo(doc.tipo, doc.bucket, archivo)}
             />
           ))}
@@ -169,14 +163,14 @@ export default function SubirDocumentacion({ choferIdExterno, soloLectura = fals
   );
 }
 
-function ItemDocumento({ doc, url, subiendo, soloLectura, inputRef, onSeleccionar }: {
+function ItemDocumento({ doc, url, subiendo, soloLectura, onSeleccionar }: {
   doc: Documento;
   url?: string;
   subiendo?: boolean;
   soloLectura: boolean;
-  inputRef: (el: HTMLInputElement | null) => void;
   onSeleccionar: (archivo: File) => void;
 }) {
+  const inputRef = useRef<HTMLInputElement | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
   const [ampliado, setAmpliado] = useState(false);
 
@@ -187,6 +181,7 @@ function ItemDocumento({ doc, url, subiendo, soloLectura, inputRef, onSelecciona
     reader.onload = ev => setPreview(ev.target?.result as string);
     reader.readAsDataURL(archivo);
     onSeleccionar(archivo);
+    e.target.value = "";
   };
 
   const imagenMostrar = preview || url;
@@ -219,7 +214,7 @@ function ItemDocumento({ doc, url, subiendo, soloLectura, inputRef, onSelecciona
                 onChange={manejarCambio}
               />
               <button
-                onClick={() => (document.querySelector(`input[data-tipo="${doc.tipo}"]`) as HTMLInputElement)?.click()}
+                onClick={() => inputRef.current?.click()}
                 disabled={subiendo}
                 className={`w-full mt-1 py-1.5 rounded-xl font-black text-xs transition ${
                   subiendo ? "bg-zinc-700 text-zinc-500" : url ? "bg-zinc-700 hover:bg-zinc-600 text-zinc-300" : "bg-yellow-400 hover:bg-yellow-500 text-black"
@@ -228,19 +223,11 @@ function ItemDocumento({ doc, url, subiendo, soloLectura, inputRef, onSelecciona
               >
                 {subiendo ? "Subiendo..." : url ? "Reemplazar" : "Subir"}
               </button>
-              <input
-                data-tipo={doc.tipo}
-                type="file"
-                accept="image/*,.pdf"
-                className="hidden"
-                onChange={manejarCambio}
-              />
             </>
           )}
         </div>
       </div>
 
-      {/* Ampliado */}
       {ampliado && imagenMostrar && (
         <div className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center p-4" onClick={() => setAmpliado(false)}>
           <div className="max-w-2xl w-full">

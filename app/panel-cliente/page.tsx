@@ -7,6 +7,7 @@ import { useProtegerRuta } from "../hooks/useProtegerRuta";
 import MapaTILA from "../components/MapaTILA";
 import ChatAsistencia from "../components/ChatAsistencia";
 import BotonCerrarSesion from "../components/BotonCerrarSesion";
+import { labelVehiculo, VehiculoRow } from "../lib/vehiculos";
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 type ParadaMapa = {
@@ -49,7 +50,8 @@ const relativo = (iso: string | null | undefined) => {
   return `hace ${Math.floor(diff / 3600)}h`;
 };
 
-const vehiculoLabel = (chofer: any, viaje: any): string => {
+const vehiculoLabel = (vehiculo: Partial<VehiculoRow> | null | undefined, chofer: any, viaje: any): string => {
+  if (vehiculo) return labelVehiculo(vehiculo);
   if (chofer?.vehiculo) return chofer.vehiculo;
   if (viaje?.tipo_vehiculo) return viaje.tipo_vehiculo;
   return "Vehículo pendiente de validación";
@@ -57,9 +59,9 @@ const vehiculoLabel = (chofer: any, viaje: any): string => {
 
 // ─── SeguimientoViaje ─────────────────────────────────────────────────────────
 function SeguimientoViaje({
-  viaje, paradas, choferInfo, usuarioId, usuarioNombre, onCerrar,
+  viaje, paradas, choferInfo, vehiculoInfo, usuarioId, usuarioNombre, onCerrar,
 }: {
-  viaje: any; paradas: any[]; choferInfo: any;
+  viaje: any; paradas: any[]; choferInfo: any; vehiculoInfo?: Partial<VehiculoRow> | null;
   usuarioId: string; usuarioNombre: string;
   onCerrar: () => void;
 }) {
@@ -68,7 +70,7 @@ function SeguimientoViaje({
 
   const tieneGps = viaje?.lat != null && viaje?.lng != null;
   const precio   = viaje?.precio_cliente ? Number(viaje.precio_cliente) : null;
-  const vLabel   = vehiculoLabel(choferInfo, viaje);
+  const vLabel   = vehiculoLabel(vehiculoInfo, choferInfo, viaje);
 
   const paradasParaMapa: ParadaMapa[] = paradas.map(p => ({
     direccion: p.direccion,
@@ -307,6 +309,7 @@ export default function PanelClientePage() {
   const [viajes, setViajes]                   = useState<any[]>([]);
   const [paradasPorViaje, setParadasPorViaje] = useState<Record<string, any[]>>({});
   const [choferPorViaje, setChoferPorViaje]   = useState<Record<string, any>>({});
+  const [vehiculoPorViaje, setVehiculoPorViaje] = useState<Record<string, Partial<VehiculoRow>>>({});
   const [cargando, setCargando]               = useState(true);
   const [viajeSeleccionado, setViajeSeleccionado] = useState<any>(null);
   const [mostrarHistorial, setMostrarHistorial]   = useState(false);
@@ -362,11 +365,30 @@ export default function PanelClientePage() {
     const choferIds = [...new Set(todos.filter(v => v.chofer_id && String(v.chofer_id).length > 10).map(v => String(v.chofer_id)))];
     if (choferIds.length > 0) {
       const { data: dc } = await supabase.from("usuarios")
-        .select("id, nombre, vehiculo, telefono, bateria_nivel, ultima_senal_at, online").in("id", choferIds);
+        .select("id, nombre, vehiculo, telefono, bateria_nivel, ultima_senal_at, online, vehiculo_activo_id").in("id", choferIds);
       if (dc) {
         const map: Record<string, any> = {};
         todos.forEach(v => { if (v.chofer_id) { const c = dc.find(ch => ch.id === v.chofer_id); if (c) map[String(v.id)] = c; } });
         setChoferPorViaje(map);
+
+        const vehiculoIds = [...new Set(dc.filter(c => c.vehiculo_activo_id).map(c => c.vehiculo_activo_id))];
+        if (vehiculoIds.length > 0) {
+          const { data: vehiculos } = await supabase
+            .from("vehiculos")
+            .select("id, marca, modelo, patente, tipo_vehiculo, anio")
+            .in("id", vehiculoIds);
+          if (vehiculos) {
+            const vMap: Record<string, Partial<VehiculoRow>> = {};
+            todos.forEach(v => {
+              if (!v.chofer_id) return;
+              const chofer = dc.find(ch => ch.id === v.chofer_id);
+              if (!chofer?.vehiculo_activo_id) return;
+              const veh = vehiculos.find(vh => vh.id === chofer.vehiculo_activo_id);
+              if (veh) vMap[String(v.id)] = veh;
+            });
+            setVehiculoPorViaje(vMap);
+          }
+        }
       }
     }
     setCargando(false);
@@ -397,6 +419,7 @@ export default function PanelClientePage() {
       viaje={viajeSeleccionado}
       paradas={paradasPorViaje[String(viajeSeleccionado.id)] || []}
       choferInfo={choferPorViaje[String(viajeSeleccionado.id)]}
+      vehiculoInfo={vehiculoPorViaje[String(viajeSeleccionado.id)]}
       usuarioId={usuario?.id || ""}
       usuarioNombre={usuario?.nombre || "Cliente"}
       onCerrar={() => setViajeSeleccionado(null)}
@@ -457,9 +480,10 @@ export default function PanelClientePage() {
         <div className="space-y-4 mb-6">
           {viajesActivos.map(viaje => {
             const chofer   = choferPorViaje[String(viaje.id)];
+            const vehiculo = vehiculoPorViaje[String(viaje.id)];
             const paradas  = paradasPorViaje[String(viaje.id)] || [];
             const tieneGps = viaje.lat != null && viaje.lng != null;
-            const vLabel   = vehiculoLabel(chofer, viaje);
+            const vLabel   = vehiculoLabel(vehiculo, chofer, viaje);
             const precio   = viaje.precio_cliente ? Number(viaje.precio_cliente) : null;
 
             return (

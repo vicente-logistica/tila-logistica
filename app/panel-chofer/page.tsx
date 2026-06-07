@@ -6,6 +6,9 @@ import { useProtegerRuta } from "../hooks/useProtegerRuta";
 import HistorialChofer from "../components/historial-chofer";
 import BotonCerrarSesion from "../components/BotonCerrarSesion";
 import MapaTILA, { ParadaMapa } from "../components/MapaTILA";
+import GestionVehiculosChofer from "../components/GestionVehiculosChofer";
+import { labelVehiculo, VehiculoRow } from "../lib/vehiculos";
+import { evaluarChoferOnline } from "../lib/validacion-chofer";
 
 const LABELS = ["A", "B", "C", "D", "E", "F"];
 const SOPORTE_WHATSAPP = "5491158689383";
@@ -24,6 +27,13 @@ export default function PanelChoferPage() {
   const [cargando, setCargando]             = useState(true);
   const [online, setOnline]                 = useState(false);
   const [vehiculoChofer, setVehiculoChofer] = useState("");
+  const [vehiculoActivo, setVehiculoActivo] = useState<VehiculoRow | null>(null);
+  const [vehiculoActivoId, setVehiculoActivoId] = useState<string | null>(null);
+  const [docsPersonales, setDocsPersonales] = useState<Record<string, string>>({});
+  const [categoriaLegal, setCategoriaLegal] = useState("");
+  const [choferId, setChoferId] = useState<string | null>(null);
+  const [mostrarGestion, setMostrarGestion] = useState(false);
+  const [accionesRequeridas, setAccionesRequeridas] = useState<string[]>([]);
   const [onlineCargado, setOnlineCargado]   = useState(false);
   const [mostrarMapa, setMostrarMapa]       = useState(false);
 
@@ -107,6 +117,46 @@ export default function PanelChoferPage() {
     buscarViajeActivo();
   }, []);
 
+  // ─── Perfil chofer + vehículo activo ─────────────────────────────────────
+  const cargarPerfilChofer = useCallback(async () => {
+    const u = localStorage.getItem("usuario");
+    if (!u) return null;
+    const usuario = JSON.parse(u);
+    if (!usuario?.id) return null;
+    setChoferId(usuario.id);
+    setCategoriaLegal(usuario.categoria_legal || "");
+
+    const [{ data: perfil }, { data: docs }] = await Promise.all([
+      supabase.from("usuarios").select("vehiculo_activo_id, categoria_legal").eq("id", usuario.id).single(),
+      supabase.from("documentacion_chofer").select("tipo, url").eq("chofer_id", usuario.id),
+    ]);
+
+    const mapaDocs: Record<string, string> = {};
+    (docs || []).forEach((d: { tipo: string; url: string }) => { mapaDocs[d.tipo] = d.url; });
+    setDocsPersonales(mapaDocs);
+
+    const activoId = perfil?.vehiculo_activo_id ?? usuario.vehiculo_activo_id ?? null;
+    setVehiculoActivoId(activoId);
+
+    if (activoId) {
+      const { data: vehiculo } = await supabase.from("vehiculos").select("*").eq("id", activoId).single();
+      if (vehiculo) {
+        setVehiculoActivo(vehiculo);
+        setVehiculoChofer(labelVehiculo(vehiculo));
+        localStorage.setItem("usuario", JSON.stringify({
+          ...usuario,
+          vehiculo_activo_id: activoId,
+          tipo_vehiculo: vehiculo.tipo_vehiculo,
+        }));
+        return vehiculo as VehiculoRow;
+      }
+    }
+
+    setVehiculoActivo(null);
+    setVehiculoChofer(usuario?.tipo_vehiculo || usuario?.vehiculo || "Sin vehículo activo");
+    return null;
+  }, []);
+
   // ─── Estado online inicial ────────────────────────────────────────────────
   useEffect(() => {
     const iniciar = async () => {
@@ -114,13 +164,29 @@ export default function PanelChoferPage() {
         const u = localStorage.getItem("usuario");
         if (!u) return;
         const usuario = JSON.parse(u);
+        const vehiculo = await cargarPerfilChofer();
         const { data, error } = await supabase
           .from("usuarios")
-          .select("online, navegador_preferido")
+          .select("online, navegador_preferido, vehiculo_activo_id")
           .eq("id", usuario.id).single();
         if (!error && data) {
-          setOnline(data.online ?? false);
-          // Tratar sygic/tomtom heredados como null (no soportados en MVP)
+          const { data: docs } = await supabase.from("documentacion_chofer").select("tipo, url").eq("chofer_id", usuario.id);
+          const mapaDocs: Record<string, string> = {};
+          (docs || []).forEach((d: { tipo: string; url: string }) => { mapaDocs[d.tipo] = d.url; });
+          const validacion = evaluarChoferOnline({
+            vehiculoActivo: vehiculo,
+            docsPersonales: mapaDocs,
+            vehiculoActivoId: data.vehiculo_activo_id,
+          });
+          setAccionesRequeridas(validacion.acciones);
+          const quiereOnline = data.online ?? false;
+          if (quiereOnline && !validacion.puedeOnline) {
+            setOnline(false);
+            await supabase.from("usuarios").update({ online: false }).eq("id", usuario.id);
+            setMostrarGestion(true);
+          } else {
+            setOnline(quiereOnline);
+          }
           const nav = data.navegador_preferido;
           const navValido = nav && nav !== "sygic_truck" && nav !== "tomtom_truck" ? nav : null;
           setNavegadorPreferido(navValido);
@@ -130,14 +196,13 @@ export default function PanelChoferPage() {
       }
     };
     iniciar();
-  }, []);
+  }, [cargarPerfilChofer]);
 
   // ─── cargarCargas con useCallback — referencia estable ───────────────────
   const cargarCargas = useCallback(async () => {
     const u = localStorage.getItem("usuario");
     const usuario = u ? JSON.parse(u) : null;
-    const vehiculoDelChofer = usuario?.vehiculo || "";
-    setVehiculoChofer(usuario?.tipo_vehiculo || usuario?.vehiculo || "No definido");
+    const tipoActivo = usuario?.tipo_vehiculo || "";
 
     const { data, error } = await supabase
       .from("cargas")
@@ -148,18 +213,17 @@ export default function PanelChoferPage() {
     if (error) { console.error("Error cargando cargas:", error); return; }
 
     const cargasFiltradas = (data || []).filter((carga) => {
-      if (!vehiculoDelChofer && !usuario?.tipo_vehiculo) return true;
-      if (usuario?.tipo_vehiculo && carga.tipo_vehiculo) {
-        const matchTipo = String(carga.tipo_vehiculo).toLowerCase().trim() === String(usuario.tipo_vehiculo).toLowerCase().trim();
+      if (!tipoActivo) return true;
+      if (carga.tipo_vehiculo) {
+        const matchTipo = String(carga.tipo_vehiculo).toLowerCase().trim() === String(tipoActivo).toLowerCase().trim();
         if (usuario?.categoria_legal && carga.categoria_legal) {
           return matchTipo && String(carga.categoria_legal) === String(usuario.categoria_legal);
         }
         return matchTipo;
       }
-      if (!vehiculoDelChofer) return true;
       return (
-        String(carga.vehiculo || "").toLowerCase().includes(String(vehiculoDelChofer).toLowerCase()) ||
-        String(vehiculoDelChofer).toLowerCase().includes(String(carga.vehiculo || "").toLowerCase())
+        String(carga.vehiculo || "").toLowerCase().includes(String(tipoActivo).toLowerCase()) ||
+        String(tipoActivo).toLowerCase().includes(String(carga.vehiculo || "").toLowerCase())
       );
     });
 
@@ -267,6 +331,12 @@ export default function PanelChoferPage() {
   // ─── Aceptar ─────────────────────────────────────────────────────────────
   const aceptarViaje = async () => {
     if (!online) { alert("Tenés que estar ONLINE para aceptar viajes"); return; }
+    const validacion = await refrescarValidacion();
+    if (!validacion.puedeOnline) {
+      setMostrarGestion(true);
+      alert("Completá vehículo y documentación antes de aceptar viajes");
+      return;
+    }
     const carga = cargas[indice];
     if (!carga?.id) return;
     detenerAlarma();
@@ -326,15 +396,76 @@ export default function PanelChoferPage() {
     estado:    "pendiente" as const,
   }));
 
+  const refrescarValidacion = async () => {
+    const vehiculo = await cargarPerfilChofer();
+    const u = localStorage.getItem("usuario");
+    const usuario = u ? JSON.parse(u) : null;
+    let mapaDocs = docsPersonales;
+    if (usuario?.id) {
+      const { data: docs } = await supabase.from("documentacion_chofer").select("tipo, url").eq("chofer_id", usuario.id);
+      mapaDocs = {};
+      (docs || []).forEach((d: { tipo: string; url: string }) => { mapaDocs[d.tipo] = d.url; });
+      setDocsPersonales(mapaDocs);
+    }
+    const activoId = vehiculo?.id ?? vehiculoActivoId;
+    const validacion = evaluarChoferOnline({
+      vehiculoActivo: vehiculo,
+      docsPersonales: mapaDocs,
+      vehiculoActivoId: activoId,
+    });
+    setAccionesRequeridas(validacion.acciones);
+    return validacion;
+  };
+
+  const intentarToggleOnline = async () => {
+    await desbloquearAudio();
+    if (online) { setOnline(false); return; }
+    const validacion = await refrescarValidacion();
+    if (!validacion.puedeOnline) {
+      setMostrarGestion(true);
+      return;
+    }
+    setOnline(true);
+  };
+
+  const BloqueGestion = () => (
+    <div className="w-full max-w-md mx-auto mb-4">
+      {accionesRequeridas.length > 0 && !mostrarGestion && (
+        <button type="button" onClick={() => setMostrarGestion(true)}
+          className="w-full mb-3 bg-orange-950 border-2 border-orange-500 rounded-2xl p-3 text-left">
+          <p className="text-orange-400 font-black text-sm">⚠️ Acciones requeridas ({accionesRequeridas.length})</p>
+          <p className="text-zinc-500 text-xs mt-1">Tocá para completar vehículo y documentación</p>
+        </button>
+      )}
+      <button type="button" onClick={() => setMostrarGestion(v => !v)}
+        className="w-full flex items-center justify-between bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 px-4 py-3 rounded-2xl text-sm font-black text-zinc-300 transition">
+        <span>🚛 Mi vehículo · {vehiculoChofer || "Sin seleccionar"}</span>
+        <span>{mostrarGestion ? "▲" : "▼"}</span>
+      </button>
+      {mostrarGestion && choferId && (
+        <div className="bg-zinc-900 border border-zinc-700 rounded-2xl p-4 mt-2">
+          <GestionVehiculosChofer
+            choferId={choferId}
+            categoriaLegal={categoriaLegal}
+            onActualizado={async () => { await refrescarValidacion(); cargarCargasRef.current(); }}
+          />
+        </div>
+      )}
+    </div>
+  );
+
   const BotonOnline = () => (
-    <div className="w-full flex justify-center mb-6">
+    <div className="w-full flex flex-col items-center mb-6">
       <button
         type="button"
-        onClick={async () => { await desbloquearAudio(); setOnline(v => !v); }}
+        onClick={intentarToggleOnline}
         className={`px-8 py-4 rounded-3xl font-black text-xl md:text-2xl shadow-2xl transition ${online ? "bg-green-500 text-black" : "bg-red-600 text-white"}`}
       >
         {online ? "🟢 ONLINE" : "🔴 OFFLINE"}
       </button>
+      {!online && accionesRequeridas.length > 0 && (
+        <p className="text-orange-400 text-xs font-black mt-2">Completá acciones requeridas para conectarte</p>
+      )}
     </div>
   );
 
@@ -401,14 +532,16 @@ export default function PanelChoferPage() {
           {cargando ? (
             <section className="text-center">
               <BotonOnline />
+              <BloqueGestion />
               <h1 className="text-4xl md:text-5xl font-black text-yellow-400 animate-pulse">Buscando viajes...</h1>
             </section>
 
           ) : !cargaActual ? (
             <section className="text-center bg-zinc-900 border border-zinc-800 rounded-3xl p-8 md:p-12">
               <BotonOnline />
+              <BloqueGestion />
               <h1 className="text-4xl md:text-6xl font-black text-yellow-400 mb-4">DESPACHO EN TIEMPO REAL</h1>
-              <p className="text-green-400 font-black text-lg md:text-xl mb-4">Vehículo habilitado: {vehiculoChofer || "No definido"}</p>
+              <p className="text-green-400 font-black text-lg md:text-xl mb-4">Operando con: {vehiculoChofer || "Sin vehículo"}</p>
               <p className="text-zinc-400 text-lg md:text-2xl mb-8">
                 {online ? "No hay viajes compatibles pendientes por ahora." : "Estás offline. Activá ONLINE para recibir viajes."}
               </p>
@@ -465,8 +598,9 @@ export default function PanelChoferPage() {
           ) : (
             <section className="bg-zinc-900 border-4 border-yellow-400 rounded-3xl p-5 md:p-8 shadow-2xl animate-pulse text-center">
               <BotonOnline />
+              <BloqueGestion />
               <p className="text-pink-500 font-black text-xl md:text-2xl mb-4">🚨 NUEVO VIAJE DISPONIBLE 🚨</p>
-              <p className="text-green-400 font-black text-lg md:text-xl mb-6">Vehículo habilitado: {vehiculoChofer || "No definido"}</p>
+              <p className="text-green-400 font-black text-lg md:text-xl mb-6">Operando con: {vehiculoChofer || "Sin vehículo"}</p>
 
               {paradasActuales.length > 0 ? (
                 <div className="mb-6">
