@@ -37,7 +37,7 @@ export default function LoginPage() {
       const { password: _password, cuit_cuil, antecedentes, alias_cbu_cvu, titular_cuenta, banco_billetera, metodo_cobro, cnrt_ruta, vtv_rto, ...usuarioSeguro } = data;
       localStorage.setItem("usuario", JSON.stringify(usuarioSeguro));
 
-      if (data.rol === "cliente") router.push("/publicar");
+      if (data.rol === "cliente") router.push("/panel-cliente");
       else if (data.rol === "chofer") router.push("/panel-chofer");
       else if (data.rol === "admin") router.push("/admin");
       else alert("Rol inválido");

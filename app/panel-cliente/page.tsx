@@ -552,7 +552,9 @@ export default function PanelClientePage() {
                   {/* Botón */}
                   <button type="button" onClick={() => setViajeSeleccionado(viaje)}
                     className="w-full py-3.5 rounded-xl font-black text-sm bg-yellow-400 text-black hover:bg-yellow-300 active:scale-[0.98] transition">
-                    {tieneGps ? "📡 Ver ubicación en vivo" : "👁️ Ver seguimiento"}
+                    {viaje.estado === "pendiente" || !viaje.estado
+                      ? "📋 Ver publicación"
+                      : tieneGps ? "📡 Ver ubicación en vivo" : "👁️ Ver seguimiento"}
                   </button>
                 </div>
               </div>

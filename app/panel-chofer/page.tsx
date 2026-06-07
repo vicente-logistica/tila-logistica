@@ -247,20 +247,23 @@ export default function PanelChoferPage() {
       );
     });
 
+    // ── Disparar alarma si online y hay viajes — ANTES del hash check ────
+    // Cubre: chofer ya tiene viajes, va ONLINE, polling siguiente no ve cambio
+    // de hash y hace early-return sin llegar al bloque de alarma anterior.
+    if (onlineRef.current && cargasFiltradas.length > 0 && !sonandoRef.current) {
+      console.log("[ALARMA] cargarCargas: online + viajes disponibles", { n: cargasFiltradas.length });
+      reproducirAlarma();
+    }
+
     // ── Evitar re-render si los ids no cambiaron ──────────────────────────
     const nuevoHash = cargasFiltradas.map(c => c.id).join(",");
     if (nuevoHash === cargasHashRef.current) return;
     cargasHashRef.current = nuevoHash;
 
-    // ── Detectar viajes NUEVOS para alarma inmediata ──────────────────────
+    // ── Registrar viajes nuevos (para lógica de sonados) ─────────────────
     if (onlineRef.current) {
       const nuevos = cargasFiltradas.filter(c => !viajesSonadosRef.current.has(String(c.id)));
-      if (nuevos.length > 0) {
-        nuevos.forEach(c => viajesSonadosRef.current.add(String(c.id)));
-        // Solo sonar desde cargarCargas si NO vino del canal realtime (polling)
-        // El canal realtime ya disparó la alarma de inmediato
-        if (!sonandoRef.current) reproducirAlarma();
-      }
+      nuevos.forEach(c => viajesSonadosRef.current.add(String(c.id)));
     }
 
     setCargas(cargasFiltradas);
@@ -460,6 +463,11 @@ export default function PanelChoferPage() {
       return;
     }
     setOnline(true);
+    // Audio ya desbloqueado en este mismo click — disparar alarma si hay viajes
+    if (cargas.length > 0 && !sonandoRef.current) {
+      console.log("[ALARMA] intentarToggleOnline: online=true con viajes, disparando alarma");
+      setTimeout(() => { if (!sonandoRef.current) reproducirAlarma(); }, 100);
+    }
   };
 
   const BloqueGestion = () => (
