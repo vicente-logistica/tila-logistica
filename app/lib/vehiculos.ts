@@ -68,14 +68,66 @@ export async function subirDocChofer(
 ): Promise<string | null> {
   const ext = archivo.name.split(".").pop() || "bin";
   const path = `${choferId}/${tipo}.${ext}`;
-  const { error: errorUpload } = await supabase.storage.from(bucket).upload(path, archivo, { upsert: true });
-  if (errorUpload) return null;
+
+  console.log("[subirDocChofer] ANTES upload", {
+    choferId,
+    tipo,
+    bucket,
+    path,
+    archivo: {
+      name: archivo.name,
+      size: archivo.size,
+      type: archivo.type,
+      lastModified: archivo.lastModified,
+    },
+  });
+
+  const { data: dataUpload, error: errorUpload } = await supabase.storage
+    .from(bucket)
+    .upload(path, archivo, { upsert: true });
+
+  console.log("[subirDocChofer] DESPUÉS upload", {
+    ok: !errorUpload,
+    dataUpload,
+    errorUpload: errorUpload
+      ? { message: errorUpload.message, name: errorUpload.name, statusCode: (errorUpload as any).statusCode }
+      : null,
+  });
+
+  if (errorUpload) {
+    alert("Error Storage upload: " + errorUpload.message);
+    return null;
+  }
+
   const { data: urlData } = supabase.storage.from(bucket).getPublicUrl(path);
   const url = urlData.publicUrl as string;
-  await supabase.from("documentacion_chofer").upsert(
-    [{ chofer_id: choferId, tipo, url }],
-    { onConflict: "chofer_id,tipo" },
-  );
+
+  console.log("[subirDocChofer] DESPUÉS getPublicUrl", {
+    path,
+    bucket,
+    urlData,
+    url,
+  });
+
+  const payload = { chofer_id: choferId, tipo, url };
+  const { data: dataUpsert, error: errorUpsert } = await supabase
+    .from("documentacion_chofer")
+    .upsert([payload], { onConflict: "chofer_id,tipo" });
+
+  console.log("[subirDocChofer] DESPUÉS upsert documentacion_chofer", {
+    payload,
+    ok: !errorUpsert,
+    dataUpsert,
+    errorUpsert: errorUpsert
+      ? { message: errorUpsert.message, code: errorUpsert.code, details: errorUpsert.details, hint: errorUpsert.hint }
+      : null,
+  });
+
+  if (errorUpsert) {
+    alert("Error upsert documentacion_chofer: " + errorUpsert.message);
+    return null;
+  }
+
   return url;
 }
 

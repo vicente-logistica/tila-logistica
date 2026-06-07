@@ -50,10 +50,21 @@ export default function SubirDocumentacion({ choferIdExterno, soloLectura = fals
 
   const cargarDocumentos = async () => {
     if (!choferId) return;
-    const { data } = await supabase
+    console.log("[SubirDocumentacion] cargarDocumentos", { choferId });
+    const { data, error } = await supabase
       .from("documentacion_chofer")
       .select("tipo, url")
       .eq("chofer_id", choferId);
+    console.log("[SubirDocumentacion] cargarDocumentos resultado", {
+      ok: !error,
+      count: data?.length ?? 0,
+      data,
+      error: error ? { message: error.message, code: error.code, details: error.details } : null,
+    });
+    if (error) {
+      alert("Error cargar documentacion_chofer: " + error.message);
+      return;
+    }
     if (data) {
       const mapa: Record<string, string> = {};
       data.forEach((d: any) => { mapa[d.tipo] = d.url; });
@@ -62,15 +73,35 @@ export default function SubirDocumentacion({ choferIdExterno, soloLectura = fals
   };
 
   const subirArchivo = async (tipo: string, bucket: string, archivo: File) => {
-    if (!choferId) { alert("No se encontró ID del chofer"); return; }
+    if (!choferId) {
+      console.warn("[SubirDocumentacion] subirArchivo sin choferId", { tipo, bucket });
+      alert("No se encontró ID del chofer");
+      return;
+    }
     setSubiendo(prev => ({ ...prev, [tipo]: true }));
 
     const ext = archivo.name.split(".").pop();
     const path = `${choferId}/${tipo}.${ext}`;
 
-    const { error: errorUpload } = await supabase.storage
+    console.log("[SubirDocumentacion] ANTES upload", {
+      choferId,
+      tipo,
+      bucket,
+      path,
+      archivo: { name: archivo.name, size: archivo.size, type: archivo.type },
+    });
+
+    const { data: dataUpload, error: errorUpload } = await supabase.storage
       .from(bucket)
       .upload(path, archivo, { upsert: true });
+
+    console.log("[SubirDocumentacion] DESPUÉS upload", {
+      ok: !errorUpload,
+      dataUpload,
+      errorUpload: errorUpload
+        ? { message: errorUpload.message, name: errorUpload.name, statusCode: (errorUpload as any).statusCode }
+        : null,
+    });
 
     if (errorUpload) {
       alert("Error al subir: " + errorUpload.message);
@@ -81,19 +112,59 @@ export default function SubirDocumentacion({ choferIdExterno, soloLectura = fals
     const { data: urlData } = supabase.storage.from(bucket).getPublicUrl(path);
     const url = urlData.publicUrl;
 
-    const { error: errorDB } = await supabase
+    console.log("[SubirDocumentacion] DESPUÉS getPublicUrl", { path, bucket, urlData, url });
+
+    const payload = { chofer_id: choferId, tipo, url };
+    const { data: dataUpsert, error: errorDB } = await supabase
       .from("documentacion_chofer")
-      .upsert([{ chofer_id: choferId, tipo, url }], { onConflict: "chofer_id,tipo" });
+      .upsert([payload], { onConflict: "chofer_id,tipo" });
+
+    console.log("[SubirDocumentacion] DESPUÉS upsert documentacion_chofer", {
+      payload,
+      ok: !errorDB,
+      dataUpsert,
+      errorDB: errorDB
+        ? { message: errorDB.message, code: errorDB.code, details: errorDB.details, hint: errorDB.hint }
+        : null,
+    });
 
     if (errorDB) {
-      const { error: errorInsert } = await supabase
+      alert("Error upsert documentacion_chofer: " + errorDB.message);
+      console.log("[SubirDocumentacion] upsert falló — intentando insert", { payload });
+      const { data: dataInsert, error: errorInsert } = await supabase
         .from("documentacion_chofer")
-        .insert([{ chofer_id: choferId, tipo, url }]);
+        .insert([payload]);
+      console.log("[SubirDocumentacion] DESPUÉS insert fallback", {
+        ok: !errorInsert,
+        dataInsert,
+        errorInsert: errorInsert
+          ? { message: errorInsert.message, code: errorInsert.code, details: errorInsert.details }
+          : null,
+      });
       if (errorInsert) {
-        await supabase.from("documentacion_chofer").update({ url }).eq("chofer_id", choferId).eq("tipo", tipo);
+        alert("Error insert documentacion_chofer: " + errorInsert.message);
+        console.log("[SubirDocumentacion] insert falló — intentando update", { payload });
+        const { data: dataUpdate, error: errorUpdate } = await supabase
+          .from("documentacion_chofer")
+          .update({ url })
+          .eq("chofer_id", choferId)
+          .eq("tipo", tipo);
+        console.log("[SubirDocumentacion] DESPUÉS update fallback", {
+          ok: !errorUpdate,
+          dataUpdate,
+          errorUpdate: errorUpdate
+            ? { message: errorUpdate.message, code: errorUpdate.code, details: errorUpdate.details }
+            : null,
+        });
+        if (errorUpdate) {
+          alert("Error update documentacion_chofer: " + errorUpdate.message);
+          setSubiendo(prev => ({ ...prev, [tipo]: false }));
+          return;
+        }
       }
     }
 
+    console.log("[SubirDocumentacion] subida OK — actualizando estado local", { tipo, url });
     setDocumentos(prev => ({ ...prev, [tipo]: url }));
     setSubiendo(prev => ({ ...prev, [tipo]: false }));
   };
@@ -176,6 +247,12 @@ function ItemDocumento({ doc, url, subiendo, soloLectura, onSeleccionar }: {
 
   const manejarCambio = (e: React.ChangeEvent<HTMLInputElement>) => {
     const archivo = e.target.files?.[0];
+    console.log("[SubirDocumentacion] ItemDocumento onChange", {
+      tipo: doc.tipo,
+      archivo: archivo
+        ? { name: archivo.name, size: archivo.size, type: archivo.type }
+        : null,
+    });
     if (!archivo) return;
     const reader = new FileReader();
     reader.onload = ev => setPreview(ev.target?.result as string);
