@@ -4,23 +4,23 @@ export const TIPOS_VEHICULO_CHOFER = [
 ] as const;
 
 export const DOCS_PERSONALES = [
-  { tipo: "dni_frente", label: "DNI Frente", bucket: "documentacion-choferes" },
-  { tipo: "dni_dorso", label: "DNI Dorso", bucket: "documentacion-choferes" },
-  { tipo: "licencia", label: "Licencia de conducir", bucket: "documentacion-choferes" },
-  { tipo: "antecedentes", label: "Certificado de antecedentes", bucket: "documentacion-choferes" },
+  { tipo: "dni_frente",          label: "DNI Frente",                   bucket: "documentacion-choferes" },
+  { tipo: "dni_dorso",           label: "DNI Dorso",                    bucket: "documentacion-choferes" },
+  { tipo: "licencia",            label: "Licencia de conducir",         bucket: "documentacion-choferes" },
+  { tipo: "antecedentes_penales", label: "Certificado de antecedentes", bucket: "documentacion-choferes" },
 ] as const;
 
 export const DOCS_VEHICULO = [
-  { tipo: "cedula", label: "Cédula verde", bucket: "documentacion-choferes", campo: "cedula_verde_url" as const },
-  { tipo: "seguro", label: "Seguro del vehículo", bucket: "documentacion-choferes", campo: "seguro_url" as const },
-  { tipo: "vtv_rto", label: "VTV / RTO", bucket: "documentacion-choferes", campo: "vtv_rto_url" as const },
+  { tipo: "cedula_verde", label: "Cédula verde",        bucket: "documentacion-choferes", campo: "cedula_verde_url" as const },
+  { tipo: "seguro",       label: "Seguro del vehículo", bucket: "documentacion-choferes", campo: "seguro_url"        as const },
+  { tipo: "vtv_rto",      label: "VTV / RTO",           bucket: "documentacion-choferes", campo: "vtv_rto_url"       as const },
 ] as const;
 
 export const FOTOS_VEHICULO = [
-  { tipo: "foto_frente", label: "Frente", bucket: "vehiculos" },
-  { tipo: "foto_lateral_izq", label: "Lateral izquierda", bucket: "vehiculos" },
-  { tipo: "foto_lateral_der", label: "Lateral derecha", bucket: "vehiculos" },
-  { tipo: "foto_trasera", label: "Trasera", bucket: "vehiculos" },
+  { tipo: "foto_frente",            label: "Frente",            bucket: "vehiculos" },
+  { tipo: "foto_lateral_izquierda", label: "Lateral izquierda", bucket: "vehiculos" },
+  { tipo: "foto_lateral_derecha",   label: "Lateral derecha",   bucket: "vehiculos" },
+  { tipo: "foto_trasera",           label: "Trasera",           bucket: "vehiculos" },
 ] as const;
 
 export interface VehiculoRow {

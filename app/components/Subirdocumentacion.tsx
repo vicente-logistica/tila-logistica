@@ -12,17 +12,17 @@ interface Documento {
 }
 
 const DOCUMENTOS: Documento[] = [
-  { tipo: "dni_frente", label: "DNI Frente", bucket: "documentacion-choferes", icono: "🪪" },
-  { tipo: "dni_dorso", label: "DNI Dorso", bucket: "documentacion-choferes", icono: "🪪" },
-  { tipo: "licencia", label: "Licencia de conducir", bucket: "documentacion-choferes", icono: "📋" },
-  { tipo: "antecedentes", label: "Certificado de antecedentes", bucket: "documentacion-choferes", icono: "📋" },
-  { tipo: "seguro", label: "Seguro del vehículo", bucket: "documentacion-choferes", icono: "🛡️" },
-  { tipo: "cedula", label: "Cédula del vehículo", bucket: "documentacion-choferes", icono: "📄" },
-  { tipo: "vtv_rto", label: "VTV / RTO", bucket: "documentacion-choferes", icono: "📄" },
-  { tipo: "foto_frente", label: "Foto frente vehículo", bucket: "vehiculos", icono: "🚛" },
-  { tipo: "foto_lateral_izq", label: "Foto lateral izquierda", bucket: "vehiculos", icono: "🚛" },
-  { tipo: "foto_lateral_der", label: "Foto lateral derecha", bucket: "vehiculos", icono: "🚛" },
-  { tipo: "foto_trasera", label: "Foto trasera", bucket: "vehiculos", icono: "🚛" },
+  { tipo: "dni_frente",             label: "DNI Frente",                   bucket: "documentacion-choferes", icono: "🪪" },
+  { tipo: "dni_dorso",              label: "DNI Dorso",                    bucket: "documentacion-choferes", icono: "🪪" },
+  { tipo: "licencia",               label: "Licencia de conducir",         bucket: "documentacion-choferes", icono: "📋" },
+  { tipo: "antecedentes_penales",   label: "Certificado de antecedentes",  bucket: "documentacion-choferes", icono: "📋" },
+  { tipo: "seguro",                 label: "Seguro del vehículo",          bucket: "documentacion-choferes", icono: "🛡️" },
+  { tipo: "cedula_verde",           label: "Cédula verde",                 bucket: "documentacion-choferes", icono: "📄" },
+  { tipo: "vtv_rto",                label: "VTV / RTO",                    bucket: "documentacion-choferes", icono: "📄" },
+  { tipo: "foto_frente",            label: "Foto frente vehículo",         bucket: "vehiculos",              icono: "🚛" },
+  { tipo: "foto_lateral_izquierda", label: "Foto lateral izquierda",       bucket: "vehiculos",              icono: "🚛" },
+  { tipo: "foto_lateral_derecha",   label: "Foto lateral derecha",         bucket: "vehiculos",              icono: "🚛" },
+  { tipo: "foto_trasera",           label: "Foto trasera",                 bucket: "vehiculos",              icono: "🚛" },
 ];
 
 interface SubirDocumentacionProps {
@@ -34,6 +34,8 @@ export default function SubirDocumentacion({ choferIdExterno, soloLectura = fals
   const [documentos, setDocumentos] = useState<Record<string, string>>({});
   const [subiendo, setSubiendo] = useState<Record<string, boolean>>({});
   const [choferId, setChoferId] = useState<string | null>(choferIdExterno || null);
+  const [codigoAntecedentes, setCodigoAntecedentes] = useState("");
+  const [guardandoCodigo, setGuardandoCodigo] = useState(false);
 
   useEffect(() => {
     if (!choferIdExterno) {
@@ -68,9 +70,22 @@ export default function SubirDocumentacion({ choferIdExterno, soloLectura = fals
     }
     if (data) {
       const mapa: Record<string, string> = {};
-      data.forEach((d: any) => { mapa[d.tipo] = d.url; });
+      data.forEach((d: any) => {
+        mapa[d.tipo] = d.url;
+        if (d.tipo === "antecedentes_codigo") setCodigoAntecedentes(d.url ?? "");
+      });
       setDocumentos(mapa);
     }
+  };
+
+  const guardarCodigoAntecedentes = async () => {
+    if (!choferId) return;
+    setGuardandoCodigo(true);
+    const { error } = await supabase
+      .from("documentacion_chofer")
+      .upsert([{ chofer_id: choferId, tipo: "antecedentes_codigo", url: codigoAntecedentes.trim() }], { onConflict: "chofer_id,tipo" });
+    setGuardandoCodigo(false);
+    if (error) alert(error.message);
   };
 
   const subirArchivo = async (tipo: string, bucket: string, archivo: File) => {
@@ -149,6 +164,31 @@ export default function SubirDocumentacion({ choferIdExterno, soloLectura = fals
               onSeleccionar={archivo => subirArchivo(doc.tipo, doc.bucket, archivo)}
             />
           ))}
+        </div>
+        {/* Código numérico del certificado de antecedentes */}
+        <div className="mt-3 bg-zinc-800 rounded-2xl p-4">
+          <p className="text-zinc-400 text-xs font-black mb-2">CÓDIGO DEL CERTIFICADO DE ANTECEDENTES</p>
+          {soloLectura ? (
+            <p className="text-white font-black text-base">{codigoAntecedentes || <span className="text-zinc-500 font-normal">No cargado</span>}</p>
+          ) : (
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={codigoAntecedentes}
+                onChange={e => setCodigoAntecedentes(e.target.value)}
+                placeholder="Ej: 12345678"
+                className="flex-1 bg-zinc-900 border border-zinc-700 rounded-xl px-4 py-2 text-white text-sm focus:outline-none focus:border-yellow-400"
+              />
+              <button
+                type="button"
+                onClick={guardarCodigoAntecedentes}
+                disabled={guardandoCodigo}
+                className="bg-yellow-400 hover:bg-yellow-500 disabled:bg-zinc-600 text-black font-black text-sm px-4 py-2 rounded-xl transition"
+              >
+                {guardandoCodigo ? "..." : "Guardar"}
+              </button>
+            </div>
+          )}
         </div>
       </div>
 

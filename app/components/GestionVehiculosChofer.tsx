@@ -27,6 +27,8 @@ export default function GestionVehiculosChofer({ choferId, categoriaLegal, onAct
   const [guardando, setGuardando] = useState(false);
   const [mostrarForm, setMostrarForm] = useState(false);
   const [subiendo, setSubiendo] = useState<string | null>(null);
+  const [codigoAntecedentes, setCodigoAntecedentes] = useState("");
+  const [guardandoCodigo, setGuardandoCodigo] = useState(false);
 
   const [marca, setMarca] = useState("");
   const [modelo, setModelo] = useState("");
@@ -50,7 +52,10 @@ export default function GestionVehiculosChofer({ choferId, categoriaLegal, onAct
     setVehiculos(lista || []);
     setVehiculoActivoId(perfil?.vehiculo_activo_id ?? lista?.[0]?.id ?? null);
     const mapa: Record<string, string> = {};
-    (docs || []).forEach((d: { tipo: string; url: string }) => { mapa[d.tipo] = d.url; });
+    (docs || []).forEach((d: { tipo: string; url: string }) => {
+      mapa[d.tipo] = d.url;
+      if (d.tipo === "antecedentes_codigo") setCodigoAntecedentes(d.url ?? "");
+    });
     setDocsPersonales(mapa);
     setCargando(false);
   }, [choferId]);
@@ -125,6 +130,15 @@ export default function GestionVehiculosChofer({ choferId, categoriaLegal, onAct
     setGuardando(false);
     await cargar();
     onActualizado?.();
+  };
+
+  const guardarCodigoAntecedentes = async () => {
+    setGuardandoCodigo(true);
+    const { error } = await supabase
+      .from("documentacion_chofer")
+      .upsert([{ chofer_id: choferId, tipo: "antecedentes_codigo", url: codigoAntecedentes.trim() }], { onConflict: "chofer_id,tipo" });
+    setGuardandoCodigo(false);
+    if (error) alert(error.message);
   };
 
   const subirDocPersonal = async (tipo: string, bucket: string, archivo: File) => {
@@ -297,6 +311,27 @@ export default function GestionVehiculosChofer({ choferId, categoriaLegal, onAct
               subiendo={subiendo === doc.tipo}
               onFile={f => subirDocPersonal(doc.tipo, doc.bucket, f)} />
           ))}
+        </div>
+        {/* Código del certificado de antecedentes */}
+        <div className="mt-2 bg-zinc-800 rounded-xl p-3">
+          <p className="text-zinc-500 text-xs font-black mb-2">CÓDIGO DEL CERTIFICADO DE ANTECEDENTES</p>
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={codigoAntecedentes}
+              onChange={e => setCodigoAntecedentes(e.target.value)}
+              placeholder="Ej: 12345678"
+              className="flex-1 bg-black border border-zinc-700 rounded-xl px-3 py-2 text-white text-sm focus:outline-none focus:border-yellow-400"
+            />
+            <button
+              type="button"
+              onClick={guardarCodigoAntecedentes}
+              disabled={guardandoCodigo}
+              className="bg-yellow-400 hover:bg-yellow-500 disabled:bg-zinc-600 text-black font-black text-sm px-4 py-2 rounded-xl transition"
+            >
+              {guardandoCodigo ? "..." : "Guardar"}
+            </button>
+          </div>
         </div>
       </div>
 

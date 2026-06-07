@@ -230,12 +230,25 @@ const TarjetaUsuario = ({
 // ─── TarjetaChofer para sección aprobación ───────────────────────────────────
 
 const TIPOS_DOC_LABELS: Record<string, string> = {
-  dni_frente: "DNI Frente", dni_dorso: "DNI Dorso",
-  licencia: "Licencia", seguro: "Seguro", cedula: "Cédula",
-  foto_frente: "Frente", foto_lateral_izq: "Lat. Izq",
-  foto_lateral_der: "Lat. Der", foto_trasera: "Trasera",
+  // Documentos personales
+  dni_frente:           "DNI Frente",
+  dni_dorso:            "DNI Dorso",
+  licencia:             "Licencia",
+  antecedentes_penales: "Antecedentes",
+  // Documentación del vehículo
+  cedula_verde:         "Cédula verde",
+  seguro:               "Seguro",
+  vtv_rto:              "VTV/RTO",
+  // Fotos del vehículo
+  foto_frente:             "Frente",
+  foto_lateral_izquierda:  "Lat. Izq",
+  foto_lateral_derecha:    "Lat. Der",
+  foto_trasera:            "Trasera",
 };
-const DOCS_REQUERIDOS_ADMIN = ["dni_frente", "dni_dorso", "licencia", "seguro", "cedula", "foto_frente", "foto_lateral_izq", "foto_lateral_der", "foto_trasera"];
+const DOCS_PERSONALES_ADMIN  = ["dni_frente", "dni_dorso", "licencia", "antecedentes_penales"];
+const DOCS_VEHICULO_ADMIN    = ["cedula_verde", "seguro", "vtv_rto"];
+const FOTOS_VEHICULO_ADMIN   = ["foto_frente", "foto_lateral_izquierda", "foto_lateral_derecha", "foto_trasera"];
+const DOCS_REQUERIDOS_ADMIN  = [...DOCS_PERSONALES_ADMIN, ...DOCS_VEHICULO_ADMIN, ...FOTOS_VEHICULO_ADMIN]; // 11 en total
 const MENSAJE_APROBACION_MANUAL = "Documentación incompleta — aprobación manual bajo responsabilidad del administrador";
 
 const TarjetaChofer = ({ chofer, onActualizarAprobacion }: { chofer: any; onActualizarAprobacion: (id: string, estado: string) => void }) => {
@@ -299,27 +312,51 @@ const TarjetaChofer = ({ chofer, onActualizarAprobacion }: { chofer: any; onActu
     </button>
 
     {mostrarDocs && (
-      <div className="mb-3">
-        <div className="flex items-center justify-between mb-2">
+      <div className="mb-3 space-y-3">
+        <div className="flex items-center justify-between">
           <p className="text-zinc-500 text-xs font-black">DOCUMENTACIÓN</p>
           <span className={`text-xs font-black ${puedeAprobar ? "text-green-400" : "text-red-400"}`}>
             {docsCompletos}/{totalDocs} {puedeAprobar ? "✅ Completa" : "⚠️ Incompleta"}
           </span>
         </div>
-        <div className="grid grid-cols-3 gap-2">
-          {DOCS_REQUERIDOS_ADMIN.map(tipo => (
-            <div key={tipo} className={`rounded-xl overflow-hidden border ${documentos[tipo] ? "border-green-600" : "border-zinc-700"}`}>
-              {documentos[tipo] ? (
-                <a href={documentos[tipo]} target="_blank" rel="noreferrer">
-                  <img src={documentos[tipo]} alt={TIPOS_DOC_LABELS[tipo]} className="w-full h-16 object-cover" />
-                </a>
-              ) : (
-                <div className="h-16 bg-zinc-900 flex items-center justify-center text-zinc-600 text-xs">Sin subir</div>
-              )}
-              <p className="text-xs text-center py-1 font-black text-zinc-400 truncate px-1">{TIPOS_DOC_LABELS[tipo]}</p>
-            </div>
-          ))}
+
+        {/* Documentos personales */}
+        <div>
+          <p className="text-zinc-600 text-xs font-black mb-1">PERSONALES</p>
+          <div className="grid grid-cols-4 gap-1">
+            {DOCS_PERSONALES_ADMIN.map(tipo => (
+              <DocMiniAdmin key={tipo} tipo={tipo} url={documentos[tipo]} label={TIPOS_DOC_LABELS[tipo]} />
+            ))}
+          </div>
+          {/* Código antecedentes */}
+          <div className="mt-1 bg-zinc-900 rounded-xl px-3 py-2 flex items-center gap-2">
+            <span className="text-zinc-500 text-xs font-black">CÓDIGO CERT.:</span>
+            <span className={`text-sm font-black ${documentos["antecedentes_codigo"] ? "text-white" : "text-zinc-600"}`}>
+              {documentos["antecedentes_codigo"] || "No cargado"}
+            </span>
+          </div>
         </div>
+
+        {/* Documentación del vehículo */}
+        <div>
+          <p className="text-zinc-600 text-xs font-black mb-1">VEHÍCULO</p>
+          <div className="grid grid-cols-3 gap-1">
+            {DOCS_VEHICULO_ADMIN.map(tipo => (
+              <DocMiniAdmin key={tipo} tipo={tipo} url={documentos[tipo]} label={TIPOS_DOC_LABELS[tipo]} />
+            ))}
+          </div>
+        </div>
+
+        {/* Fotos del vehículo */}
+        <div>
+          <p className="text-zinc-600 text-xs font-black mb-1">FOTOS</p>
+          <div className="grid grid-cols-4 gap-1">
+            {FOTOS_VEHICULO_ADMIN.map(tipo => (
+              <DocMiniAdmin key={tipo} tipo={tipo} url={documentos[tipo]} label={TIPOS_DOC_LABELS[tipo]} />
+            ))}
+          </div>
+        </div>
+
         {!puedeAprobar && (
           <p className="text-orange-400 text-xs font-black mt-2 border border-orange-500 rounded-lg p-2">
             ⚠️ Documentación incompleta — podés aprobar manualmente bajo tu responsabilidad
@@ -341,6 +378,19 @@ const TarjetaChofer = ({ chofer, onActualizarAprobacion }: { chofer: any; onActu
   </div>
   );
 };
+
+const DocMiniAdmin = ({ tipo, url, label }: { tipo: string; url?: string; label: string }) => (
+  <div className={`rounded-xl overflow-hidden border ${url ? "border-green-600" : "border-zinc-700"}`}>
+    {url ? (
+      <a href={url} target="_blank" rel="noreferrer">
+        <img src={url} alt={label} className="w-full h-14 object-cover" />
+      </a>
+    ) : (
+      <div className="h-14 bg-zinc-900 flex items-center justify-center text-zinc-600 text-xs">—</div>
+    )}
+    <p className="text-xs text-center py-0.5 font-black text-zinc-400 truncate px-1">{label}</p>
+  </div>
+);
 
 const TarjetaCliente = ({ cliente }: { cliente: any }) => (
   <div className="bg-black border border-zinc-800 rounded-2xl p-5">
