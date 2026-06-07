@@ -240,7 +240,8 @@ export default function PanelChoferPage() {
     const { data, error } = await supabase
       .from("cargas")
       .select("*")
-      .or("estado.is.null,estado.eq.pendiente")
+      .eq("estado", "pendiente")
+      .eq("pagado_cliente", true)
       .order("created_at", { ascending: true });
 
     if (error) { console.error("Error cargando cargas:", error); return; }

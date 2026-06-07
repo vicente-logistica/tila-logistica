@@ -228,7 +228,11 @@ export default function PublicarPage() {
       precio_cliente: tarifaFinal.precioCliente,
       pago_chofer: tarifaFinal.choferCobra,
       comision_plataforma: tarifaFinal.comisionTila,
-      estado: "pendiente",
+      // ── Pago: la carga empieza como pendiente_pago y solo se vuelve
+      //    "pendiente" (visible para choferes) cuando el webhook aprueba el pago.
+      estado: "pendiente_pago",
+      pago_estado: "pendiente_pago",
+      pagado_cliente: false,
       tracking: false,
     }]).select().single();
 
@@ -256,10 +260,38 @@ export default function PublicarPage() {
       if (errorParadas) console.error("Error insertando paradas_viaje:", errorParadas);
     }
 
-    setPublicando(false);
-    // Compatibilidad legacy — panel-cliente ya no depende de esto
-    localStorage.setItem("viajeActivoId", String(data.id));
-    router.push("/panel-cliente");
+    // ── Crear preferencia MercadoPago y redirigir al checkout ─────────────────
+    try {
+      const mpRes = await fetch("/api/mercadopago/crear-preferencia", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          carga_id: data.id,
+          monto: tarifaFinal.precioCliente,
+          descripcion: `TILA · ${tipoVehiculo} · ${origen} → ${destino}`,
+        }),
+      });
+
+      const mpData = await mpRes.json();
+
+      if (!mpRes.ok || !mpData.init_point) {
+        console.error("[PUBLICAR] Error MP:", mpData);
+        // Si MP falla, igual redirigir al panel — el cliente puede pagar desde allí
+        alert("Carga publicada. Completá el pago desde tu panel.");
+        router.push("/panel-cliente");
+        return;
+      }
+
+      console.log("[PUBLICAR] Redirigiendo a MP checkout:", mpData.init_point);
+      // Redirigir al Checkout Pro de MercadoPago
+      window.location.href = mpData.init_point;
+    } catch (mpError: any) {
+      console.error("[PUBLICAR] Error llamando a MP:", mpError);
+      alert("Carga publicada. Completá el pago desde tu panel.");
+      router.push("/panel-cliente");
+    } finally {
+      setPublicando(false);
+    }
   };
 
   if (!autorizado) return null;

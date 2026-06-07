@@ -16,7 +16,8 @@ type ParadaMapa = {
   estado: "pendiente" | "en_curso" | "completada";
 };
 
-const ESTADOS_ACTIVOS   = ["pendiente", "Chofer asignado", "En camino", "Carga retirada", "En ruta", "Descarga completada"];
+// "pendiente_pago" se muestra al cliente mientras espera confirmación del pago
+const ESTADOS_ACTIVOS   = ["pendiente_pago", "pendiente", "Chofer asignado", "En camino", "Carga retirada", "En ruta", "Descarga completada"];
 const ESTADOS_HISTORIAL = ["Viaje finalizado", "cancelado"];
 
 const SOPORTE_WHATSAPP = "5491158689383";
@@ -314,6 +315,20 @@ export default function PanelClientePage() {
   const [viajeSeleccionado, setViajeSeleccionado] = useState<any>(null);
   const [mostrarHistorial, setMostrarHistorial]   = useState(false);
   const [alerta, setAlerta]                   = useState<string | null>(null);
+  const [bannerPago, setBannerPago]           = useState<"ok" | "error" | "pendiente" | null>(null);
+
+  // Leer ?pago= de la URL cuando MP redirige de vuelta (sin useSearchParams para evitar Suspense)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const pago = params.get("pago");
+    if (pago === "ok" || pago === "error" || pago === "pendiente") {
+      setBannerPago(pago as "ok" | "error" | "pendiente");
+      // Limpiar el param de la URL sin recargar
+      const url = new URL(window.location.href);
+      url.searchParams.delete("pago");
+      window.history.replaceState({}, "", url.toString());
+    }
+  }, []);
 
   const audioRef              = useRef<HTMLAudioElement | null>(null);
   // audioFinalizadoRef es un objeto Audio creado en useEffect — NO elemento DOM
@@ -524,6 +539,25 @@ export default function PanelClientePage() {
         </div>
       )}
 
+      {/* Banner retorno MercadoPago */}
+      {bannerPago && (
+        <div className={`mb-4 rounded-2xl px-5 py-4 flex items-center justify-between gap-3 ${
+          bannerPago === "ok"        ? "bg-green-800 text-green-100" :
+          bannerPago === "pendiente" ? "bg-yellow-700 text-yellow-100" :
+                                      "bg-red-800 text-red-100"
+        }`}>
+          <span className="font-bold text-base">
+            {bannerPago === "ok"        ? "✅ Pago confirmado — tu carga está en camino a los choferes." :
+             bannerPago === "pendiente" ? "⏳ Pago en proceso — te avisaremos cuando se confirme." :
+                                         "❌ El pago no pudo procesarse. Podés reintentarlo desde tu carga."}
+          </span>
+          <button
+            className="text-white/80 text-xl font-black leading-none"
+            onClick={() => setBannerPago(null)}
+          >×</button>
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex items-center justify-between mb-5">
         <div>
@@ -576,9 +610,32 @@ export default function PanelClientePage() {
                 {/* Código + estado */}
                 <div className="flex items-center justify-between px-4 pt-3 pb-2 border-b border-zinc-800">
                   <p className="text-zinc-500 text-xs font-black tracking-widest">VIAJE #{viaje.id}</p>
-                  <span className={`text-xs font-black px-2 py-1 rounded-lg ${colorEstado(viaje.estado || "pendiente")}`}>
-                    {viaje.estado || "Pendiente"}
-                  </span>
+                  <div className="flex items-center gap-1.5">
+                    {/* Badge de pago */}
+                    {viaje.pago_estado === "pendiente_pago" && (
+                      <span className="text-xs font-black px-2 py-1 rounded-lg bg-orange-950 text-orange-400 border border-orange-700">
+                        💳 Pago pendiente
+                      </span>
+                    )}
+                    {viaje.pago_estado === "pagado" && (
+                      <span className="text-xs font-black px-2 py-1 rounded-lg bg-green-950 text-green-400">
+                        ✅ Pagado
+                      </span>
+                    )}
+                    {(viaje.pago_estado === "rechazado") && (
+                      <span className="text-xs font-black px-2 py-1 rounded-lg bg-red-950 text-red-400">
+                        ❌ Pago rechazado
+                      </span>
+                    )}
+                    {(viaje.pago_estado === "pendiente_proceso") && (
+                      <span className="text-xs font-black px-2 py-1 rounded-lg bg-yellow-950 text-yellow-400">
+                        ⏳ Procesando pago
+                      </span>
+                    )}
+                    <span className={`text-xs font-black px-2 py-1 rounded-lg ${colorEstado(viaje.estado || "pendiente")}`}>
+                      {viaje.estado === "pendiente_pago" ? "En espera" : viaje.estado || "Pendiente"}
+                    </span>
+                  </div>
                 </div>
 
                 <div className="px-4 pt-3 pb-4 space-y-3">
@@ -633,13 +690,40 @@ export default function PanelClientePage() {
                   {/* Fecha */}
                   <p className="text-zinc-600 text-xs">{fmt(viaje.created_at)}{viaje.km_estimados ? ` · ${viaje.km_estimados} km` : ""}</p>
 
-                  {/* Botón */}
-                  <button type="button" onClick={() => setViajeSeleccionado(viaje)}
-                    className="w-full py-3.5 rounded-xl font-black text-sm bg-yellow-400 text-black hover:bg-yellow-300 active:scale-[0.98] transition">
-                    {viaje.estado === "pendiente" || !viaje.estado
-                      ? "📋 Ver publicación"
-                      : tieneGps ? "📡 Ver ubicación en vivo" : "👁️ Ver seguimiento"}
-                  </button>
+                  {/* Botón: pagar o ver seguimiento */}
+                  {viaje.pago_estado === "pendiente_pago" || viaje.pago_estado === "rechazado" ? (
+                    <button
+                      type="button"
+                      className="w-full py-3.5 rounded-xl font-black text-sm bg-blue-600 hover:bg-blue-500 text-white active:scale-[0.98] transition"
+                      onClick={async () => {
+                        try {
+                          const res = await fetch("/api/mercadopago/crear-preferencia", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({
+                              carga_id: viaje.id,
+                              monto: viaje.precio_cliente,
+                              descripcion: `TILA · ${viaje.origen} → ${viaje.destino}`,
+                            }),
+                          });
+                          const d = await res.json();
+                          if (d.init_point) window.location.href = d.init_point;
+                          else alert("Error al iniciar el pago. Intentá de nuevo.");
+                        } catch {
+                          alert("Error de red al iniciar el pago.");
+                        }
+                      }}
+                    >
+                      💳 {viaje.pago_estado === "rechazado" ? "Reintentar pago" : "Pagar ahora"}
+                    </button>
+                  ) : (
+                    <button type="button" onClick={() => setViajeSeleccionado(viaje)}
+                      className="w-full py-3.5 rounded-xl font-black text-sm bg-yellow-400 text-black hover:bg-yellow-300 active:scale-[0.98] transition">
+                      {viaje.estado === "pendiente" || !viaje.estado
+                        ? "📋 Ver publicación"
+                        : tieneGps ? "📡 Ver ubicación en vivo" : "👁️ Ver seguimiento"}
+                    </button>
+                  )}
                 </div>
               </div>
             );
