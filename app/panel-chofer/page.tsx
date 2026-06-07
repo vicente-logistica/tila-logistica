@@ -41,7 +41,7 @@ export default function PanelChoferPage() {
   const [viajeActivo, setViajeActivo]               = useState<any>(null);
   const [buscandoViajeActivo, setBuscandoViajeActivo] = useState(true);
 
-  const [audioDesbloqueado, setAudioDesbloqueado] = useState(false);
+  const audioDesbloqueadoRef = useRef(false);
 
   // ─── Configuración de navegación ─────────────────────────────────────────
   const [mostrarConfigNav, setMostrarConfigNav] = useState(false);
@@ -63,25 +63,39 @@ export default function PanelChoferPage() {
   useEffect(() => { onlineRef.current = online; }, [online]);
 
   // ─── Audio ────────────────────────────────────────────────────────────────
-  const desbloquearAudio = async () => {
-    if (!audioRef.current || audioDesbloqueado) return;
+  const desbloquearAudio = useCallback(async () => {
+    if (!audioRef.current || audioDesbloqueadoRef.current) return;
+    audioDesbloqueadoRef.current = true; // guard inmediato — evita doble-call en mobile (onTouchStart + onClick)
     try {
       audioRef.current.volume = 0;
       await audioRef.current.play();
       audioRef.current.pause();
       audioRef.current.currentTime = 0;
       audioRef.current.volume = 1;
-      setAudioDesbloqueado(true);
-    } catch (e) { console.warn("[audio] No se pudo desbloquear:", e); }
-  };
+      console.log("[ALARMA] audio desbloqueado ok");
+    } catch (e) {
+      audioDesbloqueadoRef.current = false; // reset para reintentar si falla
+      console.warn("[ALARMA] desbloqueo bloqueado por navegador:", e);
+    }
+  }, []);
 
   const reproducirAlarma = useCallback(() => {
+    console.log("[ALARMA] intento reproducir", {
+      audio: !!audioRef.current,
+      sonando: sonandoRef.current,
+      desbloqueado: audioDesbloqueadoRef.current,
+    });
     if (!audioRef.current || sonandoRef.current) return;
     audioRef.current.currentTime = 0;
     audioRef.current.volume = 1;
     audioRef.current.play()
-      .then(() => { sonandoRef.current = true; })
-      .catch(e => console.warn("[audio] Error:", e));
+      .then(() => {
+        sonandoRef.current = true;
+        console.log("[ALARMA] play ok");
+      })
+      .catch(e => {
+        console.warn("[ALARMA] play bloqueado:", e);
+      });
   }, []);
 
   const detenerAlarma = useCallback(() => {
@@ -315,16 +329,19 @@ export default function PanelChoferPage() {
 
   // ─── Rechazar ────────────────────────────────────────────────────────────
   const rechazarViaje = () => {
+    console.log("[RECHAZAR] viaje rechazado localmente", { indice, total: cargas.length });
     detenerAlarma();
     setMostrarMapa(false);
     const siguiente = indice + 1;
     if (siguiente < cargas.length) {
+      console.log("[RECHAZAR] siguiente viaje:", siguiente);
       setIndice(siguiente);
       setTimeout(() => reproducirAlarma(), 300);
     } else {
+      console.log("[RECHAZAR] sin más viajes — limpiando y recargando");
       setIndice(0);
-      // Limpiar set de sonados para que si vuelven los mismos viajes suenen
       viajesSonadosRef.current.clear();
+      cargasHashRef.current = ""; // forzar re-evaluación en cargarCargas para que el viaje suene de nuevo
       cargarCargasRef.current();
     }
   };
