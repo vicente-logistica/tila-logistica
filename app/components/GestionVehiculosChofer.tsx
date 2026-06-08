@@ -280,12 +280,12 @@ export default function GestionVehiculosChofer({ choferId, categoriaLegal, onAct
 
         <div className="grid grid-cols-2 gap-2">
           <div className="flex flex-col">
-            <label className="text-zinc-500 text-xs font-black mb-1">Vencimiento seguro *</label>
+            <label className="text-zinc-500 text-xs font-black mb-1 whitespace-nowrap">Venc. seguro *</label>
             <input type="date" value={seguroVenc} min={hoyIso()} onChange={e => setSeguroVenc(e.target.value)}
               className="w-full p-3 rounded-xl bg-black border border-zinc-700 text-sm" />
           </div>
           <div className="flex flex-col">
-            <label className="text-zinc-500 text-xs font-black mb-1">Vencimiento VTV / RTO *</label>
+            <label className="text-zinc-500 text-xs font-black mb-1 whitespace-nowrap">Venc. VTV / RTO *</label>
             <input type="date" value={vtvVenc} min={hoyIso()} onChange={e => setVtvVenc(e.target.value)}
               className="w-full p-3 rounded-xl bg-black border border-zinc-700 text-sm" />
           </div>
