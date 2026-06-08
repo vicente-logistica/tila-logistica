@@ -228,9 +228,9 @@ export default function PublicarPage() {
       precio_cliente: tarifaFinal.precioCliente,
       pago_chofer: tarifaFinal.choferCobra,
       comision_plataforma: tarifaFinal.comisionTila,
-      // ── Pago: la carga empieza como pendiente_pago y solo se vuelve
-      //    "pendiente" (visible para choferes) cuando el webhook aprueba el pago.
-      estado: "pendiente_pago",
+      // ── Flujo operativo: la carga es visible inmediatamente para choferes.
+      //    El pago se solicita al cliente después de que un chofer acepta.
+      estado: "pendiente",
       pago_estado: "pendiente_pago",
       pagado_cliente: false,
       tracking: false,

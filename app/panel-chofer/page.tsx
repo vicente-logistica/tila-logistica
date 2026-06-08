@@ -241,7 +241,6 @@ export default function PanelChoferPage() {
       .from("cargas")
       .select("*")
       .eq("estado", "pendiente")
-      .eq("pagado_cliente", true)
       .order("created_at", { ascending: true });
 
     if (error) { console.error("Error cargando cargas:", error); return; }
@@ -705,6 +704,12 @@ export default function PanelChoferPage() {
                 <h1 className="text-3xl md:text-6xl font-black text-yellow-400 mb-6 leading-tight">
                   {cargaActual.origen} → {cargaActual.destino}
                 </h1>
+              )}
+
+              {cargaActual.pago_estado === "pendiente_pago" && (
+                <div className="inline-flex items-center gap-2 bg-orange-500/20 border border-orange-500 text-orange-300 text-sm font-black px-4 py-2 rounded-xl mb-4">
+                  💳 Pago pendiente — el cliente abona al confirmar
+                </div>
               )}
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-lg md:text-2xl mb-6 text-left">
