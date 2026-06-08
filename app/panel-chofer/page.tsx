@@ -260,7 +260,7 @@ export default function PanelChoferPage() {
         const matchTipo = String(carga.tipo_vehiculo).toLowerCase().trim() === String(tipoActivo).toLowerCase().trim();
         console.log(`[FILTRO] carga ${carga.id}: tipo carga="${JSON.stringify(carga.tipo_vehiculo)}" vs chofer="${JSON.stringify(tipoActivo)}" matchTipo=${matchTipo}`);
         if (usuario?.categoria_legal && carga.categoria_legal) {
-          const matchCat = String(carga.categoria_legal) === String(usuario.categoria_legal);
+          const matchCat = String(carga.categoria_legal).toLowerCase().trim() === String(usuario.categoria_legal).toLowerCase().trim();
           console.log(`[FILTRO] carga ${carga.id}: cat carga="${carga.categoria_legal}" vs chofer="${usuario.categoria_legal}" matchCat=${matchCat} → ${matchTipo && matchCat ? "PASA" : "DESCARTADA"}`);
           return matchTipo && matchCat;
         }
@@ -277,9 +277,14 @@ export default function PanelChoferPage() {
     console.log("CARGAS FILTRADAS count:", cargasFiltradas.length, cargasFiltradas.map((c: any) => c.id));
     console.log("HASH actual:", JSON.stringify(cargasHashRef.current), "→ nuevo:", JSON.stringify(cargasFiltradas.map((c: any) => c.id).join(",")));
 
-    // ── Evitar re-render si los ids no cambiaron ──────────────────────────
+    // ── Evitar re-render pesado si los ids no cambiaron, pero siempre actualizar cargando ──
     const nuevoHash = cargasFiltradas.map(c => c.id).join(",");
-    if (nuevoHash === cargasHashRef.current) return;
+    if (nuevoHash === cargasHashRef.current) {
+      setCargas(cargasFiltradas);
+      setIndice(prev => (prev >= cargasFiltradas.length ? 0 : prev));
+      setCargando(false);
+      return;
+    }
     cargasHashRef.current = nuevoHash;
 
     // ── Alarmar SOLO en IDs genuinamente nuevos (no vistos antes) ─────────
