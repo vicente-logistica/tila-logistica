@@ -692,30 +692,36 @@ export default function PanelClientePage() {
 
                   {/* Botón: pagar o ver seguimiento */}
                   {viaje.pago_estado === "pendiente_pago" || viaje.pago_estado === "rechazado" ? (
-                    <button
-                      type="button"
-                      className="w-full py-3.5 rounded-xl font-black text-sm bg-blue-600 hover:bg-blue-500 text-white active:scale-[0.98] transition"
-                      onClick={async () => {
-                        try {
-                          const res = await fetch("/api/mercadopago/crear-preferencia", {
-                            method: "POST",
-                            headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({
-                              carga_id: viaje.id,
-                              monto: viaje.precio_cliente,
-                              descripcion: `TILA · ${viaje.origen} → ${viaje.destino}`,
-                            }),
-                          });
-                          const d = await res.json();
-                          if (d.init_point) window.location.href = d.init_point;
-                          else alert("Error al iniciar el pago. Intentá de nuevo.");
-                        } catch {
-                          alert("Error de red al iniciar el pago.");
-                        }
-                      }}
-                    >
-                      💳 {viaje.pago_estado === "rechazado" ? "Reintentar pago" : "Pagar ahora"}
-                    </button>
+                    <div className="flex flex-col gap-2">
+                      <button
+                        type="button"
+                        className="w-full py-3.5 rounded-xl font-black text-sm bg-blue-600 hover:bg-blue-500 text-white active:scale-[0.98] transition"
+                        onClick={async () => {
+                          try {
+                            const res = await fetch("/api/mercadopago/crear-preferencia", {
+                              method: "POST",
+                              headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({
+                                carga_id: viaje.id,
+                                monto: viaje.precio_cliente,
+                                descripcion: `TILA · ${viaje.origen} → ${viaje.destino}`,
+                              }),
+                            });
+                            const d = await res.json();
+                            if (d.init_point) window.location.href = d.init_point;
+                            else alert("Error al iniciar el pago. Intentá de nuevo.");
+                          } catch {
+                            alert("Error de red al iniciar el pago.");
+                          }
+                        }}
+                      >
+                        💳 {viaje.pago_estado === "rechazado" ? "Reintentar pago" : "Pagar ahora"}
+                      </button>
+                      <p className="text-center text-zinc-400 text-xs leading-snug">
+                        Pagar con tarjeta / Mercado Pago<br />
+                        <span className="text-zinc-500">Tarjeta de crédito, débito o dinero en Mercado Pago.</span>
+                      </p>
+                    </div>
                   ) : (
                     <button type="button" onClick={() => setViajeSeleccionado(viaje)}
                       className="w-full py-3.5 rounded-xl font-black text-sm bg-yellow-400 text-black hover:bg-yellow-300 active:scale-[0.98] transition">
