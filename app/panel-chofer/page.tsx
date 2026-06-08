@@ -237,6 +237,10 @@ export default function PanelChoferPage() {
     const usuario = u ? JSON.parse(u) : null;
     const tipoActivo = usuario?.tipo_vehiculo || "";
 
+    console.log("USUARIO CHOFER", usuario);
+    console.log("TIPO ACTIVO", JSON.stringify(tipoActivo), "len:", tipoActivo.length);
+    console.log("CATEGORIA LEGAL", JSON.stringify(usuario?.categoria_legal));
+
     const { data, error } = await supabase
       .from("cargas")
       .select("*")
@@ -245,20 +249,33 @@ export default function PanelChoferPage() {
 
     if (error) { console.error("Error cargando cargas:", error); return; }
 
+    console.log("CARGAS RAW SUPABASE count:", data?.length, data?.map((c: any) => ({ id: c.id, tipo_vehiculo: JSON.stringify(c.tipo_vehiculo), categoria_legal: c.categoria_legal, estado: c.estado })));
+
     const cargasFiltradas = (data || []).filter((carga) => {
-      if (!tipoActivo) return true;
+      if (!tipoActivo) {
+        console.log(`[FILTRO] carga ${carga.id}: tipoActivo vacío → PASA`);
+        return true;
+      }
       if (carga.tipo_vehiculo) {
         const matchTipo = String(carga.tipo_vehiculo).toLowerCase().trim() === String(tipoActivo).toLowerCase().trim();
+        console.log(`[FILTRO] carga ${carga.id}: tipo carga="${JSON.stringify(carga.tipo_vehiculo)}" vs chofer="${JSON.stringify(tipoActivo)}" matchTipo=${matchTipo}`);
         if (usuario?.categoria_legal && carga.categoria_legal) {
-          return matchTipo && String(carga.categoria_legal) === String(usuario.categoria_legal);
+          const matchCat = String(carga.categoria_legal) === String(usuario.categoria_legal);
+          console.log(`[FILTRO] carga ${carga.id}: cat carga="${carga.categoria_legal}" vs chofer="${usuario.categoria_legal}" matchCat=${matchCat} → ${matchTipo && matchCat ? "PASA" : "DESCARTADA"}`);
+          return matchTipo && matchCat;
         }
+        console.log(`[FILTRO] carga ${carga.id}: sin cat_legal en carga o usuario → ${matchTipo ? "PASA" : "DESCARTADA"}`);
         return matchTipo;
       }
-      return (
+      const matchVehiculo =
         String(carga.vehiculo || "").toLowerCase().includes(String(tipoActivo).toLowerCase()) ||
-        String(tipoActivo).toLowerCase().includes(String(carga.vehiculo || "").toLowerCase())
-      );
+        String(tipoActivo).toLowerCase().includes(String(carga.vehiculo || "").toLowerCase());
+      console.log(`[FILTRO] carga ${carga.id}: sin tipo_vehiculo, vehiculo="${carga.vehiculo}" → ${matchVehiculo ? "PASA" : "DESCARTADA"}`);
+      return matchVehiculo;
     });
+
+    console.log("CARGAS FILTRADAS count:", cargasFiltradas.length, cargasFiltradas.map((c: any) => c.id));
+    console.log("HASH actual:", JSON.stringify(cargasHashRef.current), "→ nuevo:", JSON.stringify(cargasFiltradas.map((c: any) => c.id).join(",")));
 
     // ── Evitar re-render si los ids no cambiaron ──────────────────────────
     const nuevoHash = cargasFiltradas.map(c => c.id).join(",");
