@@ -205,11 +205,11 @@ export default function GestionVehiculosChofer({ choferId, categoriaLegal, onAct
           <p className="text-orange-400 font-black text-sm mb-2">⚠️ Acciones requeridas</p>
           <p className="text-zinc-400 text-xs mb-3">Completá esto para ponerte ONLINE</p>
           <ul className="space-y-1">
-            {validacion.acciones.slice(0, 6).map((a, i) => (
+            {validacion.acciones.slice(0, 10).map((a, i) => (
               <li key={i} className="text-white text-xs flex gap-2"><span className="text-orange-400">•</span>{a}</li>
             ))}
-            {validacion.acciones.length > 6 && (
-              <li className="text-zinc-500 text-xs">+{validacion.acciones.length - 6} más</li>
+            {validacion.acciones.length > 10 && (
+              <li className="text-zinc-500 text-xs">+{validacion.acciones.length - 10} más</li>
             )}
           </ul>
         </div>
@@ -279,15 +279,15 @@ export default function GestionVehiculosChofer({ choferId, categoriaLegal, onAct
         </div>
 
         <div className="grid grid-cols-2 gap-2">
-          <div>
-            <label className="text-zinc-500 text-xs font-black">Venc. seguro *</label>
+          <div className="flex flex-col">
+            <label className="text-zinc-500 text-xs font-black mb-1">Vencimiento seguro *</label>
             <input type="date" value={seguroVenc} min={hoyIso()} onChange={e => setSeguroVenc(e.target.value)}
-              className="w-full p-3 rounded-xl bg-black border border-zinc-700 text-sm mt-1" />
+              className="w-full p-3 rounded-xl bg-black border border-zinc-700 text-sm" />
           </div>
-          <div>
-            <label className="text-zinc-500 text-xs font-black">Venc. VTV/RTO *</label>
+          <div className="flex flex-col">
+            <label className="text-zinc-500 text-xs font-black mb-1">Vencimiento VTV / RTO *</label>
             <input type="date" value={vtvVenc} min={hoyIso()} onChange={e => setVtvVenc(e.target.value)}
-              className="w-full p-3 rounded-xl bg-black border border-zinc-700 text-sm mt-1" />
+              className="w-full p-3 rounded-xl bg-black border border-zinc-700 text-sm" />
           </div>
         </div>
 

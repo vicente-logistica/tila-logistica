@@ -698,19 +698,29 @@ export default function PanelClientePage() {
                         className="w-full py-3.5 rounded-xl font-black text-sm bg-blue-600 hover:bg-blue-500 text-white active:scale-[0.98] transition"
                         onClick={async () => {
                           try {
+                            const payload = {
+                              carga_id: viaje.id,
+                              monto: viaje.precio_cliente,
+                              descripcion: `TILA · ${viaje.origen} → ${viaje.destino}`,
+                            };
+                            console.log("[PAGO] enviando a crear-preferencia:", payload);
                             const res = await fetch("/api/mercadopago/crear-preferencia", {
                               method: "POST",
                               headers: { "Content-Type": "application/json" },
-                              body: JSON.stringify({
-                                carga_id: viaje.id,
-                                monto: viaje.precio_cliente,
-                                descripcion: `TILA · ${viaje.origen} → ${viaje.destino}`,
-                              }),
+                              body: JSON.stringify(payload),
                             });
+                            console.log("[PAGO] response status:", res.status);
                             const d = await res.json();
-                            if (d.init_point) window.location.href = d.init_point;
-                            else alert("Error al iniciar el pago. Intentá de nuevo.");
-                          } catch {
+                            console.log("[PAGO] response body:", d);
+                            if (d.init_point) {
+                              console.log("[PAGO] redirigiendo a:", d.init_point.slice(0, 80));
+                              window.location.href = d.init_point;
+                            } else {
+                              console.error("[PAGO] init_point ausente — body:", d);
+                              alert("Error al iniciar el pago. Intentá de nuevo.");
+                            }
+                          } catch (err) {
+                            console.error("[PAGO] error de red / fetch:", err);
                             alert("Error de red al iniciar el pago.");
                           }
                         }}

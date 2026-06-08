@@ -101,6 +101,8 @@ export default function RegistroChoferPage() {
 
   const [bancoBilletera, setBancoBilletera] = useState("");
 
+  const [codigoAntecedentes, setCodigoAntecedentes] = useState("");
+
 
 
   const [archivos, setArchivos] = useState<Record<string, File>>({});
@@ -167,15 +169,46 @@ export default function RegistroChoferPage() {
 
     }
 
-    if (!archivos.antecedentes) {
-
-      alert("Subí el certificado de antecedentes (PDF o imagen)");
-
+    // ── Documentación sensible obligatoria — archivo requerido ──────────────
+    if (!archivos["dni_frente"]) {
+      alert("📄 Falta DNI Frente — subí la foto o PDF");
       return;
-
     }
 
+    if (!archivos["dni_dorso"]) {
+      alert("📄 Falta DNI Dorso — subí la foto o PDF");
+      return;
+    }
 
+    if (!archivos["licencia"]) {
+      alert("📄 Falta Licencia de conducir — subí la foto o PDF");
+      return;
+    }
+
+    if (!archivos["antecedentes_penales"]) {
+      alert("📄 Falta el Certificado de antecedentes penales — subí la foto o PDF");
+      return;
+    }
+
+    if (!codigoAntecedentes.trim()) {
+      alert("📄 Falta el código del Certificado de antecedentes — ingresá el código");
+      return;
+    }
+
+    if (!archivos["cedula_verde"]) {
+      alert("📄 Falta la Cédula verde del vehículo — subí la foto o PDF");
+      return;
+    }
+
+    if (!archivos["seguro"]) {
+      alert("📄 Falta el Seguro del vehículo — subí la foto o PDF");
+      return;
+    }
+
+    if (!archivos["vtv_rto"]) {
+      alert("📄 Falta la VTV / RTO — subí la foto o PDF");
+      return;
+    }
 
     setLoading(true);
 
@@ -311,6 +344,13 @@ export default function RegistroChoferPage() {
 
 
 
+    // Guardar código de antecedentes
+    if (codigoAntecedentes.trim()) {
+      await supabase
+        .from("documentacion_chofer")
+        .upsert([{ chofer_id: choferIdNuevo, tipo: "antecedentes_codigo", url: codigoAntecedentes.trim() }], { onConflict: "chofer_id,tipo" });
+    }
+
     setLoading(false);
 
     alert("Solicitud enviada correctamente. El administrador revisará tu documentación.");
@@ -329,7 +369,7 @@ export default function RegistroChoferPage() {
 
   const renderDoc = (doc: { tipo: string; label: string }) => (
 
-    <div key={doc.tipo} className={`rounded-2xl border-2 overflow-hidden ${archivos[doc.tipo] ? "border-green-500" : doc.tipo === "antecedentes" ? "border-orange-500" : "border-dashed border-zinc-600"} bg-black p-3`}>
+    <div key={doc.tipo} className={`rounded-2xl border-2 overflow-hidden ${archivos[doc.tipo] ? "border-green-500" : doc.tipo === "antecedentes_penales" ? "border-orange-500" : "border-dashed border-zinc-600"} bg-black p-3`}>
 
       {previews[doc.tipo] && previews[doc.tipo] !== "pdf" ? (
 
@@ -347,7 +387,7 @@ export default function RegistroChoferPage() {
 
       <p className="text-xs font-black text-zinc-300 mb-1">
 
-        {doc.label}{doc.tipo === "antecedentes" ? " *" : ""}
+        {doc.label}{(doc.tipo === "antecedentes_penales" || doc.tipo === "dni_frente" || doc.tipo === "dni_dorso" || doc.tipo === "licencia" || doc.tipo === "cedula_verde" || doc.tipo === "seguro" || doc.tipo === "vtv_rto") ? " *" : ""}
 
       </p>
 
@@ -521,22 +561,47 @@ export default function RegistroChoferPage() {
 
 
 
-          <input value={zonaOperativa} onChange={e => setZonaOperativa(e.target.value)} className="w-full p-4 rounded-xl bg-black border border-zinc-700" placeholder="Zona operativa" />
+          <div>
+            <label className="text-zinc-400 text-sm font-black mb-2 block">Zona de operación</label>
+            <input value={zonaOperativa} onChange={e => setZonaOperativa(e.target.value)} className="w-full p-4 rounded-xl bg-black border border-zinc-700" placeholder="Ej: CABA, GBA Norte, Córdoba..." />
+          </div>
 
-          <input value={capacidadCarga} onChange={e => setCapacidadCarga(e.target.value)} className="w-full p-4 rounded-xl bg-black border border-zinc-700" placeholder="Capacidad de carga (kg)" />
+          <div>
+            <label className="text-zinc-400 text-sm font-black mb-2 block">Capacidad aproximada (kg)</label>
+            <input value={capacidadCarga} onChange={e => setCapacidadCarga(e.target.value)} className="w-full p-4 rounded-xl bg-black border border-zinc-700" placeholder="Ej: 500, 3500, 20000..." type="number" min="0" />
+          </div>
 
-          <input value={seguroCarga} onChange={e => setSeguroCarga(e.target.value)} className="w-full p-4 rounded-xl bg-black border border-zinc-700" placeholder="Seguro de carga" />
+          <div>
+            <label className="text-zinc-400 text-sm font-black mb-2 block">¿Tiene seguro de carga?</label>
+            <select value={seguroCarga} onChange={e => setSeguroCarga(e.target.value)} className="w-full p-4 rounded-xl bg-black border border-zinc-700 text-white">
+              <option value="">Seleccioná una opción</option>
+              <option value="Si">Sí, tengo seguro de carga</option>
+              <option value="No">No tengo seguro de carga</option>
+              <option value="En trámite">En trámite</option>
+            </select>
+          </div>
 
 
 
           <h2 className="text-2xl font-bold text-yellow-400 pt-4">📋 Documentos personales</h2>
 
-          <p className="text-zinc-500 text-sm">El certificado de antecedentes es obligatorio (PDF o imagen).</p>
+          <p className="text-zinc-500 text-sm">Todos los documentos marcados con * son obligatorios (foto o PDF).</p>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
 
             {DOCS_PERSONALES.map(renderDoc)}
 
+          </div>
+
+          <div className="bg-zinc-800 rounded-2xl p-4">
+            <label className="text-zinc-400 text-sm font-black mb-2 block">Código del certificado de antecedentes *</label>
+            <input
+              value={codigoAntecedentes}
+              onChange={e => setCodigoAntecedentes(e.target.value)}
+              className="w-full p-4 rounded-xl bg-black border border-zinc-700 text-white"
+              placeholder="Ej: 12345678"
+            />
+            <p className="text-zinc-600 text-xs mt-1">El código figura en el certificado oficial emitido por el Registro Nacional de Reincidencia.</p>
           </div>
 
 

@@ -329,10 +329,10 @@ const TarjetaChofer = ({ chofer, onActualizarAprobacion }: { chofer: any; onActu
             ))}
           </div>
           {/* Código antecedentes */}
-          <div className="mt-1 bg-zinc-900 rounded-xl px-3 py-2 flex items-center gap-2">
-            <span className="text-zinc-500 text-xs font-black">CÓDIGO CERT.:</span>
-            <span className={`text-sm font-black ${documentos["antecedentes_codigo"] ? "text-white" : "text-zinc-600"}`}>
-              {documentos["antecedentes_codigo"] || "No cargado"}
+          <div className={`mt-1 rounded-xl px-3 py-2 flex items-center gap-2 ${documentos["antecedentes_codigo"] ? "bg-zinc-900" : "bg-red-950 border border-red-800"}`}>
+            <span className="text-zinc-500 text-xs font-black">CÓDIGO ANTECEDENTES:</span>
+            <span className={`text-sm font-black ${documentos["antecedentes_codigo"] ? "text-white" : "text-red-400"}`}>
+              {documentos["antecedentes_codigo"] || "⚠️ No cargado"}
             </span>
           </div>
         </div>

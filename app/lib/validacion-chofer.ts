@@ -17,6 +17,10 @@ export function evaluarDocumentacionPersonal(docs: Record<string, string>): stri
   for (const doc of DOCS_PERSONALES) {
     if (!docs[doc.tipo]) faltantes.push(`Subí ${doc.label.toLowerCase()}`);
   }
+  // El código del certificado de antecedentes es obligatorio además del archivo
+  if (!docs["antecedentes_codigo"]) {
+    faltantes.push("Ingresá el código del certificado de antecedentes");
+  }
   return faltantes;
 }
 
