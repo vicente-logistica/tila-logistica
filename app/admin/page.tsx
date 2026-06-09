@@ -752,6 +752,35 @@ const HistorialAdmin = ({ cargas, paradasPorCarga, todosUsuarios, onRecargar }: 
                     </div>
                   </div>
 
+                  {/* ── Estado de pago MP ───────────────────────────────── */}
+                  <div className={`rounded-xl p-3 text-xs space-y-1 border ${
+                    carga.pagado_cliente ? "bg-green-950 border-green-700" :
+                    carga.pago_estado === "rechazado" ? "bg-red-950 border-red-700" :
+                    "bg-zinc-900 border-zinc-700"
+                  }`}>
+                    <p className="font-black text-zinc-400 mb-2">💳 ESTADO DE PAGO</p>
+                    <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+                      <span className="text-zinc-500">pago_estado</span>
+                      <span className={`font-black ${
+                        carga.pago_estado === "pagado" ? "text-green-400" :
+                        carga.pago_estado === "rechazado" ? "text-red-400" :
+                        carga.pago_estado === "pendiente_proceso" ? "text-yellow-400" :
+                        "text-zinc-300"
+                      }`}>{carga.pago_estado || "—"}</span>
+
+                      <span className="text-zinc-500">pagado_cliente</span>
+                      <span className={`font-black ${carga.pagado_cliente ? "text-green-400" : "text-orange-400"}`}>
+                        {carga.pagado_cliente ? "✅ Sí" : "⏳ No"}
+                      </span>
+
+                      <span className="text-zinc-500">mp_status</span>
+                      <span className="text-zinc-300 font-black">{carga.mp_status || "—"}</span>
+
+                      <span className="text-zinc-500">mp_payment_id</span>
+                      <span className="text-zinc-300 font-mono text-[10px] break-all">{carga.mp_payment_id || "—"}</span>
+                    </div>
+                  </div>
+
                   {paradas.length > 0 && (
                     <div>
                       <p className="text-zinc-500 text-xs font-black mb-2">RUTA</p>

@@ -425,6 +425,18 @@ export default function ViajeActivoPage() {
             </button>
           )}
 
+          {/* Aviso pago pendiente — solo informativo, no bloquea */}
+          {viaje.pago_estado && viaje.pago_estado !== "pagado" && (
+            <div className={`w-full px-3 py-2 rounded-xl text-xs font-black text-center ${
+              viaje.pago_estado === "rechazado" ? "bg-red-900/60 text-red-300 border border-red-700" :
+              "bg-orange-900/60 text-orange-300 border border-orange-700"
+            }`}>
+              {viaje.pago_estado === "rechazado"
+                ? "❌ Pago rechazado — el cliente debe reintentar"
+                : "💳 Pago pendiente del cliente"}
+            </div>
+          )}
+
           {/* Botón principal */}
           {botonActivo && (
             <button
