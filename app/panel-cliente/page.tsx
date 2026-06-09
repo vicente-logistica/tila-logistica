@@ -334,8 +334,9 @@ export default function PanelClientePage() {
   // audioFinalizadoRef es un objeto Audio creado en useEffect — NO elemento DOM
   // así persiste aunque la vista cambie entre SeguimientoViaje / festejo / panel normal
   const audioFinalizadoRef    = useRef<HTMLAudioElement | null>(null);
-  const audioDesbloquedoRef   = useRef(false); // guard — desbloquear ambos una sola vez
+  const audioDesbloquedoRef   = useRef(false); // guard — se setea SOLO si el unlock fue exitoso
   const ultimoEstadoRef       = useRef<Record<string, string>>({});
+  const primeraVezRef         = useRef(true);  // evita falsos positivos en la primera carga
   const festejoClienteRef     = useRef<Set<string>>(new Set()); // IDs ya celebrados — evita repetir por polling
   const [festejoViaje, setFestejoViaje] = useState<any>(null); // viaje que disparó el festejo del cliente
 
@@ -351,23 +352,34 @@ export default function PanelClientePage() {
   /** Desbloquea ambos audio elements con un play silencioso en el contexto de gesto del usuario.
    *  Llamar en cualquier botón/tap del cliente para que audio.mp3 pueda sonar luego. */
   const desbloquearAudios = useCallback(async () => {
-    console.log("[DIAG-AUDIO] desbloquearAudios llamado — ya desbloqueado:", audioDesbloquedoRef.current);
+    console.log("AUDIO DESBLOQUEADO", audioDesbloquedoRef.current);
     if (audioDesbloquedoRef.current) return;
-    audioDesbloquedoRef.current = true;
+    // NO setear el guard acá — solo marcarlo si el unlock realmente funciona
+    let exito = false;
     const silentUnlock = async (audio: HTMLAudioElement | null) => {
-      if (!audio) { console.warn("[DIAG-AUDIO] silentUnlock: audio es NULL"); return; }
-      console.log("[DIAG-AUDIO] silentUnlock: intentando play silencioso en", audio.src);
+      if (!audio) { console.warn("[DIAG-AUDIO] silentUnlock: audio es NULL"); return false; }
       try {
         audio.volume = 0;
         await audio.play();
         audio.pause();
         audio.currentTime = 0;
         audio.volume = 1;
-        console.log("[DIAG-AUDIO] silentUnlock: OK —", audio.src);
-      } catch (e) { console.warn("[DIAG-AUDIO] silentUnlock: ERROR —", audio.src, e); }
+        console.log("[DIAG-AUDIO] silentUnlock OK:", audio.src);
+        return true;
+      } catch (e) {
+        console.warn("[DIAG-AUDIO] silentUnlock ERROR:", audio.src, e);
+        return false;
+      }
     };
-    await Promise.all([silentUnlock(audioRef.current), silentUnlock(audioFinalizadoRef.current)]);
-    console.log("[DIAG-AUDIO] ambos audios desbloqueados. audioRef muted:", audioRef.current?.muted, "volume:", audioRef.current?.volume);
+    const [r1, r2] = await Promise.all([silentUnlock(audioRef.current), silentUnlock(audioFinalizadoRef.current)]);
+    exito = !!(r1 || r2);
+    // Solo marcar como desbloqueado si al menos uno tuvo éxito
+    if (exito) {
+      audioDesbloquedoRef.current = true;
+      console.log("[DIAG-AUDIO] audios desbloqueados correctamente. muted:", audioRef.current?.muted, "volume:", audioRef.current?.volume);
+    } else {
+      console.warn("[DIAG-AUDIO] unlock falló — se reintentará en el próximo gesto del usuario");
+    }
   }, []);
 
   // Crear el objeto Audio de finalizado en el cliente (no en SSR) y pre-cargarlo
@@ -378,6 +390,11 @@ export default function PanelClientePage() {
     audioFinalizadoRef.current = af;
     return () => { af.pause(); };
   }, []);
+
+  // Intentar desbloquear audios al montar (probablemente falle sin gesto — se reintenta en onClick/onTouchStart)
+  useEffect(() => {
+    desbloquearAudios();
+  }, [desbloquearAudios]);
 
   const cargarViajes = async () => {
     if (!usuario?.id) return;
@@ -391,8 +408,20 @@ export default function PanelClientePage() {
     setViajes(todos);
 
     // Alerta sonora y festejo en cambio de estado
-    console.log("[DIAG-AUDIO] desbloquedoRef:", audioDesbloquedoRef.current, "— audioRef:", audioRef.current ? `OK muted=${audioRef.current.muted} volume=${audioRef.current.volume}` : "NULL");
-    todos.forEach(v => {
+    console.log("AUDIO REF EXISTE", !!audioRef.current, "| AUDIO DESBLOQUEADO", audioDesbloquedoRef.current);
+
+    // Primera carga: inicializar ref con estados actuales sin disparar alertas
+    const esPrimeraCarga = primeraVezRef.current;
+    if (esPrimeraCarga) {
+      primeraVezRef.current = false;
+      todos.forEach(v => {
+        ultimoEstadoRef.current[String(v.id)] = v.estado || "pendiente";
+      });
+      console.log("[DIAG-AUDIO] Primera carga — estados inicializados:", { ...ultimoEstadoRef.current });
+      // NO retornar: continuar para cargar paradas y choferes
+    }
+
+    if (!esPrimeraCarga) todos.forEach(v => {
       const prev   = ultimoEstadoRef.current[String(v.id)];
       const actual = v.estado || "pendiente";
       console.log("ESTADO ANTERIOR", prev ?? "(sin dato previo)");
