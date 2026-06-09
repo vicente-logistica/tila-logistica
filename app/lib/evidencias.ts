@@ -19,6 +19,11 @@ export interface DatosEvidencia {
   nombreReceptor?: string;
   observacion?: string;
   fotoUrl?: string;
+  // campos ampliados para carga y descarga
+  tipoOperacion?: string;  // "carga" | "descarga"
+  tipoCarga?: string;
+  entregaNombre?: string;  // quién entregó (evento carga_retirada)
+  recibioNombre?: string;  // quién recibió (evento descarga_completada)
 }
 
 export async function registrarEvidencia(
@@ -39,15 +44,20 @@ export async function registrarEvidencia(
 
     if (datos.usuarioId)      payload.usuario_id      = datos.usuarioId;
     if (datos.nombreReceptor) payload.nombre_receptor = datos.nombreReceptor;
+    if (datos.recibioNombre)  payload.recibio_nombre  = datos.recibioNombre;
+    if (datos.entregaNombre)  payload.entrego_nombre  = datos.entregaNombre;
+    if (datos.tipoOperacion)  payload.tipo_operacion  = datos.tipoOperacion;
+    if (datos.tipoCarga)      payload.tipo_carga      = datos.tipoCarga;
     if (datos.observacion)    payload.observacion     = datos.observacion;
     if (datos.fotoUrl)        payload.foto_url        = datos.fotoUrl;
 
+    console.log("[EVIDENCIA] Payload a insertar:", JSON.stringify(payload));
     const { error } = await supabase.from("viaje_evidencias").insert([payload]);
 
     if (error) {
       console.warn("[EVIDENCIA] Error al registrar evidencia:", evento, error.message);
     } else {
-      console.log("[EVIDENCIA] Registrada:", evento, "carga:", cargaId);
+      console.log("[EVIDENCIA] Registrada OK:", evento, "carga:", cargaId);
     }
   } catch (err: any) {
     console.warn("[EVIDENCIA] Excepción al registrar evidencia:", evento, err?.message ?? err);
@@ -57,12 +67,12 @@ export async function registrarEvidencia(
 /** Mapea nombre de estado del viaje al evento de evidencia correspondiente */
 export function estadoAEvento(estado: string): EventoEvidencia | null {
   const mapa: Record<string, EventoEvidencia> = {
-    "Chofer asignado":    "viaje_aceptado",
-    "En camino":          "chofer_en_camino",
-    "Carga retirada":     "carga_retirada",
-    "En ruta":            "en_ruta",
+    "Chofer asignado":     "viaje_aceptado",
+    "En camino":           "chofer_en_camino",
+    "Carga retirada":      "carga_retirada",
+    "En ruta":             "en_ruta",
     "Descarga completada": "descarga_completada",
-    "Viaje finalizado":   "viaje_finalizado",
+    "Viaje finalizado":    "viaje_finalizado",
   };
   return mapa[estado] ?? null;
 }

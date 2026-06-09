@@ -90,9 +90,18 @@ export default function ViajeActivoPage() {
   const [destNavPendiente, setDestNavPendiente] = useState<string | null>(null);
   const [navegadorPreferido, setNavegadorPreferido] = useState<string | null>(null);
 
-  // Modal evidencia de entrega
+  // Modal evidencia de carga
+  const [modalCarga, setModalCarga]               = useState(false);
+  const [cargaEntrego, setCargaEntrego]           = useState("");
+  const [cargaTipoCarga, setCargaTipoCarga]       = useState("");
+  const [cargaObsv, setCargaObsv]                 = useState("");
+  const [cargaFoto, setCargaFoto]                 = useState<File | null>(null);
+  const [cargaSubiendo, setCargaSubiendo]         = useState(false);
+
+  // Modal evidencia de descarga (entrega)
   const [modalEntrega, setModalEntrega]           = useState(false);
   const [entregaReceptor, setEntregaReceptor]     = useState("");
+  const [entregaTipoCarga, setEntregaTipoCarga]   = useState("");
   const [entregaObservacion, setEntregaObservacion] = useState("");
   const [entregaFoto, setEntregaFoto]             = useState<File | null>(null);
   const [entregaSubiendo, setEntregaSubiendo]     = useState(false);
@@ -318,7 +327,8 @@ export default function ViajeActivoPage() {
   };
 
   // ─── Actualizar estado + navegación automática ────────────────────────────
-  const actualizarEstado = async (nuevoEstado: string) => {
+  // skipEvidencia=true cuando el modal ya registró la evidencia manualmente
+  const actualizarEstado = async (nuevoEstado: string, skipEvidencia = false) => {
     if (!viaje?.id) return;
     if (bloqueadoPorParadas) { alert("Completá todas las paradas antes de finalizar"); return; }
 
@@ -331,16 +341,17 @@ export default function ViajeActivoPage() {
     if (error) { alert("Error al actualizar estado"); viajeTerminado.current = false; return; }
     setViaje(data);
 
-    // ── Evidencia automática — no bloquea si falla ───────────────────────────
-    const evento = estadoAEvento(nuevoEstado);
-    if (evento) {
-      registrarEvidencia(supabase, viaje.id, evento, {
-        usuarioId:   usuarioRef.current?.id,
-        estadoViaje: nuevoEstado,
-        lat:         viaje.lat ?? null,
-        lng:         viaje.lng ?? null,
-      });
-      // fire-and-forget: sin await — no bloquea transición
+    // ── Evidencia automática — se omite si el modal ya la registró ───────────
+    if (!skipEvidencia) {
+      const evento = estadoAEvento(nuevoEstado);
+      if (evento) {
+        registrarEvidencia(supabase, viaje.id, evento, {
+          usuarioId:   usuarioRef.current?.id,
+          estadoViaje: nuevoEstado,
+          lat:         viaje.lat ?? null,
+          lng:         viaje.lng ?? null,
+        });
+      }
     }
 
     // Navegación automática en transiciones que abren mapa
@@ -363,49 +374,67 @@ export default function ViajeActivoPage() {
     }
   };
 
-  // ─── Confirmar entrega (modal) ────────────────────────────────────────────
+  // ─── Helper: subir foto a storage ────────────────────────────────────────
+  const subirFotoEvidencia = async (file: File, prefijo: string): Promise<string | undefined> => {
+    try {
+      const ext  = file.name.split(".").pop() || "jpg";
+      const path = `evidencias/${viaje.id}/${prefijo}_${Date.now()}.${ext}`;
+      const { error: uploadErr } = await supabase.storage
+        .from("documentacion-choferes")
+        .upload(path, file, { upsert: true });
+      if (uploadErr) { console.warn("[EVIDENCIA] Error subiendo foto:", uploadErr.message); return undefined; }
+      const { data: urlData } = supabase.storage.from("documentacion-choferes").getPublicUrl(path);
+      return urlData.publicUrl;
+    } catch (e: any) {
+      console.warn("[EVIDENCIA] Excepción subiendo foto:", e?.message);
+      return undefined;
+    }
+  };
+
+  // ─── Confirmar carga (modal) ──────────────────────────────────────────────
+  const confirmarCarga = async () => {
+    setCargaSubiendo(true);
+    const fotoUrl = cargaFoto ? await subirFotoEvidencia(cargaFoto, "carga") : undefined;
+
+    await registrarEvidencia(supabase, viaje.id, "carga_retirada", {
+      usuarioId:     usuarioRef.current?.id,
+      estadoViaje:   "Carga retirada",
+      lat:           viaje.lat ?? null,
+      lng:           viaje.lng ?? null,
+      tipoOperacion: "carga",
+      tipoCarga:     cargaTipoCarga.trim() || undefined,
+      entregaNombre: cargaEntrego.trim() || undefined,
+      observacion:   cargaObsv.trim() || undefined,
+      fotoUrl,
+    });
+
+    setCargaSubiendo(false);
+    setModalCarga(false);
+    setCargaEntrego(""); setCargaTipoCarga(""); setCargaObsv(""); setCargaFoto(null);
+    actualizarEstado("Carga retirada", true); // skip evidencia automática — ya registrada
+  };
+
+  // ─── Confirmar descarga (modal) ───────────────────────────────────────────
   const confirmarEntrega = async () => {
     setEntregaSubiendo(true);
-    let fotoUrl: string | undefined;
+    const fotoUrl = entregaFoto ? await subirFotoEvidencia(entregaFoto, "descarga") : undefined;
 
-    // Subir foto si existe
-    if (entregaFoto && viaje?.id) {
-      try {
-        const ext  = entregaFoto.name.split(".").pop() || "jpg";
-        const path = `evidencias/${viaje.id}/entrega_${Date.now()}.${ext}`;
-        const { error: uploadErr } = await supabase.storage
-          .from("documentacion-choferes")
-          .upload(path, entregaFoto, { upsert: true });
-        if (!uploadErr) {
-          const { data: urlData } = supabase.storage.from("documentacion-choferes").getPublicUrl(path);
-          fotoUrl = urlData.publicUrl;
-        } else {
-          console.warn("[EVIDENCIA] Error subiendo foto:", uploadErr.message);
-        }
-      } catch (e: any) {
-        console.warn("[EVIDENCIA] Excepción subiendo foto:", e?.message);
-      }
-    }
-
-    // Registrar evidencia con datos del modal
     await registrarEvidencia(supabase, viaje.id, "descarga_completada", {
       usuarioId:      usuarioRef.current?.id,
       estadoViaje:    "Descarga completada",
       lat:            viaje.lat ?? null,
       lng:            viaje.lng ?? null,
-      nombreReceptor: entregaReceptor.trim() || undefined,
+      tipoOperacion:  "descarga",
+      tipoCarga:      entregaTipoCarga.trim() || undefined,
+      recibioNombre:  entregaReceptor.trim() || undefined,
       observacion:    entregaObservacion.trim() || undefined,
       fotoUrl,
     });
 
     setEntregaSubiendo(false);
     setModalEntrega(false);
-    setEntregaReceptor("");
-    setEntregaObservacion("");
-    setEntregaFoto(null);
-
-    // Avanzar estado normalmente
-    actualizarEstado("Descarga completada");
+    setEntregaReceptor(""); setEntregaTipoCarga(""); setEntregaObservacion(""); setEntregaFoto(null);
+    actualizarEstado("Descarga completada", true); // skip evidencia automática — ya registrada
   };
 
   // ─── Guards ───────────────────────────────────────────────────────────────
@@ -524,11 +553,14 @@ export default function ViajeActivoPage() {
                       .catch((err) => { console.error("FINALIZADO PLAY ERROR", err); });
                   }
                 }
-                // "Descarga completada" abre modal de evidencia antes de avanzar
+                // "Carga retirada" abre modal de evidencia de carga
+                if (botonActivo?.nombre === "Carga retirada") {
+                  setModalCarga(true);
+                  return;
+                }
+                // "Descarga completada" abre modal de evidencia de descarga
                 if (botonActivo?.nombre === "Descarga completada") {
-                  console.log("[MODAL-ENTREGA] Click Descarga completada — modalEntrega actual:", modalEntrega, "— llamando setModalEntrega(true)");
                   setModalEntrega(true);
-                  console.log("[MODAL-ENTREGA] setModalEntrega(true) llamado");
                   return;
                 }
                 actualizarEstado(botonActivo.nombre);
@@ -682,72 +714,132 @@ export default function ViajeActivoPage() {
         </div>
       )}
 
-      {/* ─── MODAL EVIDENCIA DE ENTREGA ─────────────────────────────────── */}
-      {console.log("[MODAL-ENTREGA] Render — modalEntrega:", modalEntrega) as any}
+      {/* ─── MODAL EVIDENCIA DE CARGA ────────────────────────────────────── */}
+      {modalCarga && (
+        <div className="fixed inset-0 z-[9999] bg-black/90 flex items-end justify-center p-4">
+          <div className="bg-zinc-900 border border-zinc-700 rounded-3xl w-full max-w-md p-5 space-y-4">
+            <div className="flex items-center justify-between">
+              <p className="text-yellow-400 font-black text-base">📦 Evidencia de carga</p>
+              <button type="button" onClick={() => setModalCarga(false)} className="text-zinc-500 font-black text-lg px-2">✕</button>
+            </div>
+
+            <div>
+              <label className="text-zinc-400 text-xs font-black mb-1 block">¿Quién entregó la carga?</label>
+              <input type="text" value={cargaEntrego} onChange={e => setCargaEntrego(e.target.value)}
+                placeholder="Nombre (opcional)"
+                className="w-full bg-black border border-zinc-700 rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-yellow-400" />
+            </div>
+
+            <div>
+              <label className="text-zinc-400 text-xs font-black mb-1 block">Tipo de carga</label>
+              <input type="text" value={cargaTipoCarga} onChange={e => setCargaTipoCarga(e.target.value)}
+                placeholder="Ej: pallets, electrodomésticos... (opcional)"
+                className="w-full bg-black border border-zinc-700 rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-yellow-400" />
+            </div>
+
+            <div>
+              <label className="text-zinc-400 text-xs font-black mb-1 block">Observación</label>
+              <textarea value={cargaObsv} onChange={e => setCargaObsv(e.target.value)}
+                placeholder="Sin novedad, carga incompleta... (opcional)"
+                rows={2}
+                className="w-full bg-black border border-zinc-700 rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-yellow-400 resize-none" />
+            </div>
+
+            <div>
+              <label className="text-zinc-400 text-xs font-black mb-1 block">📷 Foto de carga (opcional)</label>
+              <label className={`flex items-center gap-3 px-4 py-3 rounded-xl border cursor-pointer transition ${
+                cargaFoto ? "border-green-600 bg-green-950/30" : "border-zinc-700 bg-zinc-800 hover:border-zinc-500"
+              }`}>
+                <span className="text-sm font-black text-zinc-300">
+                  {cargaFoto ? `✅ ${cargaFoto.name}` : "📁 Seleccionar foto"}
+                </span>
+                <input type="file" accept="image/*" capture="environment" className="hidden"
+                  onChange={e => setCargaFoto(e.target.files?.[0] ?? null)} />
+              </label>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 pt-1">
+              <button type="button" disabled={cargaSubiendo}
+                onClick={() => {
+                  setModalCarga(false);
+                  registrarEvidencia(supabase, viaje.id, "carga_retirada", {
+                    usuarioId: usuarioRef.current?.id, estadoViaje: "Carga retirada",
+                    lat: viaje.lat ?? null, lng: viaje.lng ?? null, tipoOperacion: "carga",
+                  });
+                  actualizarEstado("Carga retirada", true);
+                }}
+                className="py-3 rounded-2xl font-black text-sm bg-zinc-700 text-zinc-300 hover:bg-zinc-600 transition">
+                Omitir
+              </button>
+              <button type="button" onClick={confirmarCarga} disabled={cargaSubiendo}
+                className="py-3 rounded-2xl font-black text-sm bg-yellow-400 text-black hover:bg-yellow-300 transition disabled:opacity-50">
+                {cargaSubiendo ? "Guardando..." : "Confirmar carga"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ─── MODAL EVIDENCIA DE DESCARGA ─────────────────────────────────── */}
       {modalEntrega && (
         <div className="fixed inset-0 z-[9999] bg-black/90 flex items-end justify-center p-4">
           <div className="bg-zinc-900 border border-zinc-700 rounded-3xl w-full max-w-md p-5 space-y-4">
             <div className="flex items-center justify-between">
-              <p className="text-yellow-400 font-black text-base">📦 Confirmar descarga</p>
+              <p className="text-yellow-400 font-black text-base">📦 Evidencia de descarga</p>
               <button type="button" onClick={() => setModalEntrega(false)} className="text-zinc-500 font-black text-lg px-2">✕</button>
             </div>
 
             <div>
               <label className="text-zinc-400 text-xs font-black mb-1 block">¿Quién recibió la carga?</label>
-              <input
-                type="text"
-                value={entregaReceptor}
-                onChange={e => setEntregaReceptor(e.target.value)}
+              <input type="text" value={entregaReceptor} onChange={e => setEntregaReceptor(e.target.value)}
                 placeholder="Nombre del receptor (opcional)"
-                className="w-full bg-black border border-zinc-700 rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-yellow-400"
-              />
+                className="w-full bg-black border border-zinc-700 rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-yellow-400" />
+            </div>
+
+            <div>
+              <label className="text-zinc-400 text-xs font-black mb-1 block">Tipo de carga</label>
+              <input type="text" value={entregaTipoCarga} onChange={e => setEntregaTipoCarga(e.target.value)}
+                placeholder="Ej: pallets, electrodomésticos... (opcional)"
+                className="w-full bg-black border border-zinc-700 rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-yellow-400" />
             </div>
 
             <div>
               <label className="text-zinc-400 text-xs font-black mb-1 block">Observación</label>
-              <textarea
-                value={entregaObservacion}
-                onChange={e => setEntregaObservacion(e.target.value)}
+              <textarea value={entregaObservacion} onChange={e => setEntregaObservacion(e.target.value)}
                 placeholder="Ej: entregado en portería, sin novedad... (opcional)"
                 rows={2}
-                className="w-full bg-black border border-zinc-700 rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-yellow-400 resize-none"
-              />
+                className="w-full bg-black border border-zinc-700 rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-yellow-400 resize-none" />
             </div>
 
             <div>
-              <label className="text-zinc-400 text-xs font-black mb-1 block">📷 Foto de entrega (opcional)</label>
+              <label className="text-zinc-400 text-xs font-black mb-1 block">📷 Foto de descarga (opcional)</label>
               <label className={`flex items-center gap-3 px-4 py-3 rounded-xl border cursor-pointer transition ${
                 entregaFoto ? "border-green-600 bg-green-950/30" : "border-zinc-700 bg-zinc-800 hover:border-zinc-500"
               }`}>
                 <span className="text-sm font-black text-zinc-300">
                   {entregaFoto ? `✅ ${entregaFoto.name}` : "📁 Seleccionar foto"}
                 </span>
-                <input
-                  type="file"
-                  accept="image/*"
-                  capture="environment"
-                  className="hidden"
-                  onChange={e => setEntregaFoto(e.target.files?.[0] ?? null)}
-                />
+                <input type="file" accept="image/*" capture="environment" className="hidden"
+                  onChange={e => setEntregaFoto(e.target.files?.[0] ?? null)} />
               </label>
             </div>
 
             <div className="grid grid-cols-2 gap-3 pt-1">
-              <button
-                type="button"
-                onClick={() => { setModalEntrega(false); actualizarEstado("Descarga completada"); }}
-                className="py-3 rounded-2xl font-black text-sm bg-zinc-700 text-zinc-300 hover:bg-zinc-600 transition"
-                disabled={entregaSubiendo}
-              >
+              <button type="button" disabled={entregaSubiendo}
+                onClick={() => {
+                  setModalEntrega(false);
+                  registrarEvidencia(supabase, viaje.id, "descarga_completada", {
+                    usuarioId: usuarioRef.current?.id, estadoViaje: "Descarga completada",
+                    lat: viaje.lat ?? null, lng: viaje.lng ?? null, tipoOperacion: "descarga",
+                  });
+                  actualizarEstado("Descarga completada", true);
+                }}
+                className="py-3 rounded-2xl font-black text-sm bg-zinc-700 text-zinc-300 hover:bg-zinc-600 transition">
                 Omitir
               </button>
-              <button
-                type="button"
-                onClick={confirmarEntrega}
-                disabled={entregaSubiendo}
-                className="py-3 rounded-2xl font-black text-sm bg-yellow-400 text-black hover:bg-yellow-300 transition disabled:opacity-50"
-              >
-                {entregaSubiendo ? "Guardando..." : "Confirmar"}
+              <button type="button" onClick={confirmarEntrega} disabled={entregaSubiendo}
+                className="py-3 rounded-2xl font-black text-sm bg-yellow-400 text-black hover:bg-yellow-300 transition disabled:opacity-50">
+                {entregaSubiendo ? "Guardando..." : "Confirmar descarga"}
               </button>
             </div>
           </div>

@@ -563,6 +563,10 @@ const TarjetaViaje = ({ carga, paradas, choferInfo, onAbrirCliente, onAbrirChofe
                     className="text-blue-400 underline">{Number(ev.lat).toFixed(5)}, {Number(ev.lng).toFixed(5)}</a>
                 </p>
               )}
+              {ev.tipo_operacion && <p><span className="text-zinc-500">Tipo de operación:</span> <span className="text-white font-black capitalize"> {ev.tipo_operacion}</span></p>}
+              {ev.tipo_carga && <p><span className="text-zinc-500">Tipo de carga:</span> <span className="text-white font-black"> {ev.tipo_carga}</span></p>}
+              {ev.entrego_nombre && <p><span className="text-zinc-500">Entregó:</span> <span className="text-white font-black"> {ev.entrego_nombre}</span></p>}
+              {ev.recibio_nombre && <p><span className="text-zinc-500">Recibió:</span> <span className="text-white font-black"> {ev.recibio_nombre}</span></p>}
               {ev.nombre_receptor && <p><span className="text-zinc-500">Receptor:</span> <span className="text-white font-black"> {ev.nombre_receptor}</span></p>}
               {ev.observacion && <p><span className="text-zinc-500">Obs:</span> <span className="text-zinc-300"> {ev.observacion}</span></p>}
               {ev.foto_url && (
@@ -921,8 +925,12 @@ const HistorialAdmin = ({ cargas, paradasPorCarga, todosUsuarios, onRecargar }: 
                                 📍 Ver ubicación
                               </a>
                             )}
-                            {ev.nombre_receptor && <p className="text-zinc-300">Receptor: <span className="text-white font-black">{ev.nombre_receptor}</span></p>}
-                            {ev.observacion && <p className="text-zinc-300">Obs: {ev.observacion}</p>}
+                            {ev.tipo_operacion && <p className="text-zinc-400">Tipo de operación: <span className="text-white font-black capitalize">{ev.tipo_operacion}</span></p>}
+                            {ev.tipo_carga && <p className="text-zinc-400">Tipo de carga: <span className="text-white font-black">{ev.tipo_carga}</span></p>}
+                            {ev.entrego_nombre && <p className="text-zinc-400">Entregó: <span className="text-white font-black">{ev.entrego_nombre}</span></p>}
+                            {ev.recibio_nombre && <p className="text-zinc-400">Recibió: <span className="text-white font-black">{ev.recibio_nombre}</span></p>}
+                            {ev.nombre_receptor && <p className="text-zinc-400">Receptor: <span className="text-white font-black">{ev.nombre_receptor}</span></p>}
+                            {ev.observacion && <p className="text-zinc-400">Obs: {ev.observacion}</p>}
                             {ev.foto_url && (
                               <a href={ev.foto_url} target="_blank" rel="noreferrer">
                                 <img src={ev.foto_url} alt="evidencia" className="w-full max-w-xs rounded-xl mt-1 border border-zinc-700" />
