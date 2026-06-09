@@ -6,6 +6,7 @@ import { supabase } from "../lib/supabase";
 import { useProtegerRuta } from "../hooks/useProtegerRuta";
 import MapaTILA, { ParadaMapa } from "../components/MapaTILA";
 import ChatAsistencia from "../components/ChatAsistencia";
+import { registrarEvidencia, estadoAEvento } from "../lib/evidencias";
 
 // ─── Estados y flujo ──────────────────────────────────────────────────────────
 const ESTADOS_ORDEN = [
@@ -88,6 +89,13 @@ export default function ViajeActivoPage() {
   const [mostrarNavSel, setMostrarNavSel]     = useState(false);
   const [destNavPendiente, setDestNavPendiente] = useState<string | null>(null);
   const [navegadorPreferido, setNavegadorPreferido] = useState<string | null>(null);
+
+  // Modal evidencia de entrega
+  const [modalEntrega, setModalEntrega]           = useState(false);
+  const [entregaReceptor, setEntregaReceptor]     = useState("");
+  const [entregaObservacion, setEntregaObservacion] = useState("");
+  const [entregaFoto, setEntregaFoto]             = useState<File | null>(null);
+  const [entregaSubiendo, setEntregaSubiendo]     = useState(false);
 
   const viajeTerminado       = useRef(false);
   const usuarioRef           = useRef<any>(null);
@@ -323,6 +331,18 @@ export default function ViajeActivoPage() {
     if (error) { alert("Error al actualizar estado"); viajeTerminado.current = false; return; }
     setViaje(data);
 
+    // ── Evidencia automática — no bloquea si falla ───────────────────────────
+    const evento = estadoAEvento(nuevoEstado);
+    if (evento) {
+      registrarEvidencia(supabase, viaje.id, evento, {
+        usuarioId:   usuarioRef.current?.id,
+        estadoViaje: nuevoEstado,
+        lat:         viaje.lat ?? null,
+        lng:         viaje.lng ?? null,
+      });
+      // fire-and-forget: sin await — no bloquea transición
+    }
+
     // Navegación automática en transiciones que abren mapa
     if (nuevoEstado === "En camino") {
       const dest = paradas.find(p => p.tipo === "retiro")?.direccion ?? viaje.origen;
@@ -341,6 +361,51 @@ export default function ViajeActivoPage() {
       setFestejo(true);
       setTimeout(() => router.push("/panel-chofer"), 5000);
     }
+  };
+
+  // ─── Confirmar entrega (modal) ────────────────────────────────────────────
+  const confirmarEntrega = async () => {
+    setEntregaSubiendo(true);
+    let fotoUrl: string | undefined;
+
+    // Subir foto si existe
+    if (entregaFoto && viaje?.id) {
+      try {
+        const ext  = entregaFoto.name.split(".").pop() || "jpg";
+        const path = `evidencias/${viaje.id}/entrega_${Date.now()}.${ext}`;
+        const { error: uploadErr } = await supabase.storage
+          .from("documentacion-choferes")
+          .upload(path, entregaFoto, { upsert: true });
+        if (!uploadErr) {
+          const { data: urlData } = supabase.storage.from("documentacion-choferes").getPublicUrl(path);
+          fotoUrl = urlData.publicUrl;
+        } else {
+          console.warn("[EVIDENCIA] Error subiendo foto:", uploadErr.message);
+        }
+      } catch (e: any) {
+        console.warn("[EVIDENCIA] Excepción subiendo foto:", e?.message);
+      }
+    }
+
+    // Registrar evidencia con datos del modal
+    await registrarEvidencia(supabase, viaje.id, "descarga_completada", {
+      usuarioId:      usuarioRef.current?.id,
+      estadoViaje:    "Descarga completada",
+      lat:            viaje.lat ?? null,
+      lng:            viaje.lng ?? null,
+      nombreReceptor: entregaReceptor.trim() || undefined,
+      observacion:    entregaObservacion.trim() || undefined,
+      fotoUrl,
+    });
+
+    setEntregaSubiendo(false);
+    setModalEntrega(false);
+    setEntregaReceptor("");
+    setEntregaObservacion("");
+    setEntregaFoto(null);
+
+    // Avanzar estado normalmente
+    actualizarEstado("Descarga completada");
   };
 
   // ─── Guards ───────────────────────────────────────────────────────────────
@@ -458,6 +523,13 @@ export default function ViajeActivoPage() {
                       .then(() => { console.log("FINALIZADO PLAY OK"); })
                       .catch((err) => { console.error("FINALIZADO PLAY ERROR", err); });
                   }
+                }
+                // "Descarga completada" abre modal de evidencia antes de avanzar
+                if (botonActivo?.nombre === "Descarga completada") {
+                  console.log("[MODAL-ENTREGA] Click Descarga completada — modalEntrega actual:", modalEntrega, "— llamando setModalEntrega(true)");
+                  setModalEntrega(true);
+                  console.log("[MODAL-ENTREGA] setModalEntrega(true) llamado");
+                  return;
                 }
                 actualizarEstado(botonActivo.nombre);
               }}
@@ -606,6 +678,78 @@ export default function ViajeActivoPage() {
               </button>
             </div>
             <p className="text-zinc-600 text-xs text-center">TILA mantiene el tracking interno independientemente del navegador elegido.</p>
+          </div>
+        </div>
+      )}
+
+      {/* ─── MODAL EVIDENCIA DE ENTREGA ─────────────────────────────────── */}
+      {console.log("[MODAL-ENTREGA] Render — modalEntrega:", modalEntrega) as any}
+      {modalEntrega && (
+        <div className="fixed inset-0 z-[9999] bg-black/90 flex items-end justify-center p-4">
+          <div className="bg-zinc-900 border border-zinc-700 rounded-3xl w-full max-w-md p-5 space-y-4">
+            <div className="flex items-center justify-between">
+              <p className="text-yellow-400 font-black text-base">📦 Confirmar descarga</p>
+              <button type="button" onClick={() => setModalEntrega(false)} className="text-zinc-500 font-black text-lg px-2">✕</button>
+            </div>
+
+            <div>
+              <label className="text-zinc-400 text-xs font-black mb-1 block">¿Quién recibió la carga?</label>
+              <input
+                type="text"
+                value={entregaReceptor}
+                onChange={e => setEntregaReceptor(e.target.value)}
+                placeholder="Nombre del receptor (opcional)"
+                className="w-full bg-black border border-zinc-700 rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-yellow-400"
+              />
+            </div>
+
+            <div>
+              <label className="text-zinc-400 text-xs font-black mb-1 block">Observación</label>
+              <textarea
+                value={entregaObservacion}
+                onChange={e => setEntregaObservacion(e.target.value)}
+                placeholder="Ej: entregado en portería, sin novedad... (opcional)"
+                rows={2}
+                className="w-full bg-black border border-zinc-700 rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-yellow-400 resize-none"
+              />
+            </div>
+
+            <div>
+              <label className="text-zinc-400 text-xs font-black mb-1 block">📷 Foto de entrega (opcional)</label>
+              <label className={`flex items-center gap-3 px-4 py-3 rounded-xl border cursor-pointer transition ${
+                entregaFoto ? "border-green-600 bg-green-950/30" : "border-zinc-700 bg-zinc-800 hover:border-zinc-500"
+              }`}>
+                <span className="text-sm font-black text-zinc-300">
+                  {entregaFoto ? `✅ ${entregaFoto.name}` : "📁 Seleccionar foto"}
+                </span>
+                <input
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  className="hidden"
+                  onChange={e => setEntregaFoto(e.target.files?.[0] ?? null)}
+                />
+              </label>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 pt-1">
+              <button
+                type="button"
+                onClick={() => { setModalEntrega(false); actualizarEstado("Descarga completada"); }}
+                className="py-3 rounded-2xl font-black text-sm bg-zinc-700 text-zinc-300 hover:bg-zinc-600 transition"
+                disabled={entregaSubiendo}
+              >
+                Omitir
+              </button>
+              <button
+                type="button"
+                onClick={confirmarEntrega}
+                disabled={entregaSubiendo}
+                className="py-3 rounded-2xl font-black text-sm bg-yellow-400 text-black hover:bg-yellow-300 transition disabled:opacity-50"
+              >
+                {entregaSubiendo ? "Guardando..." : "Confirmar"}
+              </button>
+            </div>
           </div>
         </div>
       )}

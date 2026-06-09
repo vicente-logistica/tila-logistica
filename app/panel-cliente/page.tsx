@@ -388,9 +388,11 @@ export default function PanelClientePage() {
     setViajes(todos);
 
     // Alerta sonora y festejo en cambio de estado
+    console.log("[AUDIO-CLIENTE] cargarViajes — total viajes:", todos.length, "— audioRef:", audioRef.current ? "OK" : "NULL");
     todos.forEach(v => {
       const prev   = ultimoEstadoRef.current[String(v.id)];
       const actual = v.estado || "pendiente";
+      console.log(`[AUDIO-CLIENTE] viaje ${v.id}: prev="${prev}" actual="${actual}" cambia=${!!prev && prev !== actual}`);
       if (prev && prev !== actual) {
         if (actual === "Viaje finalizado" && !festejoClienteRef.current.has(String(v.id))) {
           // Festejo especial de entrega — una sola vez por viaje
@@ -409,8 +411,11 @@ export default function PanelClientePage() {
           setTimeout(() => setFestejoViaje(null), 7000);
         } else {
           // Alerta genérica para otros cambios de estado
+          console.log(`[AUDIO-CLIENTE] ▶ Reproduciendo alerta para viaje ${v.id}: "${prev}" → "${actual}" — audioRef:`, audioRef.current);
           setAlerta(actual);
-          audioRef.current?.play().catch(() => {});
+          audioRef.current?.play()
+            .then(() => console.log("[AUDIO-CLIENTE] ▶ Play OK"))
+            .catch(err => console.warn("[AUDIO-CLIENTE] ▶ Play ERROR:", err));
           setTimeout(() => setAlerta(null), 4000);
         }
       }

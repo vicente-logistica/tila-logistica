@@ -404,12 +404,38 @@ const TarjetaCliente = ({ cliente }: { cliente: any }) => (
   </div>
 );
 
+const LABELS_EVENTO: Record<string, string> = {
+  viaje_aceptado:       "✅ Viaje aceptado",
+  chofer_en_camino:     "🚛 Chofer en camino",
+  carga_retirada:       "📦 Carga retirada",
+  en_ruta:              "🛣️ En ruta",
+  descarga_completada:  "🏁 Descarga completada",
+  viaje_finalizado:     "🏆 Viaje finalizado",
+};
+
 const TarjetaViaje = ({ carga, paradas, choferInfo, onAbrirCliente, onAbrirChofer, onAsignarChofer, onEliminarViaje, onActualizarEstado }: {
   carga: any; paradas: any[]; choferInfo?: any;
   onAbrirCliente: (id: string) => void; onAbrirChofer: (id: string) => void;
   onAsignarChofer: (id: string) => void; onEliminarViaje: (id: string) => void;
   onActualizarEstado: (id: string, estado: string) => void;
 }) => {
+  const [evidencias, setEvidencias]         = useState<any[]>([]);
+  const [mostrarEvidencias, setMostrarEvidencias] = useState(false);
+  const [cargandoEv, setCargandoEv]         = useState(false);
+
+  const cargarEvidencias = async () => {
+    if (cargandoEv) return;
+    setCargandoEv(true);
+    const { data } = await supabase
+      .from("viaje_evidencias")
+      .select("*")
+      .eq("carga_id", carga.id)
+      .order("created_at", { ascending: true });
+    setEvidencias(data || []);
+    setCargandoEv(false);
+    setMostrarEvidencias(true);
+  };
+
   const senal = tiempoRelativo(choferInfo?.ultima_senal_at);
   return (
   <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-5 shadow-xl">
@@ -505,6 +531,49 @@ const TarjetaViaje = ({ carga, paradas, choferInfo, onAbrirCliente, onAbrirChofe
           {estado}
         </button>
       ))}
+    </div>
+
+    {/* ── Evidencias del viaje ─────────────────────────────────────────── */}
+    <div className="mt-3 pt-3 border-t border-zinc-800">
+      <button
+        onClick={cargarEvidencias}
+        disabled={cargandoEv}
+        className="w-full bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-black py-2 rounded-xl text-sm mb-2"
+      >
+        {cargandoEv ? "Cargando..." : mostrarEvidencias ? "📋 Actualizar evidencias" : "📋 Ver evidencias del viaje"}
+      </button>
+
+      {mostrarEvidencias && (
+        <div className="space-y-2">
+          {evidencias.length === 0 ? (
+            <p className="text-zinc-600 text-xs text-center py-2">Sin evidencias registradas</p>
+          ) : evidencias.map(ev => (
+            <div key={ev.id} className="bg-zinc-950 border border-zinc-800 rounded-xl p-3 text-xs space-y-1">
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <span className="font-black text-white">{LABELS_EVENTO[ev.evento] ?? ev.evento}</span>
+                <span className="text-zinc-500 flex-shrink-0">
+                  {ev.created_at ? new Date(ev.created_at).toLocaleString("es-AR", { day:"2-digit", month:"2-digit", hour:"2-digit", minute:"2-digit" }) : "—"}
+                </span>
+              </div>
+              {ev.estado_viaje && <p><span className="text-zinc-500">Estado:</span> <span className="text-zinc-300"> {ev.estado_viaje}</span></p>}
+              {ev.lat && ev.lng && (
+                <p>
+                  <span className="text-zinc-500">GPS: </span>
+                  <a href={`https://www.google.com/maps?q=${ev.lat},${ev.lng}`} target="_blank" rel="noreferrer"
+                    className="text-blue-400 underline">{Number(ev.lat).toFixed(5)}, {Number(ev.lng).toFixed(5)}</a>
+                </p>
+              )}
+              {ev.nombre_receptor && <p><span className="text-zinc-500">Receptor:</span> <span className="text-white font-black"> {ev.nombre_receptor}</span></p>}
+              {ev.observacion && <p><span className="text-zinc-500">Obs:</span> <span className="text-zinc-300"> {ev.observacion}</span></p>}
+              {ev.foto_url && (
+                <a href={ev.foto_url} target="_blank" rel="noreferrer">
+                  <img src={ev.foto_url} alt="Evidencia" className="w-full max-h-40 object-cover rounded-lg mt-1 border border-zinc-700" />
+                </a>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   </div>
   );
