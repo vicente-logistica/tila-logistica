@@ -351,20 +351,23 @@ export default function PanelClientePage() {
   /** Desbloquea ambos audio elements con un play silencioso en el contexto de gesto del usuario.
    *  Llamar en cualquier botón/tap del cliente para que audio.mp3 pueda sonar luego. */
   const desbloquearAudios = useCallback(async () => {
+    console.log("[DIAG-AUDIO] desbloquearAudios llamado — ya desbloqueado:", audioDesbloquedoRef.current);
     if (audioDesbloquedoRef.current) return;
     audioDesbloquedoRef.current = true;
     const silentUnlock = async (audio: HTMLAudioElement | null) => {
-      if (!audio) return;
+      if (!audio) { console.warn("[DIAG-AUDIO] silentUnlock: audio es NULL"); return; }
+      console.log("[DIAG-AUDIO] silentUnlock: intentando play silencioso en", audio.src);
       try {
         audio.volume = 0;
         await audio.play();
         audio.pause();
         audio.currentTime = 0;
         audio.volume = 1;
-      } catch { /* ignorar — el navegador puede denegar silently */ }
+        console.log("[DIAG-AUDIO] silentUnlock: OK —", audio.src);
+      } catch (e) { console.warn("[DIAG-AUDIO] silentUnlock: ERROR —", audio.src, e); }
     };
     await Promise.all([silentUnlock(audioRef.current), silentUnlock(audioFinalizadoRef.current)]);
-    console.log("[CLIENTE-AUDIO] ambos audios desbloqueados");
+    console.log("[DIAG-AUDIO] ambos audios desbloqueados. audioRef muted:", audioRef.current?.muted, "volume:", audioRef.current?.volume);
   }, []);
 
   // Crear el objeto Audio de finalizado en el cliente (no en SSR) y pre-cargarlo
@@ -388,12 +391,14 @@ export default function PanelClientePage() {
     setViajes(todos);
 
     // Alerta sonora y festejo en cambio de estado
-    console.log("[AUDIO-CLIENTE] cargarViajes — total viajes:", todos.length, "— audioRef:", audioRef.current ? "OK" : "NULL");
+    console.log("[DIAG-AUDIO] desbloquedoRef:", audioDesbloquedoRef.current, "— audioRef:", audioRef.current ? `OK muted=${audioRef.current.muted} volume=${audioRef.current.volume}` : "NULL");
     todos.forEach(v => {
       const prev   = ultimoEstadoRef.current[String(v.id)];
       const actual = v.estado || "pendiente";
-      console.log(`[AUDIO-CLIENTE] viaje ${v.id}: prev="${prev}" actual="${actual}" cambia=${!!prev && prev !== actual}`);
+      console.log("ESTADO ANTERIOR", prev ?? "(sin dato previo)");
+      console.log("ESTADO NUEVO", actual);
       if (prev && prev !== actual) {
+        console.log("CAMBIO DETECTADO", `viaje ${v.id}: "${prev}" → "${actual}"`);
         if (actual === "Viaje finalizado" && !festejoClienteRef.current.has(String(v.id))) {
           // Festejo especial de entrega — una sola vez por viaje
           festejoClienteRef.current.add(String(v.id));
@@ -411,11 +416,12 @@ export default function PanelClientePage() {
           setTimeout(() => setFestejoViaje(null), 7000);
         } else {
           // Alerta genérica para otros cambios de estado
-          console.log(`[AUDIO-CLIENTE] ▶ Reproduciendo alerta para viaje ${v.id}: "${prev}" → "${actual}" — audioRef:`, audioRef.current);
+          console.log("AUDIO REF", audioRef.current);
+          console.log("INTENTANDO PLAY");
           setAlerta(actual);
           audioRef.current?.play()
-            .then(() => console.log("[AUDIO-CLIENTE] ▶ Play OK"))
-            .catch(err => console.warn("[AUDIO-CLIENTE] ▶ Play ERROR:", err));
+            .then(() => console.log("[DIAG-AUDIO] Play OK"))
+            .catch(err => console.error("ERROR PLAY CLIENTE", err));
           setTimeout(() => setAlerta(null), 4000);
         }
       }
