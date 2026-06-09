@@ -331,10 +331,8 @@ export default function PanelClientePage() {
   }, []);
 
   const audioRef              = useRef<HTMLAudioElement | null>(null);
-  // audioFinalizadoRef es un objeto Audio creado en useEffect — NO elemento DOM
-  // así persiste aunque la vista cambie entre SeguimientoViaje / festejo / panel normal
-  const audioFinalizadoRef    = useRef<HTMLAudioElement | null>(null);
-  const audioDesbloquedoRef   = useRef(false); // guard — se setea SOLO si el unlock fue exitoso
+  const audioDesbloquedoRef   = useRef(false); // true solo después de gesto exitoso del usuario
+  const [audioListo, setAudioListo] = useState(false); // controla visibilidad del banner
   const ultimoEstadoRef       = useRef<Record<string, string>>({});
   const primeraVezRef         = useRef(true);  // evita falsos positivos en la primera carga
   const festejoClienteRef     = useRef<Set<string>>(new Set()); // IDs ya celebrados — evita repetir por polling
@@ -349,49 +347,25 @@ export default function PanelClientePage() {
   const viajesActivos   = useMemo(() => viajes.filter(v => ESTADOS_ACTIVOS.includes(v.estado || "pendiente")), [viajes]);
   const viajesHistorial = useMemo(() => viajes.filter(v => ESTADOS_HISTORIAL.includes(v.estado)), [viajes]);
 
-  /** Desbloquea ambos audio elements con un play silencioso en el contexto de gesto del usuario.
-   *  Llamar en cualquier botón/tap del cliente para que audio.mp3 pueda sonar luego. */
+  /** Desbloquea el audio con un play silencioso en el contexto de gesto del usuario. */
   const desbloquearAudios = useCallback(async () => {
-    console.log("AUDIO DESBLOQUEADO", audioDesbloquedoRef.current);
     if (audioDesbloquedoRef.current) return;
-    // NO setear el guard acá — solo marcarlo si el unlock realmente funciona
-    let exito = false;
-    const silentUnlock = async (audio: HTMLAudioElement | null) => {
-      if (!audio) { console.warn("[DIAG-AUDIO] silentUnlock: audio es NULL"); return false; }
-      try {
-        audio.volume = 0;
-        await audio.play();
-        audio.pause();
-        audio.currentTime = 0;
-        audio.volume = 1;
-        console.log("[DIAG-AUDIO] silentUnlock OK:", audio.src);
-        return true;
-      } catch (e) {
-        console.warn("[DIAG-AUDIO] silentUnlock ERROR:", audio.src, e);
-        return false;
-      }
-    };
-    const [r1, r2] = await Promise.all([silentUnlock(audioRef.current), silentUnlock(audioFinalizadoRef.current)]);
-    exito = !!(r1 || r2);
-    // Solo marcar como desbloqueado si al menos uno tuvo éxito
-    if (exito) {
+    const audio = audioRef.current;
+    if (!audio) return;
+    try {
+      audio.volume = 0;
+      await audio.play();
+      audio.pause();
+      audio.currentTime = 0;
+      audio.volume = 1;
       audioDesbloquedoRef.current = true;
-      console.log("[DIAG-AUDIO] audios desbloqueados correctamente. muted:", audioRef.current?.muted, "volume:", audioRef.current?.volume);
-    } else {
-      console.warn("[DIAG-AUDIO] unlock falló — se reintentará en el próximo gesto del usuario");
+      setAudioListo(true);
+    } catch {
+      // sin gesto válido — el banner seguirá visible
     }
   }, []);
 
-  // Crear el objeto Audio de finalizado en el cliente (no en SSR) y pre-cargarlo
-  useEffect(() => {
-    const af = new Audio("/sounds/alerta-viaje.mp3?v=cliente-final");
-    af.preload = "auto";
-    af.volume = 1;
-    audioFinalizadoRef.current = af;
-    return () => { af.pause(); };
-  }, []);
-
-  // Intentar desbloquear audios al montar (probablemente falle sin gesto — se reintenta en onClick/onTouchStart)
+  // Intentar desbloquear al montar — fallará sin gesto, el banner lo reintentará
   useEffect(() => {
     desbloquearAudios();
   }, [desbloquearAudios]);
@@ -407,18 +381,11 @@ export default function PanelClientePage() {
     const todos = data || [];
     setViajes(todos);
 
-    // Alerta sonora y festejo en cambio de estado
-    console.log("AUDIO REF EXISTE", !!audioRef.current, "| AUDIO DESBLOQUEADO", audioDesbloquedoRef.current);
-
-    // Primera carga: inicializar ref con estados actuales sin disparar alertas
+    // Primera carga: inicializar baseline sin disparar alertas
     const esPrimeraCarga = primeraVezRef.current;
     if (esPrimeraCarga) {
       primeraVezRef.current = false;
-      todos.forEach(v => {
-        ultimoEstadoRef.current[String(v.id)] = v.estado || "pendiente";
-      });
-      console.log("[DIAG-AUDIO] Primera carga — estados inicializados:", { ...ultimoEstadoRef.current });
-      // NO retornar: continuar para cargar paradas y choferes
+      todos.forEach(v => { ultimoEstadoRef.current[String(v.id)] = v.estado || "pendiente"; });
     }
 
     if (!esPrimeraCarga) todos.forEach(v => {
@@ -426,31 +393,21 @@ export default function PanelClientePage() {
       const actual = v.estado || "pendiente";
       if (prev && prev !== actual) {
         if (actual === "Viaje finalizado" && !festejoClienteRef.current.has(String(v.id))) {
-          // Festejo especial de entrega — una sola vez por viaje
           festejoClienteRef.current.add(String(v.id));
           setFestejoViaje(v);
-          // Reproducir via objeto Audio persistente (no depende del DOM ni de la vista activa)
-          const af = audioFinalizadoRef.current;
-          if (af) {
-            console.log("🎉 Intentando sonido finalizado", "cliente");
-            af.volume = 1;
-            af.currentTime = 0;
-            af.play()
-              .then(() => console.log("🎉 Sonido finalizado OK", "cliente"))
-              .catch(e => console.warn("🎉 Sonido finalizado bloqueado/error", e));
+          if (audioDesbloquedoRef.current) {
+            const a = new Audio("/sounds/alerta-viaje.mp3");
+            a.volume = 1;
+            a.play().catch(() => {});
           }
           setTimeout(() => setFestejoViaje(null), 7000);
         } else {
-          // Alerta genérica para otros cambios de estado
-          console.log("AUDIO REF", audioRef.current);
-          console.log("INTENTANDO PLAY");
           setAlerta(actual);
-          // Usar new Audio() en lugar del ref — más compatible con autoplay de browsers móviles
-          const alertaAudio = new Audio("/sounds/alerta-viaje.mp3");
-          alertaAudio.volume = 1;
-          alertaAudio.play()
-            .then(() => console.log("[DIAG-AUDIO] Play OK (new Audio)"))
-            .catch(err => console.error("ERROR PLAY CLIENTE", err));
+          if (audioDesbloquedoRef.current) {
+            const a = new Audio("/sounds/alerta-viaje.mp3");
+            a.volume = 1;
+            a.play().catch(() => {});
+          }
           setTimeout(() => setAlerta(null), 4000);
         }
       }
@@ -565,9 +522,21 @@ export default function PanelClientePage() {
     /* eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions */
     <main className="min-h-screen bg-black text-white p-4 pb-10"
       onClick={desbloquearAudios} onTouchStart={desbloquearAudios}>
-      {/* Audio de alerta genérica (cambios de estado) */}
+      {/* Audio — elemento oculto necesario para unlock en iOS/Safari */}
       <audio ref={audioRef} src="/sounds/alerta-viaje.mp3" preload="auto" />
-      {/* audioFinalizadoRef es un objeto Audio JS creado en useEffect — no necesita elemento DOM */}
+
+      {/* Banner activar alertas sonoras — visible hasta que el usuario otorgue permiso */}
+      {!audioListo && (
+        <div className="fixed top-0 left-0 right-0 z-50 flex justify-center p-3 pointer-events-none">
+          <button
+            type="button"
+            className="pointer-events-auto bg-zinc-900 border border-yellow-500/60 text-yellow-400 font-black text-sm px-5 py-2 rounded-2xl shadow-lg"
+            onClick={desbloquearAudios}
+          >
+            🔊 Activar alertas sonoras
+          </button>
+        </div>
+      )}
 
       {/* Alerta cambio de estado */}
       {alerta && (
