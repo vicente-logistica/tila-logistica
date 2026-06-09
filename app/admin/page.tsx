@@ -720,6 +720,21 @@ const HistorialAdmin = ({ cargas, paradasPorCarga, todosUsuarios, onRecargar }: 
   const [filtroEstado, setFiltroEstado] = useState("todos");
   const [filtroTexto, setFiltroTexto] = useState("");
   const [expandido, setExpandido] = useState<string | null>(null);
+  const [evidenciasPorViaje, setEvidenciasPorViaje] = useState<Record<string, any[]>>({});
+  const [cargandoEvPorViaje, setCargandoEvPorViaje] = useState<Record<string, boolean>>({});
+
+  const cargarEvidenciasViaje = async (cargaId: number | string) => {
+    const key = String(cargaId);
+    if (cargandoEvPorViaje[key]) return;
+    setCargandoEvPorViaje(prev => ({ ...prev, [key]: true }));
+    const { data } = await supabase
+      .from("viaje_evidencias")
+      .select("*")
+      .eq("carga_id", cargaId)
+      .order("created_at", { ascending: true });
+    setEvidenciasPorViaje(prev => ({ ...prev, [key]: data || [] }));
+    setCargandoEvPorViaje(prev => ({ ...prev, [key]: false }));
+  };
 
   const getNombre = (id: string) => todosUsuarios.find(u => u.id === id)?.nombre || "—";
 
@@ -873,6 +888,50 @@ const HistorialAdmin = ({ cargas, paradasPorCarga, todosUsuarios, onRecargar }: 
                     {carga.hora_aceptacion && <p>✅ <span className="text-zinc-400">Aceptado:</span> <span className="text-green-400">{formatearFechaAdmin(carga.hora_aceptacion)}</span></p>}
                     {carga.hora_inicio && <p>🚛 <span className="text-zinc-400">En camino:</span> <span className="text-yellow-400">{formatearFechaAdmin(carga.hora_inicio)}</span></p>}
                     {carga.hora_finalizacion && <p>🏆 <span className="text-zinc-400">Finalizado:</span> <span className="text-green-400">{formatearFechaAdmin(carga.hora_finalizacion)}</span></p>}
+                  </div>
+
+                  {/* ── Evidencias del viaje ──────────────────────────── */}
+                  <div className="pt-3 border-t border-zinc-700">
+                    <button
+                      onClick={() => cargarEvidenciasViaje(carga.id)}
+                      disabled={cargandoEvPorViaje[String(carga.id)]}
+                      className="w-full bg-zinc-700 hover:bg-zinc-600 text-zinc-300 font-black py-2 rounded-xl text-sm mb-2 transition"
+                    >
+                      {cargandoEvPorViaje[String(carga.id)] ? "Cargando..." : "📋 Ver evidencias del viaje"}
+                    </button>
+
+                    {evidenciasPorViaje[String(carga.id)] !== undefined && (
+                      <div className="space-y-2">
+                        {evidenciasPorViaje[String(carga.id)].length === 0 ? (
+                          <p className="text-zinc-600 text-xs text-center py-2">Sin evidencias registradas</p>
+                        ) : evidenciasPorViaje[String(carga.id)].map((ev: any) => (
+                          <div key={ev.id} className="bg-zinc-900 border border-zinc-700 rounded-xl p-3 text-xs space-y-1">
+                            <div className="flex items-center justify-between gap-2 flex-wrap">
+                              <span className="font-black text-white">{LABELS_EVENTO[ev.evento] ?? ev.evento}</span>
+                              <span className="text-zinc-500">{ev.estado_viaje || ""}</span>
+                            </div>
+                            <p className="text-zinc-500">{formatearFechaAdmin(ev.created_at)}</p>
+                            {ev.rol_usuario && <p className="text-zinc-400">Rol: {ev.rol_usuario}</p>}
+                            {ev.lat && ev.lng && (
+                              <a
+                                href={`https://www.google.com/maps?q=${ev.lat},${ev.lng}`}
+                                target="_blank" rel="noreferrer"
+                                className="text-blue-400 underline"
+                              >
+                                📍 Ver ubicación
+                              </a>
+                            )}
+                            {ev.nombre_receptor && <p className="text-zinc-300">Receptor: <span className="text-white font-black">{ev.nombre_receptor}</span></p>}
+                            {ev.observacion && <p className="text-zinc-300">Obs: {ev.observacion}</p>}
+                            {ev.foto_url && (
+                              <a href={ev.foto_url} target="_blank" rel="noreferrer">
+                                <img src={ev.foto_url} alt="evidencia" className="w-full max-w-xs rounded-xl mt-1 border border-zinc-700" />
+                              </a>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
 
                   {/* Acciones admin */}

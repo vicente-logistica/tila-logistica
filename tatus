@@ -1,0 +1,10 @@
+[33m206dfaa[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m, [m[1;31morigin/main[m[33m)[m Fix audio panel-cliente: banner activar alertas + new Audio unificado
+[33m95af5c1[m Limpieza panel-cliente: eliminar botón diagnóstico y logs temporales
+[33m36e91a5[m Fix audio panel-cliente: new Audio() directo + botón diagnóstico
+[33m9bb3586[m Fix audio panel-cliente: inicialización de estados y desbloqueo correcto
+[33md0c2242[m Diagnóstico detallado de audio en panel-cliente
+[33m5b5a015[m Evidencias de viaje, modal de descarga y diagnóstico de audio cliente
+[33m72d22ae[m Mostrar estado de pago MP en admin y aviso en viaje activo
+[33m8aa9d73[m Fix panel chofer: corregir hash check y normalizar comparacion tipo/categoria
+[33m136ef05[m Agregar logs diagnostico panel chofer
+[33mab7ed65[m Restaurar flujo operativo: viajes visibles al chofer sin requerir pago previo
