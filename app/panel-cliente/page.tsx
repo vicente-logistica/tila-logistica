@@ -424,10 +424,7 @@ export default function PanelClientePage() {
     if (!esPrimeraCarga) todos.forEach(v => {
       const prev   = ultimoEstadoRef.current[String(v.id)];
       const actual = v.estado || "pendiente";
-      console.log("ESTADO ANTERIOR", prev ?? "(sin dato previo)");
-      console.log("ESTADO NUEVO", actual);
       if (prev && prev !== actual) {
-        console.log("CAMBIO DETECTADO", `viaje ${v.id}: "${prev}" → "${actual}"`);
         if (actual === "Viaje finalizado" && !festejoClienteRef.current.has(String(v.id))) {
           // Festejo especial de entrega — una sola vez por viaje
           festejoClienteRef.current.add(String(v.id));
@@ -571,22 +568,6 @@ export default function PanelClientePage() {
       {/* Audio de alerta genérica (cambios de estado) */}
       <audio ref={audioRef} src="/sounds/alerta-viaje.mp3" preload="auto" />
       {/* audioFinalizadoRef es un objeto Audio JS creado en useEffect — no necesita elemento DOM */}
-
-      {/* ── BOTÓN TEMPORAL DIAGNÓSTICO AUDIO ── quitar cuando audio funcione ── */}
-      <button
-        type="button"
-        className="fixed bottom-4 right-4 z-[9999] bg-yellow-400 text-black font-black text-xs px-3 py-2 rounded-xl shadow-lg"
-        onClick={() => {
-          console.log("🔊 TEST BOTÓN: intentando play directo");
-          const a = new Audio("/sounds/alerta-viaje.mp3");
-          a.volume = 1;
-          a.play()
-            .then(() => console.log("🔊 TEST BOTÓN: Play OK"))
-            .catch(err => console.error("🔊 TEST BOTÓN: ERROR", err));
-        }}
-      >
-        🔊 Probar sonido
-      </button>
 
       {/* Alerta cambio de estado */}
       {alerta && (
