@@ -448,8 +448,11 @@ export default function PanelClientePage() {
           console.log("AUDIO REF", audioRef.current);
           console.log("INTENTANDO PLAY");
           setAlerta(actual);
-          audioRef.current?.play()
-            .then(() => console.log("[DIAG-AUDIO] Play OK"))
+          // Usar new Audio() en lugar del ref — más compatible con autoplay de browsers móviles
+          const alertaAudio = new Audio("/sounds/alerta-viaje.mp3");
+          alertaAudio.volume = 1;
+          alertaAudio.play()
+            .then(() => console.log("[DIAG-AUDIO] Play OK (new Audio)"))
             .catch(err => console.error("ERROR PLAY CLIENTE", err));
           setTimeout(() => setAlerta(null), 4000);
         }
@@ -568,6 +571,22 @@ export default function PanelClientePage() {
       {/* Audio de alerta genérica (cambios de estado) */}
       <audio ref={audioRef} src="/sounds/alerta-viaje.mp3" preload="auto" />
       {/* audioFinalizadoRef es un objeto Audio JS creado en useEffect — no necesita elemento DOM */}
+
+      {/* ── BOTÓN TEMPORAL DIAGNÓSTICO AUDIO ── quitar cuando audio funcione ── */}
+      <button
+        type="button"
+        className="fixed bottom-4 right-4 z-[9999] bg-yellow-400 text-black font-black text-xs px-3 py-2 rounded-xl shadow-lg"
+        onClick={() => {
+          console.log("🔊 TEST BOTÓN: intentando play directo");
+          const a = new Audio("/sounds/alerta-viaje.mp3");
+          a.volume = 1;
+          a.play()
+            .then(() => console.log("🔊 TEST BOTÓN: Play OK"))
+            .catch(err => console.error("🔊 TEST BOTÓN: ERROR", err));
+        }}
+      >
+        🔊 Probar sonido
+      </button>
 
       {/* Alerta cambio de estado */}
       {alerta && (
