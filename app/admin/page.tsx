@@ -5,6 +5,7 @@ import { supabase } from "../lib/supabase";
 import BotonCerrarSesion from "../components/BotonCerrarSesion";
 import { useProtegerRuta } from "../hooks/useProtegerRuta";
 import ChatAsistencia from "../components/ChatAsistencia";
+import { playChatSound } from "../utils/chatSound";
 
 const ESTADOS_VIAJE = [
   "Chofer asignado", "En camino", "Carga retirada",
@@ -1102,6 +1103,7 @@ export default function AdminPage() {
   useEffect(() => { silenciarSoporteClienteRef.current = silenciarSoporteCliente; }, [silenciarSoporteCliente]);
   useEffect(() => { silenciarSoporteChoferRef.current  = silenciarSoporteChofer; },  [silenciarSoporteChofer]);
 
+  // ── Canal principal: cargas/usuarios/paradas/resumen mensajes ───────────────
   useEffect(() => {
     const iniciar = async () => {
       setCargando(true);
@@ -1112,21 +1114,33 @@ export default function AdminPage() {
     iniciar();
 
     const channel = supabase.channel("admin-realtime")
-      .on("postgres_changes", { event: "*", schema: "public", table: "cargas" }, () => cargarViajes())
-      .on("postgres_changes", { event: "*", schema: "public", table: "usuarios" }, () => cargarUsuarios())
+      .on("postgres_changes", { event: "*", schema: "public", table: "cargas" },        () => cargarViajes())
+      .on("postgres_changes", { event: "*", schema: "public", table: "usuarios" },       () => cargarUsuarios())
       .on("postgres_changes", { event: "*", schema: "public", table: "paradas_viaje" }, () => cargarViajes())
-      // Un único handler para mensajes_viaje — evita conflicto de dos listeners en mismo canal
-      .on("postgres_changes", { event: "*", schema: "public", table: "mensajes_viaje" },
+      .on("postgres_changes", { event: "*", schema: "public", table: "mensajes_viaje" }, () => cargarResumenMensajes())
+      .subscribe();
+
+    const intervalo = setInterval(() => { cargarViajes(); cargarUsuarios(); cargarResumenMensajes(); }, 5000);
+    return () => { supabase.removeChannel(channel); clearInterval(intervalo); };
+  }, [cargarViajes, cargarUsuarios, cargarResumenMensajes]);
+
+  // ── Canal dedicado para alertas de chat (siempre activo, deps=[]) ────────────
+  // Canal separado del principal para que no se vea afectado por cambios de callbacks
+  useEffect(() => {
+    const alertChannel = supabase
+      .channel("admin-chat-alerts")
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: "mensajes_viaje" },
         (payload) => {
-          // Siempre refrescar resumen de no leídos
-          cargarResumenMensajes();
-          // Solo en INSERT disparar alerta visual + sonido
-          if (payload.eventType !== "INSERT") return;
           console.log("CHAT ALERT payload", payload.new);
           const msg = payload.new as any;
           if (!msg) return;
-          const uid = typeof window !== "undefined" ? (JSON.parse(localStorage.getItem("usuario") || "{}")).id : null;
+          const uid = typeof window !== "undefined"
+            ? (JSON.parse(localStorage.getItem("usuario") || "{}")).id
+            : null;
           if (msg.remitente_id === uid) return;
+
           const textos: Record<string, string> = {
             viaje:           "🔴 Nuevo mensaje operativo",
             soporte_cliente: "🔴 Nuevo mensaje de cliente",
@@ -1134,29 +1148,25 @@ export default function AdminPage() {
           };
           const texto = textos[msg.tipo_chat as string];
           if (!texto) return;
+
           if (alertaAdminTimerRef.current) clearTimeout(alertaAdminTimerRef.current);
           setAlertaMensajeAdmin(texto);
           alertaAdminTimerRef.current = setTimeout(() => setAlertaMensajeAdmin(null), 4000);
-          // Usar refs — sin stale closure
+
+          // Silencio por sector via refs — sin stale closure
           const silenciado =
             msg.tipo_chat === "viaje"           ? silenciarChatOperativoRef.current :
             msg.tipo_chat === "soporte_cliente" ? silenciarSoporteClienteRef.current :
                                                   silenciarSoporteChoferRef.current;
-          if (!silenciado) {
-            const snd = new Audio("/sounds/drop.wav");
-            snd.volume = 0.7;
-            snd.play().catch(() => {
-              new Audio("/sounds/alerta-viaje.mp3").play().catch(() => {});
-            });
-          }
-        })
+          if (!silenciado) playChatSound();
+        },
+      )
       .subscribe((status) => {
         console.log("CHAT ALERT realtime status", status);
       });
 
-    const intervalo = setInterval(() => { cargarViajes(); cargarUsuarios(); cargarResumenMensajes(); }, 5000);
-    return () => { supabase.removeChannel(channel); clearInterval(intervalo); };
-  }, [cargarViajes, cargarUsuarios, cargarResumenMensajes]);
+    return () => { supabase.removeChannel(alertChannel); };
+  }, []);
 
   const pendientes = useMemo(() => cargas.filter((c) => !c.estado || c.estado.toLowerCase() === "pendiente"), [cargas]);
   const activos = useMemo(() => cargas.filter((c) => ESTADOS_ACTIVOS.includes(c.estado)), [cargas]);

@@ -7,6 +7,7 @@ import { useProtegerRuta } from "../hooks/useProtegerRuta";
 import MapaTILA, { ParadaMapa } from "../components/MapaTILA";
 import ChatAsistencia from "../components/ChatAsistencia";
 import { registrarEvidencia, estadoAEvento } from "../lib/evidencias";
+import { playChatSound } from "../utils/chatSound";
 
 // ─── Estados y flujo ──────────────────────────────────────────────────────────
 const ESTADOS_ORDEN = [
@@ -92,8 +93,14 @@ export default function ViajeActivoPage() {
   // Alerta de mensaje nuevo
   const [alertaMensaje, setAlertaMensaje]           = useState<string | null>(null);
   const alertaTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Silencio de notificaciones de chat
-  const [silenciarChat, setSilenciarChat]           = useState(false);
+  // Silencio por sector (refs para que los callbacks lean siempre el valor actual)
+  const [silenciarChatViaje, setSilenciarChatViaje]           = useState(false);
+  const [silenciarSoporteChofer, setSilenciarSoporteChofer]   = useState(false);
+  const silenciarChatViajeRef     = useRef(false);
+  const silenciarSoporteChoferRef = useRef(false);
+  // Refs para saber si el panel ya está abierto (para no incrementar si ya lo ven)
+  const mostrarChatRef    = useRef(false);
+  const mostrarSoporteRef = useRef(false);
   const [mostrarNavSel, setMostrarNavSel]     = useState(false);
   const [destNavPendiente, setDestNavPendiente] = useState<string | null>(null);
   const [navegadorPreferido, setNavegadorPreferido] = useState<string | null>(null);
@@ -123,6 +130,12 @@ export default function ViajeActivoPage() {
     const u = localStorage.getItem("usuario");
     if (u) usuarioRef.current = JSON.parse(u);
   }, []);
+
+  // Sincronizar refs de silencio y paneles abiertos con sus estados
+  useEffect(() => { silenciarChatViajeRef.current     = silenciarChatViaje; },     [silenciarChatViaje]);
+  useEffect(() => { silenciarSoporteChoferRef.current = silenciarSoporteChofer; }, [silenciarSoporteChofer]);
+  useEffect(() => { mostrarChatRef.current    = mostrarChat; },    [mostrarChat]);
+  useEffect(() => { mostrarSoporteRef.current = mostrarSoporte; }, [mostrarSoporte]);
 
   useEffect(() => {
     finalizadoAudioRef.current = new Audio("/sounds/alerta-viaje.mp3?v=final");
@@ -236,12 +249,11 @@ export default function ViajeActivoPage() {
   useEffect(() => {
     const viajeId = localStorage.getItem("viajeActivoId");
     if (!viajeId) return;
-    const miId = usuarioRef.current?.id;
 
-    // Cargar no leídos actuales al montar
+    // Carga inicial de no leídos
     const cargarNoLeidos = async () => {
-      if (!usuarioRef.current?.id) return;
-      const uid = usuarioRef.current.id;
+      const uid = usuarioRef.current?.id;
+      if (!uid) return;
       const [{ data: dViaje }, { data: dSoporte }] = await Promise.all([
         supabase.from("mensajes_viaje").select("id").eq("viaje_id", Number(viajeId)).eq("tipo_chat", "viaje").eq("leido", false).neq("remitente_id", uid),
         supabase.from("mensajes_viaje").select("id").eq("viaje_id", Number(viajeId)).eq("tipo_chat", "soporte_chofer").eq("leido", false).neq("remitente_id", uid),
@@ -249,41 +261,42 @@ export default function ViajeActivoPage() {
       setNoLeidosViaje(dViaje?.length ?? 0);
       setNoLeidosSoporte(dSoporte?.length ?? 0);
     };
-    cargarNoLeidos();
+    // Pequeño delay para que usuarioRef esté cargado
+    const t = setTimeout(cargarNoLeidos, 500);
 
-    const mostrarAlertaMensaje = (texto: string, silenciado: boolean) => {
+    const dispararAlerta = (texto: string, silenciado: boolean) => {
       if (alertaTimerRef.current) clearTimeout(alertaTimerRef.current);
       setAlertaMensaje(texto);
       alertaTimerRef.current = setTimeout(() => setAlertaMensaje(null), 4000);
-      if (!silenciado) {
-        const snd = new Audio("/sounds/drop.wav");
-        snd.volume = 0.7;
-        snd.play().catch(() => {
-          // fallback al sonido existente
-          const fallback = new Audio("/sounds/alerta-viaje.mp3");
-          fallback.volume = 0.5;
-          fallback.play().catch(() => {});
-        });
-      }
+      if (!silenciado) playChatSound();
     };
 
     const canalMensajes = supabase
-      .channel(`viaje-activo-mensajes-${viajeId}`)
-      .on("postgres_changes", { event: "INSERT", schema: "public", table: "mensajes_viaje", filter: `viaje_id=eq.${viajeId}` },
+      .channel(`viaje-activo-chat-${viajeId}`)
+      .on("postgres_changes",
+        { event: "INSERT", schema: "public", table: "mensajes_viaje", filter: `viaje_id=eq.${viajeId}` },
         (payload) => {
+          console.log("CHAT ALERT payload", payload.new);
           const msg = payload.new as any;
-          if (!msg || msg.remitente_id === usuarioRef.current?.id) return;
-          if (msg.tipo_chat === "viaje") {
+          if (!msg) return;
+          if (msg.remitente_id === usuarioRef.current?.id) return;
+          if (msg.tipo_chat === "viaje" && !mostrarChatRef.current) {
             setNoLeidosViaje(prev => prev + 1);
-            mostrarAlertaMensaje("🔴 Nuevo mensaje del cliente", silenciarChat);
-          } else if (msg.tipo_chat === "soporte_chofer") {
+            dispararAlerta("🔴 Nuevo mensaje del cliente", silenciarChatViajeRef.current);
+          } else if (msg.tipo_chat === "soporte_chofer" && !mostrarSoporteRef.current) {
             setNoLeidosSoporte(prev => prev + 1);
-            mostrarAlertaMensaje("🔴 Nuevo mensaje de Soporte TILA", silenciarChat);
+            dispararAlerta("🔴 Nuevo mensaje de Soporte TILA", silenciarSoporteChoferRef.current);
           }
         })
-      .subscribe();
+      .subscribe((status) => {
+        console.log("CHAT ALERT realtime status", status);
+      });
 
-    return () => { supabase.removeChannel(canalMensajes); if (alertaTimerRef.current) clearTimeout(alertaTimerRef.current); };
+    return () => {
+      clearTimeout(t);
+      supabase.removeChannel(canalMensajes);
+      if (alertaTimerRef.current) clearTimeout(alertaTimerRef.current);
+    };
   }, []);
 
   useEffect(() => { cargarViajeActivo(); }, []);
@@ -640,7 +653,7 @@ export default function ViajeActivoPage() {
           )}
 
           {/* Secundarios — solo íconos */}
-          <div className="flex gap-2 pt-1" title={silenciarChat ? "Notificaciones silenciadas" : "Silenciar notificaciones de chat"}>
+          <div className="flex gap-2 pt-1">
             <button type="button"
               onClick={() => { setMostrarChat(v => !v); setMostrarSoporte(false); setMostrarDetalles(false); if (!mostrarChat) setNoLeidosViaje(0); }}
               className={`relative flex-1 py-2 rounded-xl text-lg transition ${mostrarChat ? "bg-blue-600" : noLeidosViaje > 0 ? "bg-blue-900 border border-blue-500" : "bg-zinc-800 hover:bg-zinc-700"}`}>
@@ -666,11 +679,18 @@ export default function ViajeActivoPage() {
                 </span>
               )}
             </button>
+            {/* Silencio por sector */}
             <button type="button"
-              onClick={() => setSilenciarChat(v => !v)}
-              title={silenciarChat ? "Activar sonido de chat" : "Silenciar chat"}
-              className={`flex-1 py-2 rounded-xl text-lg transition ${silenciarChat ? "bg-zinc-700 opacity-60" : "bg-zinc-800 hover:bg-zinc-700"}`}>
-              {silenciarChat ? "🔕" : "🔔"}
+              onClick={() => setSilenciarChatViaje(v => !v)}
+              title={silenciarChatViaje ? "Activar sonido chat viaje" : "Silenciar chat viaje"}
+              className={`flex-1 py-2 rounded-xl text-base transition ${silenciarChatViaje ? "bg-zinc-700 opacity-60" : "bg-zinc-800 hover:bg-zinc-700"}`}>
+              {silenciarChatViaje ? "💬🔕" : "💬🔔"}
+            </button>
+            <button type="button"
+              onClick={() => setSilenciarSoporteChofer(v => !v)}
+              title={silenciarSoporteChofer ? "Activar sonido soporte" : "Silenciar soporte TILA"}
+              className={`flex-1 py-2 rounded-xl text-base transition ${silenciarSoporteChofer ? "bg-zinc-700 opacity-60" : "bg-zinc-800 hover:bg-zinc-700"}`}>
+              {silenciarSoporteChofer ? "🛟🔕" : "🛟🔔"}
             </button>
           </div>
         </div>

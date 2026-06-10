@@ -7,6 +7,7 @@ import { useProtegerRuta } from "../hooks/useProtegerRuta";
 import MapaTILA from "../components/MapaTILA";
 import ChatAsistencia from "../components/ChatAsistencia";
 import BotonCerrarSesion from "../components/BotonCerrarSesion";
+import { playChatSound } from "../utils/chatSound";
 import HistorialCliente from "../components/historial-cliente";
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
@@ -229,13 +230,19 @@ export default function PanelClientePage() {
   // Chat por viaje en la lista
   const [chatListaViajeId, setChatListaViajeId]   = useState<string | null>(null);
   const [tipoChatLista, setTipoChatLista]         = useState<"viaje" | "soporte_cliente">("viaje");
+  const chatListaViajeIdRef = useRef<string | null>(null);
+  const tipoChatListaRef    = useRef<"viaje" | "soporte_cliente">("viaje");
   // No leídos por viaje
   const [noLeidosPorViaje, setNoLeidosPorViaje]   = useState<Record<string, Record<string, number>>>({});
   // Alerta de mensaje nuevo
   const [alertaMensaje, setAlertaMensaje]         = useState<string | null>(null);
   const alertaTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Silencio de notificaciones de chat
-  const [silenciarChat, setSilenciarChat]         = useState(false);
+  // Silencio por sector
+  const [silenciarChatViaje, setSilenciarChatViaje]           = useState(false);
+  const [silenciarSoporteCliente, setSilenciarSoporteCliente] = useState(false);
+  const silenciarChatViajeRef      = useRef(false);
+  const silenciarSoporteClienteRef = useRef(false);
+  const viajesActivosIdsRef        = useRef<Set<string>>(new Set());
 
   const audioRef       = useRef<HTMLAudioElement | null>(null);
   const ultimoEstadoRef = useRef<Record<string, string>>({});
@@ -319,11 +326,19 @@ export default function PanelClientePage() {
     return () => { supabase.removeChannel(canal); clearInterval(intervalo); };
   }, [usuario?.id]);
 
-  // ── Listener externo de mensajes no leídos ─────────────────────────────────
+  // Sincronizar refs con estados actuales
+  useEffect(() => { chatListaViajeIdRef.current     = chatListaViajeId; },        [chatListaViajeId]);
+  useEffect(() => { tipoChatListaRef.current        = tipoChatLista; },           [tipoChatLista]);
+  useEffect(() => { silenciarChatViajeRef.current   = silenciarChatViaje; },      [silenciarChatViaje]);
+  useEffect(() => { silenciarSoporteClienteRef.current = silenciarSoporteCliente; }, [silenciarSoporteCliente]);
+  useEffect(() => {
+    viajesActivosIdsRef.current = new Set(viajesActivos.map(v => String(v.id)));
+  }, [viajesActivos]);
+
+  // ── Carga inicial de no leídos (re-ejecuta con viajesActivos) ──────────────
   useEffect(() => {
     if (!usuario?.id || viajesActivos.length === 0) return;
     const uid = usuario.id;
-
     const cargarTodosNoLeidos = async () => {
       const nuevoConteo: Record<string, Record<string, number>> = {};
       await Promise.all(viajesActivos.map(async (v) => {
@@ -337,38 +352,45 @@ export default function PanelClientePage() {
       setNoLeidosPorViaje(nuevoConteo);
     };
     cargarTodosNoLeidos();
+  }, [viajesActivos]);
+
+  // ── Listener externo de mensajes (siempre activo, sin stale closure) ───────
+  useEffect(() => {
+    if (!usuario?.id) return;
+    const uid = usuario.id;
 
     const canalMensajes = supabase
       .channel(`registro-cliente-mensajes-${uid}`)
       .on("postgres_changes", { event: "INSERT", schema: "public", table: "mensajes_viaje" },
         (payload) => {
+          console.log("CHAT ALERT payload", payload.new);
           const msg = payload.new as any;
           if (!msg || msg.remitente_id === uid) return;
           const vid = String(msg.viaje_id);
-          if (!viajesActivos.find(v => String(v.id) === vid)) return;
+          if (!viajesActivosIdsRef.current.has(vid)) return;
           const tipo = msg.tipo_chat as string;
           if (tipo !== "viaje" && tipo !== "soporte_cliente") return;
-          if (chatListaViajeId === vid && tipoChatLista === tipo) return;
+          if (chatListaViajeIdRef.current === vid && tipoChatListaRef.current === tipo) return;
           setNoLeidosPorViaje(prev => ({
             ...prev,
             [vid]: { ...(prev[vid] ?? {}), [tipo]: ((prev[vid]?.[tipo] ?? 0) + 1) },
           }));
-          // Alerta visual
           const textoAlerta = tipo === "viaje" ? "🔴 Nuevo mensaje del chofer" : "🔴 Nuevo mensaje de Soporte TILA";
           if (alertaTimerRef.current) clearTimeout(alertaTimerRef.current);
           setAlertaMensaje(textoAlerta);
           alertaTimerRef.current = setTimeout(() => setAlertaMensaje(null), 4000);
-          // Audio si no silenciado
-          if (!silenciarChat) {
-            const snd = new Audio("/sounds/drop.wav");
-            snd.volume = 0.7;
-            snd.play().catch(() => { audioRef.current?.play().catch(() => {}); });
-          }
+          const silenciado = tipo === "viaje" ? silenciarChatViajeRef.current : silenciarSoporteClienteRef.current;
+          if (!silenciado) playChatSound();
         })
-      .subscribe();
+      .subscribe((status) => {
+        console.log("CHAT ALERT realtime status", status);
+      });
 
-    return () => { supabase.removeChannel(canalMensajes); if (alertaTimerRef.current) clearTimeout(alertaTimerRef.current); };
-  }, [usuario?.id, viajesActivos.length]);
+    return () => {
+      supabase.removeChannel(canalMensajes);
+      if (alertaTimerRef.current) clearTimeout(alertaTimerRef.current);
+    };
+  }, [usuario?.id]);
 
   // Sincronizar viaje seleccionado con datos frescos
   useEffect(() => {
@@ -433,10 +455,15 @@ export default function PanelClientePage() {
           className="bg-green-600 text-white font-black px-3 py-1.5 rounded-xl text-xs">💬 WhatsApp</a>
         <a href={`mailto:${SOPORTE_EMAIL}`}
           className="bg-zinc-700 text-white font-black px-3 py-1.5 rounded-xl text-xs">📧 Email</a>
-        <button type="button" onClick={() => setSilenciarChat(v => !v)}
-          title={silenciarChat ? "Activar alertas de chat" : "Silenciar alertas de chat"}
-          className={`px-3 py-1.5 rounded-xl text-xs font-black transition ${silenciarChat ? "bg-zinc-700 text-zinc-500" : "bg-zinc-800 text-zinc-300 hover:bg-zinc-700"}`}>
-          {silenciarChat ? "🔕" : "🔔"}
+        <button type="button" onClick={() => setSilenciarChatViaje(v => !v)}
+          title={silenciarChatViaje ? "Activar sonido chat chofer" : "Silenciar chat chofer"}
+          className={`px-3 py-1.5 rounded-xl text-xs font-black transition ${silenciarChatViaje ? "bg-zinc-700 text-zinc-500" : "bg-zinc-800 text-zinc-300 hover:bg-zinc-700"}`}>
+          {silenciarChatViaje ? "💬🔕" : "💬🔔"}
+        </button>
+        <button type="button" onClick={() => setSilenciarSoporteCliente(v => !v)}
+          title={silenciarSoporteCliente ? "Activar sonido soporte TILA" : "Silenciar soporte TILA"}
+          className={`px-3 py-1.5 rounded-xl text-xs font-black transition ${silenciarSoporteCliente ? "bg-zinc-700 text-zinc-500" : "bg-zinc-800 text-zinc-300 hover:bg-zinc-700"}`}>
+          {silenciarSoporteCliente ? "🛟🔕" : "🛟🔔"}
         </button>
       </div>
 
