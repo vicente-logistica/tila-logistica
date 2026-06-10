@@ -655,7 +655,17 @@ export default function ViajeActivoPage() {
           {/* Secundarios — solo íconos */}
           <div className="flex gap-2 pt-1">
             <button type="button"
-              onClick={() => { setMostrarChat(v => !v); setMostrarSoporte(false); setMostrarDetalles(false); if (!mostrarChat) setNoLeidosViaje(0); }}
+              onClick={() => {
+                const abriendo = !mostrarChat;
+                setMostrarChat(abriendo);
+                setMostrarSoporte(false);
+                setMostrarDetalles(false);
+                if (abriendo) {
+                  setNoLeidosViaje(0);
+                  setAlertaMensaje(null);
+                  if (alertaTimerRef.current) clearTimeout(alertaTimerRef.current);
+                }
+              }}
               className={`relative flex-1 py-2 rounded-xl text-lg transition ${mostrarChat ? "bg-blue-600" : noLeidosViaje > 0 ? "bg-blue-900 border border-blue-500" : "bg-zinc-800 hover:bg-zinc-700"}`}>
               💬
               {noLeidosViaje > 0 && !mostrarChat && (
@@ -670,7 +680,17 @@ export default function ViajeActivoPage() {
               📋
             </button>
             <button type="button"
-              onClick={() => { setMostrarSoporte(v => !v); setMostrarChat(false); setMostrarDetalles(false); if (!mostrarSoporte) setNoLeidosSoporte(0); }}
+              onClick={() => {
+                const abriendo = !mostrarSoporte;
+                setMostrarSoporte(abriendo);
+                setMostrarChat(false);
+                setMostrarDetalles(false);
+                if (abriendo) {
+                  setNoLeidosSoporte(0);
+                  setAlertaMensaje(null);
+                  if (alertaTimerRef.current) clearTimeout(alertaTimerRef.current);
+                }
+              }}
               className={`relative flex-1 py-2 rounded-xl text-lg transition ${mostrarSoporte ? "bg-orange-600" : noLeidosSoporte > 0 ? "bg-orange-900 border border-orange-500" : "bg-zinc-800 hover:bg-zinc-700"}`}>
               🛟
               {noLeidosSoporte > 0 && !mostrarSoporte && (

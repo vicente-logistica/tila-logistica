@@ -840,6 +840,8 @@ export default function PanelClientePage() {
                           else {
                             setChatListaViajeId(id); setTipoChatLista("viaje");
                             setNoLeidosPorViaje(prev => ({ ...prev, [id]: { ...(prev[id] ?? {}), viaje: 0 } }));
+                            setAlertaMensaje(null);
+                            if (alertaTimerRef.current) clearTimeout(alertaTimerRef.current);
                           }
                         }}
                         className={`relative flex-1 py-2 rounded-xl text-xs font-black transition ${chatListaViajeId === String(viaje.id) && tipoChatLista === "viaje" ? "bg-blue-600 text-white" : (noLeidosPorViaje[String(viaje.id)]?.viaje ?? 0) > 0 ? "bg-blue-900 border border-blue-500 text-blue-300" : "bg-zinc-800 text-zinc-300 hover:bg-zinc-700"}`}>
@@ -857,6 +859,8 @@ export default function PanelClientePage() {
                           else {
                             setChatListaViajeId(id); setTipoChatLista("soporte_cliente");
                             setNoLeidosPorViaje(prev => ({ ...prev, [id]: { ...(prev[id] ?? {}), soporte_cliente: 0 } }));
+                            setAlertaMensaje(null);
+                            if (alertaTimerRef.current) clearTimeout(alertaTimerRef.current);
                           }
                         }}
                         className={`relative flex-1 py-2 rounded-xl text-xs font-black transition ${chatListaViajeId === String(viaje.id) && tipoChatLista === "soporte_cliente" ? "bg-orange-600 text-white" : (noLeidosPorViaje[String(viaje.id)]?.soporte_cliente ?? 0) > 0 ? "bg-orange-900 border border-orange-500 text-orange-300" : "bg-zinc-800 text-zinc-300 hover:bg-zinc-700"}`}>

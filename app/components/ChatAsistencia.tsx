@@ -44,13 +44,13 @@ const textoAlertaPorTipo = (tipo: TipoChat, rol: "cliente" | "chofer" | "admin")
     if (tipo === "soporte_chofer") return "🔴 Nuevo mensaje de Soporte TILA";
   }
   if (rol === "cliente") {
-    if (tipo === "viaje")            return "🔴 Nuevo mensaje del chofer";
-    if (tipo === "soporte_cliente")  return "🔴 Nuevo mensaje de Soporte TILA";
+    if (tipo === "viaje")           return "🔴 Nuevo mensaje del chofer";
+    if (tipo === "soporte_cliente") return "🔴 Nuevo mensaje de Soporte TILA";
   }
   if (rol === "admin") {
-    if (tipo === "viaje")            return "🔴 Nuevo mensaje operativo";
-    if (tipo === "soporte_cliente")  return "🔴 Nuevo mensaje de cliente";
-    if (tipo === "soporte_chofer")   return "🔴 Nuevo mensaje de chofer";
+    if (tipo === "viaje")           return "🔴 Nuevo mensaje operativo";
+    if (tipo === "soporte_cliente") return "🔴 Nuevo mensaje de cliente";
+    if (tipo === "soporte_chofer")  return "🔴 Nuevo mensaje de chofer";
   }
   return "🔴 Nuevo mensaje";
 };
@@ -64,13 +64,16 @@ export default function ChatAsistencia({
   modoInline = false,
   onNoLeidosChange,
 }: ChatAsistenciaProps) {
-  const [abierto, setAbierto] = useState(false);
-  const [texto, setTexto]     = useState("");
+  const [abierto, setAbierto]   = useState(false);
+  const [texto, setTexto]       = useState("");
   const [enviando, setEnviando] = useState(false);
-  const [flash, setFlash]     = useState(false);
-  const inputRef              = useRef<HTMLInputElement | null>(null);
-  // En el componente visual el silencio es siempre false — la alerta interna se maneja en el panel padre
-  const silenciadoRef         = useRef(false);
+  const inputRef                = useRef<HTMLInputElement | null>(null);
+
+  // chatVisibleRef: true cuando el chat está a la vista (siempre en inline, o cuando abierto en flotante)
+  const chatVisibleRef = useRef<boolean>(modoInline); // inline siempre visible al montar
+
+  // Silencio interno del componente: siempre false (el padre controla si suena o no vía el canal externo)
+  const silenciadoRef = useRef(false);
 
   const {
     mensajes,
@@ -85,37 +88,40 @@ export default function ChatAsistencia({
     usuarioId,
     tipoChat,
     silenciadoRef,
+    chatVisibleRef,
     textoAlerta: textoAlertaPorTipo(tipoChat, usuarioRol),
+    onNoLeidosChange,
   });
 
-  // Notificar al padre del conteo de no leídos
-  useEffect(() => { onNoLeidosChange?.(noLeidos); }, [noLeidos]);
+  // Sincronizar chatVisibleRef con estado abierto (modo flotante)
+  useEffect(() => {
+    if (!modoInline) chatVisibleRef.current = abierto;
+  }, [abierto, modoInline]);
 
-  // Scroll automático cuando llegan mensajes nuevos
+  // Scroll automático cada vez que cambia la cantidad de mensajes
   useEffect(() => {
     if (mensajes.length > 0) scrollToBottom();
   }, [mensajes.length]);
 
-  // Al abrir el panel flotante: marcar leídos, scroll, foco
+  // Al abrir panel flotante: marcar leídos, scroll, foco
   useEffect(() => {
-    if (abierto) {
+    if (!modoInline && abierto) {
       marcarLeidos();
-      setTimeout(() => {
-        scrollToBottom();
-        inputRef.current?.focus();
-      }, 150);
+      setTimeout(() => { scrollToBottom(); inputRef.current?.focus(); }, 120);
     }
   }, [abierto]);
 
-  // En modoInline: dar foco al montar (cuando el padre muestra el panel)
+  // En modoInline: al montar (panel ya está visible)
   useEffect(() => {
     if (modoInline) {
+      chatVisibleRef.current = true;
       marcarLeidos();
-      setTimeout(() => {
-        scrollToBottom();
-        inputRef.current?.focus();
-      }, 120);
+      setTimeout(() => { scrollToBottom(); inputRef.current?.focus(); }, 120);
     }
+    return () => {
+      // Al desmontar (panel se cierra) indicar que ya no es visible
+      if (modoInline) chatVisibleRef.current = false;
+    };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -127,12 +133,8 @@ export default function ChatAsistencia({
       alert("Error al enviar: " + error.message);
     } else {
       setTexto("");
-      // Mantener foco y bajar al último mensaje
       requestAnimationFrame(() => {
-        setTimeout(() => {
-          inputRef.current?.focus();
-          scrollToBottom();
-        }, 50);
+        setTimeout(() => { inputRef.current?.focus(); scrollToBottom(); }, 50);
       });
     }
     setEnviando(false);
@@ -142,66 +144,63 @@ export default function ChatAsistencia({
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleEnviar(); }
   };
 
-  const titulo = tituloPorTipo(tipoChat);
+  // Renderizar solo los últimos 4 mensajes (compacto)
+  const mensajesVisibles = mensajes.slice(-4);
 
-  // ─── Renderizado de la lista de mensajes ────────────────────────────────────
+  const BurbujaMensaje = ({ m }: { m: any }) => {
+    const esMio = m.remitente_id === usuarioId;
+    return (
+      <div className={`flex ${esMio ? "justify-end" : "justify-start"}`}>
+        <div className={`max-w-[85%] flex flex-col gap-0.5 ${esMio ? "items-end" : "items-start"}`}>
+          <div className="flex items-center gap-1">
+            <span className={`px-1.5 py-0.5 rounded text-[10px] font-black ${colorRol(m.remitente_rol)}`}>
+              {labelRol(m.remitente_rol)}
+            </span>
+            <span className="text-zinc-600 text-[10px]">{m.remitente_nombre}</span>
+          </div>
+          <div className={`px-3 py-1.5 rounded-2xl text-sm break-words leading-snug ${
+            esMio
+              ? "bg-yellow-400 text-black font-bold rounded-tr-sm"
+              : "bg-zinc-800 text-white rounded-tl-sm"
+          }`}>
+            {m.mensaje}
+          </div>
+          <span className="text-zinc-700 text-[10px]">{formatHora(m.created_at)}</span>
+        </div>
+      </div>
+    );
+  };
+
+  // ─── Lista de mensajes compacta ─────────────────────────────────────────────
   const ListaMensajes = (
-    <div
-      className="flex-1 overflow-y-auto overscroll-contain scroll-smooth p-3 space-y-3"
-      style={{ minHeight: 0 }}
-    >
-      {mensajes.length === 0 ? (
-        <p className="text-zinc-500 text-sm text-center mt-8">
-          Sin mensajes todavía.<br />Escribí algo para empezar.
-        </p>
+    <div className="flex-1 overflow-y-auto overscroll-contain px-3 py-2 space-y-2 min-h-0">
+      {mensajesVisibles.length === 0 ? (
+        <p className="text-zinc-600 text-xs text-center pt-4">Sin mensajes. Escribí algo para empezar.</p>
       ) : (
-        mensajes.map((m) => {
-          const esMio = m.remitente_id === usuarioId;
-          return (
-            <div key={m.id} className={`flex ${esMio ? "justify-end" : "justify-start"}`}>
-              <div className={`max-w-[82%] flex flex-col gap-1 ${esMio ? "items-end" : "items-start"}`}>
-                <div className="flex items-center gap-1">
-                  <span className={`px-2 py-0.5 rounded-lg text-xs font-black ${colorRol(m.remitente_rol)}`}>
-                    {labelRol(m.remitente_rol)}
-                  </span>
-                  <span className="text-zinc-500 text-xs">{m.remitente_nombre}</span>
-                </div>
-                <div className={`px-3 py-2 rounded-2xl text-sm break-words ${
-                  esMio
-                    ? "bg-yellow-400 text-black font-black rounded-tr-sm"
-                    : "bg-zinc-800 text-white rounded-tl-sm"
-                }`}>
-                  {m.mensaje}
-                </div>
-                <span className="text-zinc-600 text-xs">{formatHora(m.created_at)}</span>
-              </div>
-            </div>
-          );
-        })
+        mensajesVisibles.map(m => <BurbujaMensaje key={m.id} m={m} />)
       )}
-      {/* Anchor para scroll-to-bottom */}
       <div ref={bottomRef} />
     </div>
   );
 
-  // ─── Input compartido ────────────────────────────────────────────────────────
+  // ─── Input ──────────────────────────────────────────────────────────────────
   const InputArea = (
-    <div className="p-3 border-t border-zinc-800 flex gap-2 flex-shrink-0">
+    <div className="flex gap-2 px-3 pb-3 pt-2 border-t border-zinc-800 flex-shrink-0">
       <input
         ref={inputRef}
         type="text"
         value={texto}
-        onChange={(e) => setTexto(e.target.value)}
+        onChange={e => setTexto(e.target.value)}
         onKeyDown={handleKeyDown}
-        placeholder="Escribí un mensaje..."
-        className="flex-1 bg-zinc-800 border border-zinc-700 text-white p-3 rounded-xl text-sm outline-none focus:border-yellow-400"
+        placeholder="Escribí un mensaje…"
+        className="flex-1 bg-zinc-900 border border-zinc-700 text-white px-3 py-2 rounded-xl text-sm outline-none focus:border-yellow-400 transition"
       />
       <button
         onClick={handleEnviar}
         disabled={enviando || !texto.trim()}
-        className={`px-4 py-3 rounded-xl font-black text-sm transition ${
+        className={`px-3 py-2 rounded-xl font-black text-sm transition ${
           enviando || !texto.trim()
-            ? "bg-zinc-700 text-zinc-500 cursor-not-allowed"
+            ? "bg-zinc-800 text-zinc-600 cursor-not-allowed"
             : "bg-yellow-400 hover:bg-yellow-500 text-black"
         }`}
       >
@@ -213,7 +212,7 @@ export default function ChatAsistencia({
   // ── MODO INLINE ──────────────────────────────────────────────────────────────
   if (modoInline) {
     return (
-      <div className="flex flex-col h-full min-h-0">
+      <div className="flex flex-col bg-zinc-950" style={{ height: 230 }}>
         {ListaMensajes}
         {InputArea}
       </div>
@@ -221,50 +220,34 @@ export default function ChatAsistencia({
   }
 
   // ── MODO FLOTANTE ────────────────────────────────────────────────────────────
+  const titulo = tituloPorTipo(tipoChat);
   return (
     <>
-      {/* Botón flotante */}
       <button
         onClick={() => { setAbierto(v => !v); if (!abierto) setNoLeidos(0); }}
-        className={`fixed bottom-6 right-6 z-50 font-black rounded-full w-16 h-16 flex items-center justify-center shadow-2xl transition ${
-          flash ? "bg-red-500 scale-110" : "bg-yellow-400 hover:bg-yellow-500"
+        className={`fixed bottom-6 right-6 z-50 font-black rounded-full w-14 h-14 flex items-center justify-center shadow-2xl transition ${
+          noLeidos > 0 && !abierto ? "bg-red-500 scale-105 animate-pulse" : "bg-yellow-400 hover:bg-yellow-500"
         } text-black`}
       >
-        <span className="relative flex items-center justify-center">
-          <span className="text-2xl">💬</span>
-          {noLeidos > 0 && (
-            <span className="absolute -top-3 -right-3 bg-red-500 text-white text-xs font-black rounded-full min-w-5 h-5 flex items-center justify-center px-1 animate-pulse">
+        <span className="relative">
+          <span className="text-xl">💬</span>
+          {noLeidos > 0 && !abierto && (
+            <span className="absolute -top-2.5 -right-2.5 bg-red-600 text-white text-[10px] font-black rounded-full min-w-4 h-4 flex items-center justify-center px-1">
               {noLeidos}
             </span>
           )}
         </span>
       </button>
 
-      {/* Panel flotante */}
       {abierto && (
         <div
-          className="fixed bottom-24 right-6 z-50 w-80 md:w-96 bg-zinc-900 border-2 border-yellow-400 rounded-3xl shadow-2xl flex flex-col"
-          style={{ height: "70vh", maxHeight: "70vh" }}
+          className="fixed bottom-24 right-6 z-50 w-80 md:w-96 bg-zinc-900 border-2 border-yellow-400 rounded-2xl shadow-2xl flex flex-col overflow-hidden"
+          style={{ height: 340 }}
         >
-          {/* Header */}
-          <div className="flex items-center justify-between p-4 border-b border-zinc-800 flex-shrink-0">
-            <div>
-              <p className="text-yellow-400 font-black">{titulo}</p>
-              <div className="flex items-center gap-2 mt-1">
-                <span className={`px-2 py-0.5 rounded-lg text-xs font-black ${colorRol(usuarioRol)}`}>
-                  {labelRol(usuarioRol)}
-                </span>
-                <span className="text-zinc-500 text-xs truncate">{usuarioNombre}</span>
-              </div>
-            </div>
-            <button
-              onClick={() => setAbierto(false)}
-              className="text-zinc-400 hover:text-white font-black text-xl w-8 h-8 flex items-center justify-center"
-            >
-              ✕
-            </button>
+          <div className="flex items-center justify-between px-4 py-2.5 border-b border-zinc-800 flex-shrink-0 bg-zinc-900">
+            <p className="text-yellow-400 font-black text-sm">{titulo}</p>
+            <button onClick={() => setAbierto(false)} className="text-zinc-500 hover:text-white text-lg w-7 h-7 flex items-center justify-center">✕</button>
           </div>
-
           {ListaMensajes}
           {InputArea}
         </div>

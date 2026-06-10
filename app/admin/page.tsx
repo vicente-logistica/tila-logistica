@@ -1009,7 +1009,8 @@ export default function AdminPage() {
   const [mostrarEliminados, setMostrarEliminados] = useState(false);
   const [chatViajeId, setChatViajeId] = useState<string | null>(null);
   const [tipoChatAdmin, setTipoChatAdmin] = useState<"viaje" | "soporte_cliente" | "soporte_chofer">("viaje");
-  const [mensajesResumen, setMensajesResumen] = useState<Record<string, number>>({});
+  // mensajesResumen: { [viajeId]: { viaje: n, soporte_cliente: n, soporte_chofer: n } }
+  const [mensajesResumen, setMensajesResumen] = useState<Record<string, Record<string, number>>>({});
   // Alerta de mensaje nuevo en admin
   const [alertaMensajeAdmin, setAlertaMensajeAdmin] = useState<string | null>(null);
   const alertaAdminTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1026,13 +1027,15 @@ export default function AdminPage() {
   const cargarResumenMensajes = useCallback(async () => {
     const { data } = await supabase
       .from("mensajes_viaje")
-      .select("viaje_id, leido, remitente_id")
+      .select("viaje_id, leido, remitente_id, tipo_chat")
       .eq("leido", false);
     if (data) {
-      const resumen: Record<string, number> = {};
+      const resumen: Record<string, Record<string, number>> = {};
       data.forEach((m: any) => {
-        const key = String(m.viaje_id);
-        resumen[key] = (resumen[key] || 0) + 1;
+        const vkey = String(m.viaje_id);
+        if (!resumen[vkey]) resumen[vkey] = { viaje: 0, soporte_cliente: 0, soporte_chofer: 0 };
+        const tipo = m.tipo_chat as string;
+        if (tipo in resumen[vkey]) resumen[vkey][tipo]++;
       });
       setMensajesResumen(resumen);
     }
@@ -1381,75 +1384,117 @@ export default function AdminPage() {
       )}
 
       {/* Central de Asistencia */}
-      <section className="bg-zinc-900 border border-blue-400 rounded-3xl p-6 mb-8">
-        <div className="flex items-center justify-between mb-2">
-          <h2 className="text-3xl font-black text-blue-400">💬 Central de Asistencia</h2>
-          <div className="flex gap-2">
+      <section className="bg-zinc-900 border border-blue-400 rounded-3xl p-4 mb-8">
+        {/* Header compacto */}
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-xl font-black text-blue-400">💬 Central de Asistencia</h2>
+          <div className="flex gap-1.5">
             <button type="button" onClick={() => setSilenciarChatOperativo(v => !v)}
-              title={silenciarChatOperativo ? "Activar sonido chat operativo" : "Silenciar chat operativo"}
-              className={`px-2 py-1.5 rounded-xl text-xs font-black transition ${silenciarChatOperativo ? "bg-zinc-700 text-zinc-500" : "bg-zinc-800 text-zinc-300 hover:bg-zinc-700"}`}>
+              title={silenciarChatOperativo ? "Activar chat operativo" : "Silenciar chat operativo"}
+              className={`px-2 py-1 rounded-lg text-[11px] font-black transition ${silenciarChatOperativo ? "bg-zinc-700 text-zinc-500" : "bg-zinc-800 text-zinc-300 hover:bg-zinc-700"}`}>
               {silenciarChatOperativo ? "🚛🔕" : "🚛🔔"}
             </button>
             <button type="button" onClick={() => setSilenciarSoporteCliente(v => !v)}
-              title={silenciarSoporteCliente ? "Activar sonido soporte cliente" : "Silenciar soporte cliente"}
-              className={`px-2 py-1.5 rounded-xl text-xs font-black transition ${silenciarSoporteCliente ? "bg-zinc-700 text-zinc-500" : "bg-zinc-800 text-zinc-300 hover:bg-zinc-700"}`}>
+              title={silenciarSoporteCliente ? "Activar soporte cliente" : "Silenciar soporte cliente"}
+              className={`px-2 py-1 rounded-lg text-[11px] font-black transition ${silenciarSoporteCliente ? "bg-zinc-700 text-zinc-500" : "bg-zinc-800 text-zinc-300 hover:bg-zinc-700"}`}>
               {silenciarSoporteCliente ? "👤🔕" : "👤🔔"}
             </button>
             <button type="button" onClick={() => setSilenciarSoporteChofer(v => !v)}
-              title={silenciarSoporteChofer ? "Activar sonido soporte chofer" : "Silenciar soporte chofer"}
-              className={`px-2 py-1.5 rounded-xl text-xs font-black transition ${silenciarSoporteChofer ? "bg-zinc-700 text-zinc-500" : "bg-zinc-800 text-zinc-300 hover:bg-zinc-700"}`}>
+              title={silenciarSoporteChofer ? "Activar soporte chofer" : "Silenciar soporte chofer"}
+              className={`px-2 py-1 rounded-lg text-[11px] font-black transition ${silenciarSoporteChofer ? "bg-zinc-700 text-zinc-500" : "bg-zinc-800 text-zinc-300 hover:bg-zinc-700"}`}>
               {silenciarSoporteChofer ? "🛟🔕" : "🛟🔔"}
             </button>
           </div>
         </div>
-        <p className="text-zinc-500 text-sm mb-6">Chats activos por viaje. Seleccioná un viaje para ver la conversación.</p>
 
         {activos.length === 0 ? (
-          <p className="text-zinc-500">No hay viajes activos con chat disponible.</p>
+          <p className="text-zinc-600 text-sm">Sin viajes activos.</p>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+          <div className="flex flex-wrap gap-2 mb-3">
             {activos.map((carga) => {
-              const noLeidos = mensajesResumen[String(carga.id)] || 0;
-              const seleccionado = chatViajeId === String(carga.id);
+              const res = mensajesResumen[String(carga.id)] || {};
+              const totalNoLeidos = (res.viaje || 0) + (res.soporte_cliente || 0) + (res.soporte_chofer || 0);
+              const seleccionado  = chatViajeId === String(carga.id);
               return (
-                <div key={carga.id} className={`rounded-2xl border p-4 cursor-pointer transition ${seleccionado ? "border-blue-400 bg-blue-900/20" : "border-zinc-700 bg-black hover:border-zinc-500"}`}
-                  onClick={() => setChatViajeId(seleccionado ? null : String(carga.id))}>
-                  <div className="flex items-center justify-between mb-2">
-                    <p className="text-yellow-400 font-black text-sm truncate">{carga.origen} → {carga.destino}</p>
-                    {noLeidos > 0 && (
-                      <span className="bg-red-500 text-white text-xs font-black rounded-full w-6 h-6 flex items-center justify-center flex-shrink-0">
-                        {noLeidos}
-                      </span>
-                    )}
-                  </div>
-                  <p className="text-zinc-500 text-xs">{carga.estado}</p>
-                  <p className="text-blue-400 text-xs mt-1">{seleccionado ? "▲ Cerrar chat" : "▼ Ver chat"}</p>
-                </div>
+                <button
+                  key={carga.id}
+                  type="button"
+                  onClick={() => {
+                    if (seleccionado) {
+                      setChatViajeId(null);
+                    } else {
+                      setChatViajeId(String(carga.id));
+                      setTipoChatAdmin("viaje");
+                      // Limpiar alerta al abrir chat
+                      setAlertaMensajeAdmin(null);
+                      if (alertaAdminTimerRef.current) clearTimeout(alertaAdminTimerRef.current);
+                    }
+                  }}
+                  className={`relative flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-black transition border ${
+                    seleccionado
+                      ? "bg-blue-600 border-blue-400 text-white"
+                      : totalNoLeidos > 0
+                        ? "bg-zinc-900 border-red-500 text-yellow-400"
+                        : "bg-zinc-800 border-zinc-700 text-zinc-300 hover:border-zinc-500"
+                  }`}
+                >
+                  <span className="truncate max-w-[120px]">{carga.origen?.split(",")[0]} → {carga.destino?.split(",")[0]}</span>
+                  {totalNoLeidos > 0 && !seleccionado && (
+                    <span className="bg-red-500 text-white text-[10px] font-black rounded-full min-w-4 h-4 flex items-center justify-center px-1 flex-shrink-0 animate-pulse">
+                      {totalNoLeidos}
+                    </span>
+                  )}
+                </button>
               );
             })}
           </div>
         )}
 
-        {/* Chat expandido */}
+        {/* Panel de chat expandido */}
         {chatViajeId && usuarioActual?.id && (
-          <div className="mt-6 border border-blue-400 rounded-2xl overflow-hidden">
-            {/* Selector de tipo de chat */}
-            <div className="flex gap-2 p-3 bg-zinc-900 border-b border-zinc-700">
-              <button type="button"
-                onClick={() => setTipoChatAdmin("viaje")}
-                className={`px-3 py-1 rounded-xl text-xs font-black transition ${tipoChatAdmin === "viaje" ? "bg-blue-600 text-white" : "bg-zinc-700 text-zinc-400 hover:bg-zinc-600"}`}>
-                💬 Chat operativo
-              </button>
-              <button type="button"
-                onClick={() => setTipoChatAdmin("soporte_cliente")}
-                className={`px-3 py-1 rounded-xl text-xs font-black transition ${tipoChatAdmin === "soporte_cliente" ? "bg-orange-600 text-white" : "bg-zinc-700 text-zinc-400 hover:bg-zinc-600"}`}>
-                🛟 Soporte cliente
-              </button>
-              <button type="button"
-                onClick={() => setTipoChatAdmin("soporte_chofer")}
-                className={`px-3 py-1 rounded-xl text-xs font-black transition ${tipoChatAdmin === "soporte_chofer" ? "bg-green-600 text-white" : "bg-zinc-700 text-zinc-400 hover:bg-zinc-600"}`}>
-                🚛 Soporte chofer
-              </button>
+          <div className="border border-zinc-700 rounded-2xl overflow-hidden bg-zinc-950">
+            {/* Pestañas con badge por tipo */}
+            <div className="flex gap-1 px-3 pt-2 pb-1 bg-zinc-900 border-b border-zinc-800">
+              {(["viaje", "soporte_cliente", "soporte_chofer"] as const).map((tipo) => {
+                const labels: Record<string, string> = {
+                  viaje: "💬 Operativo",
+                  soporte_cliente: "👤 Cliente",
+                  soporte_chofer: "🚛 Chofer",
+                };
+                const colores: Record<string, string> = {
+                  viaje: "bg-blue-600",
+                  soporte_cliente: "bg-orange-600",
+                  soporte_chofer: "bg-green-700",
+                };
+                const badgeTipo = mensajesResumen[chatViajeId]?.[tipo] || 0;
+                const activa = tipoChatAdmin === tipo;
+                return (
+                  <button
+                    key={tipo}
+                    type="button"
+                    onClick={() => {
+                      setTipoChatAdmin(tipo);
+                      // Limpiar badge de esta pestaña al entrar
+                      setMensajesResumen(prev => ({
+                        ...prev,
+                        [chatViajeId]: { ...(prev[chatViajeId] || {}), [tipo]: 0 },
+                      }));
+                      setAlertaMensajeAdmin(null);
+                      if (alertaAdminTimerRef.current) clearTimeout(alertaAdminTimerRef.current);
+                    }}
+                    className={`relative flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-black transition ${
+                      activa ? `${colores[tipo]} text-white` : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700"
+                    }`}
+                  >
+                    {labels[tipo]}
+                    {badgeTipo > 0 && !activa && (
+                      <span className="bg-red-500 text-white text-[9px] font-black rounded-full min-w-3.5 h-3.5 flex items-center justify-center px-0.5 animate-pulse">
+                        {badgeTipo}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
             </div>
             <ChatAsistencia
               viajeId={chatViajeId}
