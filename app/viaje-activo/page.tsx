@@ -89,6 +89,11 @@ export default function ViajeActivoPage() {
   // Contadores de no leídos por canal
   const [noLeidosViaje, setNoLeidosViaje]           = useState(0);
   const [noLeidosSoporte, setNoLeidosSoporte]       = useState(0);
+  // Alerta de mensaje nuevo
+  const [alertaMensaje, setAlertaMensaje]           = useState<string | null>(null);
+  const alertaTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Silencio de notificaciones de chat
+  const [silenciarChat, setSilenciarChat]           = useState(false);
   const [mostrarNavSel, setMostrarNavSel]     = useState(false);
   const [destNavPendiente, setDestNavPendiente] = useState<string | null>(null);
   const [navegadorPreferido, setNavegadorPreferido] = useState<string | null>(null);
@@ -225,6 +230,60 @@ export default function ViajeActivoPage() {
         })
       .subscribe();
     return () => { supabase.removeChannel(canal); };
+  }, []);
+
+  // ─── Listener externo de mensajes (independiente del panel de chat) ────────
+  useEffect(() => {
+    const viajeId = localStorage.getItem("viajeActivoId");
+    if (!viajeId) return;
+    const miId = usuarioRef.current?.id;
+
+    // Cargar no leídos actuales al montar
+    const cargarNoLeidos = async () => {
+      if (!usuarioRef.current?.id) return;
+      const uid = usuarioRef.current.id;
+      const [{ data: dViaje }, { data: dSoporte }] = await Promise.all([
+        supabase.from("mensajes_viaje").select("id").eq("viaje_id", Number(viajeId)).eq("tipo_chat", "viaje").eq("leido", false).neq("remitente_id", uid),
+        supabase.from("mensajes_viaje").select("id").eq("viaje_id", Number(viajeId)).eq("tipo_chat", "soporte_chofer").eq("leido", false).neq("remitente_id", uid),
+      ]);
+      setNoLeidosViaje(dViaje?.length ?? 0);
+      setNoLeidosSoporte(dSoporte?.length ?? 0);
+    };
+    cargarNoLeidos();
+
+    const mostrarAlertaMensaje = (texto: string, silenciado: boolean) => {
+      if (alertaTimerRef.current) clearTimeout(alertaTimerRef.current);
+      setAlertaMensaje(texto);
+      alertaTimerRef.current = setTimeout(() => setAlertaMensaje(null), 4000);
+      if (!silenciado) {
+        const snd = new Audio("/sounds/drop.wav");
+        snd.volume = 0.7;
+        snd.play().catch(() => {
+          // fallback al sonido existente
+          const fallback = new Audio("/sounds/alerta-viaje.mp3");
+          fallback.volume = 0.5;
+          fallback.play().catch(() => {});
+        });
+      }
+    };
+
+    const canalMensajes = supabase
+      .channel(`viaje-activo-mensajes-${viajeId}`)
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "mensajes_viaje", filter: `viaje_id=eq.${viajeId}` },
+        (payload) => {
+          const msg = payload.new as any;
+          if (!msg || msg.remitente_id === usuarioRef.current?.id) return;
+          if (msg.tipo_chat === "viaje") {
+            setNoLeidosViaje(prev => prev + 1);
+            mostrarAlertaMensaje("🔴 Nuevo mensaje del cliente", silenciarChat);
+          } else if (msg.tipo_chat === "soporte_chofer") {
+            setNoLeidosSoporte(prev => prev + 1);
+            mostrarAlertaMensaje("🔴 Nuevo mensaje de Soporte TILA", silenciarChat);
+          }
+        })
+      .subscribe();
+
+    return () => { supabase.removeChannel(canalMensajes); if (alertaTimerRef.current) clearTimeout(alertaTimerRef.current); };
   }, []);
 
   useEffect(() => { cargarViajeActivo(); }, []);
@@ -478,6 +537,13 @@ export default function ViajeActivoPage() {
   return (
     <main className="fixed inset-0 bg-black overflow-hidden">
 
+      {/* ─── ALERTA MENSAJE NUEVO ────────────────────────────────────────── */}
+      {alertaMensaje && (
+        <div className="fixed top-20 left-1/2 -translate-x-1/2 z-[9999] w-[90%] max-w-sm bg-yellow-300 border-4 border-red-600 text-red-700 font-black px-5 py-3 rounded-2xl shadow-2xl text-center animate-bounce pointer-events-none">
+          {alertaMensaje}
+        </div>
+      )}
+
       {/* ─── MAPA ────────────────────────────────────────────────────────── */}
       <div className="absolute inset-0" style={{ height: "100dvh", width: "100vw" }}>
         <MapaTILA
@@ -574,7 +640,7 @@ export default function ViajeActivoPage() {
           )}
 
           {/* Secundarios — solo íconos */}
-          <div className="flex gap-2 pt-1">
+          <div className="flex gap-2 pt-1" title={silenciarChat ? "Notificaciones silenciadas" : "Silenciar notificaciones de chat"}>
             <button type="button"
               onClick={() => { setMostrarChat(v => !v); setMostrarSoporte(false); setMostrarDetalles(false); if (!mostrarChat) setNoLeidosViaje(0); }}
               className={`relative flex-1 py-2 rounded-xl text-lg transition ${mostrarChat ? "bg-blue-600" : noLeidosViaje > 0 ? "bg-blue-900 border border-blue-500" : "bg-zinc-800 hover:bg-zinc-700"}`}>
@@ -599,6 +665,12 @@ export default function ViajeActivoPage() {
                   {noLeidosSoporte}
                 </span>
               )}
+            </button>
+            <button type="button"
+              onClick={() => setSilenciarChat(v => !v)}
+              title={silenciarChat ? "Activar sonido de chat" : "Silenciar chat"}
+              className={`flex-1 py-2 rounded-xl text-lg transition ${silenciarChat ? "bg-zinc-700 opacity-60" : "bg-zinc-800 hover:bg-zinc-700"}`}>
+              {silenciarChat ? "🔕" : "🔔"}
             </button>
           </div>
         </div>

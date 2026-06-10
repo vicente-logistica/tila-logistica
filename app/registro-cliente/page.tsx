@@ -229,6 +229,13 @@ export default function PanelClientePage() {
   // Chat por viaje en la lista
   const [chatListaViajeId, setChatListaViajeId]   = useState<string | null>(null);
   const [tipoChatLista, setTipoChatLista]         = useState<"viaje" | "soporte_cliente">("viaje");
+  // No leídos por viaje
+  const [noLeidosPorViaje, setNoLeidosPorViaje]   = useState<Record<string, Record<string, number>>>({});
+  // Alerta de mensaje nuevo
+  const [alertaMensaje, setAlertaMensaje]         = useState<string | null>(null);
+  const alertaTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Silencio de notificaciones de chat
+  const [silenciarChat, setSilenciarChat]         = useState(false);
 
   const audioRef       = useRef<HTMLAudioElement | null>(null);
   const ultimoEstadoRef = useRef<Record<string, string>>({});
@@ -312,6 +319,57 @@ export default function PanelClientePage() {
     return () => { supabase.removeChannel(canal); clearInterval(intervalo); };
   }, [usuario?.id]);
 
+  // ── Listener externo de mensajes no leídos ─────────────────────────────────
+  useEffect(() => {
+    if (!usuario?.id || viajesActivos.length === 0) return;
+    const uid = usuario.id;
+
+    const cargarTodosNoLeidos = async () => {
+      const nuevoConteo: Record<string, Record<string, number>> = {};
+      await Promise.all(viajesActivos.map(async (v) => {
+        const vid = String(v.id);
+        const [{ data: dViaje }, { data: dSoporte }] = await Promise.all([
+          supabase.from("mensajes_viaje").select("id").eq("viaje_id", v.id).eq("tipo_chat", "viaje").eq("leido", false).neq("remitente_id", uid),
+          supabase.from("mensajes_viaje").select("id").eq("viaje_id", v.id).eq("tipo_chat", "soporte_cliente").eq("leido", false).neq("remitente_id", uid),
+        ]);
+        nuevoConteo[vid] = { viaje: dViaje?.length ?? 0, soporte_cliente: dSoporte?.length ?? 0 };
+      }));
+      setNoLeidosPorViaje(nuevoConteo);
+    };
+    cargarTodosNoLeidos();
+
+    const canalMensajes = supabase
+      .channel(`registro-cliente-mensajes-${uid}`)
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "mensajes_viaje" },
+        (payload) => {
+          const msg = payload.new as any;
+          if (!msg || msg.remitente_id === uid) return;
+          const vid = String(msg.viaje_id);
+          if (!viajesActivos.find(v => String(v.id) === vid)) return;
+          const tipo = msg.tipo_chat as string;
+          if (tipo !== "viaje" && tipo !== "soporte_cliente") return;
+          if (chatListaViajeId === vid && tipoChatLista === tipo) return;
+          setNoLeidosPorViaje(prev => ({
+            ...prev,
+            [vid]: { ...(prev[vid] ?? {}), [tipo]: ((prev[vid]?.[tipo] ?? 0) + 1) },
+          }));
+          // Alerta visual
+          const textoAlerta = tipo === "viaje" ? "🔴 Nuevo mensaje del chofer" : "🔴 Nuevo mensaje de Soporte TILA";
+          if (alertaTimerRef.current) clearTimeout(alertaTimerRef.current);
+          setAlertaMensaje(textoAlerta);
+          alertaTimerRef.current = setTimeout(() => setAlertaMensaje(null), 4000);
+          // Audio si no silenciado
+          if (!silenciarChat) {
+            const snd = new Audio("/sounds/drop.wav");
+            snd.volume = 0.7;
+            snd.play().catch(() => { audioRef.current?.play().catch(() => {}); });
+          }
+        })
+      .subscribe();
+
+    return () => { supabase.removeChannel(canalMensajes); if (alertaTimerRef.current) clearTimeout(alertaTimerRef.current); };
+  }, [usuario?.id, viajesActivos.length]);
+
   // Sincronizar viaje seleccionado con datos frescos
   useEffect(() => {
     if (!viajeSeleccionado) return;
@@ -339,6 +397,13 @@ export default function PanelClientePage() {
     <main className="min-h-screen bg-black text-white p-4 md:p-6">
       <audio ref={audioRef} src="/sounds/alerta-viaje.mp3" preload="auto" />
 
+      {/* ── ALERTA MENSAJE NUEVO ─────────────────────────────────────────── */}
+      {alertaMensaje && (
+        <div className="fixed top-20 left-1/2 -translate-x-1/2 z-[9999] w-[90%] max-w-sm bg-yellow-300 border-4 border-red-600 text-red-700 font-black px-5 py-3 rounded-2xl shadow-2xl text-center animate-bounce pointer-events-none">
+          {alertaMensaje}
+        </div>
+      )}
+
       {/* Alerta cambio de estado */}
       {alerta && (
         <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-6 pointer-events-none">
@@ -362,12 +427,17 @@ export default function PanelClientePage() {
       </div>
 
       {/* Soporte */}
-      <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-3 mb-5 flex items-center gap-3">
+      <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-3 mb-5 flex items-center gap-2 flex-wrap">
         <p className="text-zinc-400 text-xs font-black flex-1">🆘 Soporte TILA</p>
         <a href={`https://wa.me/${SOPORTE_WHATSAPP}`} target="_blank" rel="noreferrer"
           className="bg-green-600 text-white font-black px-3 py-1.5 rounded-xl text-xs">💬 WhatsApp</a>
         <a href={`mailto:${SOPORTE_EMAIL}`}
           className="bg-zinc-700 text-white font-black px-3 py-1.5 rounded-xl text-xs">📧 Email</a>
+        <button type="button" onClick={() => setSilenciarChat(v => !v)}
+          title={silenciarChat ? "Activar alertas de chat" : "Silenciar alertas de chat"}
+          className={`px-3 py-1.5 rounded-xl text-xs font-black transition ${silenciarChat ? "bg-zinc-700 text-zinc-500" : "bg-zinc-800 text-zinc-300 hover:bg-zinc-700"}`}>
+          {silenciarChat ? "🔕" : "🔔"}
+        </button>
       </div>
 
       {cargando ? (
@@ -428,19 +498,29 @@ export default function PanelClientePage() {
                       onClick={() => {
                         const id = String(viaje.id);
                         if (chatListaViajeId === id && tipoChatLista === "viaje") { setChatListaViajeId(null); }
-                        else { setChatListaViajeId(id); setTipoChatLista("viaje"); }
+                        else { setChatListaViajeId(id); setTipoChatLista("viaje"); setNoLeidosPorViaje(prev => ({ ...prev, [id]: { ...(prev[id] ?? {}), viaje: 0 } })); }
                       }}
-                      className={`flex-1 py-2 rounded-xl text-xs font-black transition ${chatListaViajeId === String(viaje.id) && tipoChatLista === "viaje" ? "bg-blue-600 text-white" : "bg-zinc-800 text-zinc-300 hover:bg-zinc-700"}`}>
+                      className={`relative flex-1 py-2 rounded-xl text-xs font-black transition ${chatListaViajeId === String(viaje.id) && tipoChatLista === "viaje" ? "bg-blue-600 text-white" : (noLeidosPorViaje[String(viaje.id)]?.viaje ?? 0) > 0 ? "bg-blue-900 border border-blue-500 text-blue-300" : "bg-zinc-800 text-zinc-300 hover:bg-zinc-700"}`}>
                       💬 Chat con chofer
+                      {(noLeidosPorViaje[String(viaje.id)]?.viaje ?? 0) > 0 && !(chatListaViajeId === String(viaje.id) && tipoChatLista === "viaje") && (
+                        <span className="absolute -top-1.5 -right-1.5 bg-red-500 text-white text-xs font-black rounded-full min-w-5 h-5 flex items-center justify-center px-1 animate-pulse">
+                          {noLeidosPorViaje[String(viaje.id)].viaje}
+                        </span>
+                      )}
                     </button>
                     <button type="button"
                       onClick={() => {
                         const id = String(viaje.id);
                         if (chatListaViajeId === id && tipoChatLista === "soporte_cliente") { setChatListaViajeId(null); }
-                        else { setChatListaViajeId(id); setTipoChatLista("soporte_cliente"); }
+                        else { setChatListaViajeId(id); setTipoChatLista("soporte_cliente"); setNoLeidosPorViaje(prev => ({ ...prev, [id]: { ...(prev[id] ?? {}), soporte_cliente: 0 } })); }
                       }}
-                      className={`flex-1 py-2 rounded-xl text-xs font-black transition ${chatListaViajeId === String(viaje.id) && tipoChatLista === "soporte_cliente" ? "bg-orange-600 text-white" : "bg-zinc-800 text-zinc-300 hover:bg-zinc-700"}`}>
+                      className={`relative flex-1 py-2 rounded-xl text-xs font-black transition ${chatListaViajeId === String(viaje.id) && tipoChatLista === "soporte_cliente" ? "bg-orange-600 text-white" : (noLeidosPorViaje[String(viaje.id)]?.soporte_cliente ?? 0) > 0 ? "bg-orange-900 border border-orange-500 text-orange-300" : "bg-zinc-800 text-zinc-300 hover:bg-zinc-700"}`}>
                       🛟 Soporte TILA
+                      {(noLeidosPorViaje[String(viaje.id)]?.soporte_cliente ?? 0) > 0 && !(chatListaViajeId === String(viaje.id) && tipoChatLista === "soporte_cliente") && (
+                        <span className="absolute -top-1.5 -right-1.5 bg-red-500 text-white text-xs font-black rounded-full min-w-5 h-5 flex items-center justify-center px-1 animate-pulse">
+                          {noLeidosPorViaje[String(viaje.id)].soporte_cliente}
+                        </span>
+                      )}
                     </button>
                   </div>
                 )}
@@ -450,12 +530,12 @@ export default function PanelClientePage() {
                   <div className="rounded-2xl overflow-hidden border border-zinc-700 flex flex-col" style={{ height: 320 }}>
                     <div className="flex gap-2 px-3 pt-2 pb-1 bg-zinc-800 border-b border-zinc-700 flex-shrink-0">
                       <button type="button"
-                        onClick={() => setTipoChatLista("viaje")}
+                        onClick={() => { setTipoChatLista("viaje"); setNoLeidosPorViaje(prev => ({ ...prev, [String(viaje.id)]: { ...(prev[String(viaje.id)] ?? {}), viaje: 0 } })); }}
                         className={`px-3 py-1 rounded-xl text-xs font-black transition ${tipoChatLista === "viaje" ? "bg-blue-600 text-white" : "bg-zinc-700 text-zinc-400"}`}>
                         💬 Con chofer
                       </button>
                       <button type="button"
-                        onClick={() => setTipoChatLista("soporte_cliente")}
+                        onClick={() => { setTipoChatLista("soporte_cliente"); setNoLeidosPorViaje(prev => ({ ...prev, [String(viaje.id)]: { ...(prev[String(viaje.id)] ?? {}), soporte_cliente: 0 } })); }}
                         className={`px-3 py-1 rounded-xl text-xs font-black transition ${tipoChatLista === "soporte_cliente" ? "bg-orange-600 text-white" : "bg-zinc-700 text-zinc-400"}`}>
                         🛟 Soporte TILA
                       </button>

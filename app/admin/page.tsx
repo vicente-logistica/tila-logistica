@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../lib/supabase";
 import BotonCerrarSesion from "../components/BotonCerrarSesion";
 import { useProtegerRuta } from "../hooks/useProtegerRuta";
@@ -1009,6 +1009,10 @@ export default function AdminPage() {
   const [chatViajeId, setChatViajeId] = useState<string | null>(null);
   const [tipoChatAdmin, setTipoChatAdmin] = useState<"viaje" | "soporte_cliente" | "soporte_chofer">("viaje");
   const [mensajesResumen, setMensajesResumen] = useState<Record<string, number>>({});
+  // Alerta de mensaje nuevo en admin
+  const [alertaMensajeAdmin, setAlertaMensajeAdmin] = useState<string | null>(null);
+  const alertaAdminTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [silenciarChatAdmin, setSilenciarChatAdmin] = useState(false);
 
   const usuarioActual = typeof window !== "undefined" ? JSON.parse(localStorage.getItem("usuario") || "{}") : {};
 
@@ -1101,6 +1105,32 @@ export default function AdminPage() {
       .on("postgres_changes", { event: "*", schema: "public", table: "usuarios" }, () => cargarUsuarios())
       .on("postgres_changes", { event: "*", schema: "public", table: "paradas_viaje" }, () => cargarViajes())
       .on("postgres_changes", { event: "*", schema: "public", table: "mensajes_viaje" }, () => cargarResumenMensajes())
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "mensajes_viaje" },
+        (payload) => {
+          const msg = payload.new as any;
+          if (!msg) return;
+          const uid = typeof window !== "undefined" ? (JSON.parse(localStorage.getItem("usuario") || "{}")).id : null;
+          if (msg.remitente_id === uid) return;
+          const textos: Record<string, string> = {
+            viaje:           "🔴 Nuevo mensaje operativo",
+            soporte_cliente: "🔴 Nuevo mensaje de cliente",
+            soporte_chofer:  "🔴 Nuevo mensaje de chofer",
+          };
+          const texto = textos[msg.tipo_chat as string];
+          if (!texto) return;
+          if (alertaAdminTimerRef.current) clearTimeout(alertaAdminTimerRef.current);
+          setAlertaMensajeAdmin(texto);
+          alertaAdminTimerRef.current = setTimeout(() => setAlertaMensajeAdmin(null), 4000);
+          if (!silenciarChatAdmin) {
+            const snd = new Audio("/sounds/drop.wav");
+            snd.volume = 0.7;
+            snd.play().catch(() => {
+              const fallback = new Audio("/sounds/alerta-viaje.mp3");
+              fallback.volume = 0.5;
+              fallback.play().catch(() => {});
+            });
+          }
+        })
       .subscribe();
 
     const intervalo = setInterval(() => { cargarViajes(); cargarUsuarios(); cargarResumenMensajes(); }, 5000);
@@ -1312,9 +1342,23 @@ export default function AdminPage() {
         </div>
       </section>
 
+      {/* ── ALERTA MENSAJE NUEVO ADMIN ─────────────────────────────────── */}
+      {alertaMensajeAdmin && (
+        <div className="fixed top-6 left-1/2 -translate-x-1/2 z-[9999] w-[90%] max-w-sm bg-yellow-300 border-4 border-red-600 text-red-700 font-black px-5 py-3 rounded-2xl shadow-2xl text-center animate-bounce pointer-events-none">
+          {alertaMensajeAdmin}
+        </div>
+      )}
+
       {/* Central de Asistencia */}
       <section className="bg-zinc-900 border border-blue-400 rounded-3xl p-6 mb-8">
-        <h2 className="text-3xl font-black text-blue-400 mb-2">💬 Central de Asistencia</h2>
+        <div className="flex items-center justify-between mb-2">
+          <h2 className="text-3xl font-black text-blue-400">💬 Central de Asistencia</h2>
+          <button type="button" onClick={() => setSilenciarChatAdmin(v => !v)}
+            title={silenciarChatAdmin ? "Activar alertas de chat" : "Silenciar alertas de chat"}
+            className={`px-3 py-1.5 rounded-xl text-sm font-black transition ${silenciarChatAdmin ? "bg-zinc-700 text-zinc-500" : "bg-zinc-800 text-zinc-300 hover:bg-zinc-700"}`}>
+            {silenciarChatAdmin ? "🔕 Silenciado" : "🔔 Activo"}
+          </button>
+        </div>
         <p className="text-zinc-500 text-sm mb-6">Chats activos por viaje. Seleccioná un viaje para ver la conversación.</p>
 
         {activos.length === 0 ? (
