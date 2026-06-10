@@ -6,6 +6,7 @@ import { supabase } from "../lib/supabase";
 import { useProtegerRuta } from "../hooks/useProtegerRuta";
 import MapaTILA, { ParadaMapa } from "../components/MapaTILA";
 import ChatAsistencia from "../components/ChatAsistencia";
+import ChatToast from "../components/ChatToast";
 import { registrarEvidencia, estadoAEvento } from "../lib/evidencias";
 import { playChatSound } from "../utils/chatSound";
 
@@ -282,10 +283,10 @@ export default function ViajeActivoPage() {
           if (msg.remitente_id === usuarioRef.current?.id) return;
           if (msg.tipo_chat === "viaje" && !mostrarChatRef.current) {
             setNoLeidosViaje(prev => prev + 1);
-            dispararAlerta("🔴 Nuevo mensaje del cliente", silenciarChatViajeRef.current);
+            dispararAlerta("📦 Cliente · Nuevo mensaje", silenciarChatViajeRef.current);
           } else if (msg.tipo_chat === "soporte_chofer" && !mostrarSoporteRef.current) {
             setNoLeidosSoporte(prev => prev + 1);
-            dispararAlerta("🔴 Nuevo mensaje de Soporte TILA", silenciarSoporteChoferRef.current);
+            dispararAlerta("🛟 Soporte TILA · Nuevo mensaje", silenciarSoporteChoferRef.current);
           }
         })
       .subscribe((status) => {
@@ -550,12 +551,8 @@ export default function ViajeActivoPage() {
   return (
     <main className="fixed inset-0 bg-black overflow-hidden">
 
-      {/* ─── ALERTA MENSAJE NUEVO ────────────────────────────────────────── */}
-      {alertaMensaje && (
-        <div className="fixed top-20 left-1/2 -translate-x-1/2 z-[9999] w-[90%] max-w-sm bg-yellow-300 border-4 border-red-600 text-red-700 font-black px-5 py-3 rounded-2xl shadow-2xl text-center animate-bounce pointer-events-none">
-          {alertaMensaje}
-        </div>
-      )}
+      {/* ─── TOAST MENSAJE NUEVO ─────────────────────────────────────────── */}
+      <ChatToast texto={alertaMensaje} />
 
       {/* ─── MAPA ────────────────────────────────────────────────────────── */}
       <div className="absolute inset-0" style={{ height: "100dvh", width: "100vw" }}>
@@ -718,7 +715,7 @@ export default function ViajeActivoPage() {
 
       {/* ─── PANEL CHAT CLIENTE (viaje operativo) ───────────────────────── */}
       {mostrarChat && viaje?.id && usuarioRef.current?.id && (
-        <div className="absolute bottom-0 left-0 right-0 z-30 max-h-[65vh] flex flex-col bg-zinc-900 border-t border-blue-600 rounded-t-3xl">
+        <div className="absolute bottom-0 left-0 right-0 z-30 flex flex-col bg-zinc-900 border-t border-blue-600 rounded-t-3xl" style={{ height: "58vh" }}>
           <div className="flex items-center justify-between px-4 pt-3 pb-2 border-b border-zinc-800 flex-shrink-0">
             <div>
               <p className="text-blue-400 font-black text-sm">💬 Chat del viaje</p>
@@ -726,7 +723,7 @@ export default function ViajeActivoPage() {
             </div>
             <button type="button" onClick={() => setMostrarChat(false)} className="text-zinc-400 font-black px-2">✕</button>
           </div>
-          <div className="flex-1 overflow-y-auto">
+          <div className="flex-1 min-h-0">
             <ChatAsistencia viajeId={viaje.id} usuarioId={usuarioRef.current.id} usuarioRol="chofer" usuarioNombre={usuarioRef.current.nombre || "Chofer"} tipoChat="viaje" modoInline onNoLeidosChange={setNoLeidosViaje} />
           </div>
         </div>
@@ -734,7 +731,7 @@ export default function ViajeActivoPage() {
 
       {/* ─── PANEL SOPORTE TILA (privado chofer ↔ admin) ────────────────── */}
       {mostrarSoporte && viaje?.id && usuarioRef.current?.id && (
-        <div className="absolute bottom-0 left-0 right-0 z-30 max-h-[65vh] flex flex-col bg-zinc-900 border-t border-orange-600 rounded-t-3xl">
+        <div className="absolute bottom-0 left-0 right-0 z-30 flex flex-col bg-zinc-900 border-t border-orange-600 rounded-t-3xl" style={{ height: "58vh" }}>
           <div className="flex items-center justify-between px-4 pt-3 pb-2 border-b border-zinc-800 flex-shrink-0">
             <div>
               <p className="text-orange-400 font-black text-sm">🚛 Soporte chofer</p>
@@ -742,7 +739,7 @@ export default function ViajeActivoPage() {
             </div>
             <button type="button" onClick={() => setMostrarSoporte(false)} className="text-zinc-400 font-black px-2">✕</button>
           </div>
-          <div className="flex-1 overflow-y-auto">
+          <div className="flex-1 min-h-0">
             <ChatAsistencia viajeId={viaje.id} usuarioId={usuarioRef.current.id} usuarioRol="chofer" usuarioNombre={usuarioRef.current.nombre || "Chofer"} tipoChat="soporte_chofer" modoInline onNoLeidosChange={setNoLeidosSoporte} />
           </div>
         </div>

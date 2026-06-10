@@ -5,6 +5,7 @@ import { supabase } from "../lib/supabase";
 import BotonCerrarSesion from "../components/BotonCerrarSesion";
 import { useProtegerRuta } from "../hooks/useProtegerRuta";
 import ChatAsistencia from "../components/ChatAsistencia";
+import ChatToast from "../components/ChatToast";
 import { playChatSound } from "../utils/chatSound";
 
 const ESTADOS_VIAJE = [
@@ -1145,9 +1146,9 @@ export default function AdminPage() {
           if (msg.remitente_id === uid) return;
 
           const textos: Record<string, string> = {
-            viaje:           "🔴 Nuevo mensaje operativo",
-            soporte_cliente: "🔴 Nuevo mensaje de cliente",
-            soporte_chofer:  "🔴 Nuevo mensaje de chofer",
+            viaje:           "🚛 Chofer · Nuevo mensaje operativo",
+            soporte_cliente: "📦 Cliente · Nuevo mensaje",
+            soporte_chofer:  "🚛 Chofer · Nuevo mensaje",
           };
           const texto = textos[msg.tipo_chat as string];
           if (!texto) return;
@@ -1376,12 +1377,8 @@ export default function AdminPage() {
         </div>
       </section>
 
-      {/* ── ALERTA MENSAJE NUEVO ADMIN ─────────────────────────────────── */}
-      {alertaMensajeAdmin && (
-        <div className="fixed top-6 left-1/2 -translate-x-1/2 z-[9999] w-[90%] max-w-sm bg-yellow-300 border-4 border-red-600 text-red-700 font-black px-5 py-3 rounded-2xl shadow-2xl text-center animate-bounce pointer-events-none">
-          {alertaMensajeAdmin}
-        </div>
-      )}
+      {/* ── TOAST MENSAJE NUEVO ADMIN ───────────────────────────────────── */}
+      <ChatToast texto={alertaMensajeAdmin} />
 
       {/* Central de Asistencia */}
       <section className="bg-zinc-900 border border-blue-400 rounded-3xl p-4 mb-8">
@@ -1496,14 +1493,16 @@ export default function AdminPage() {
                 );
               })}
             </div>
-            <ChatAsistencia
-              viajeId={chatViajeId}
-              usuarioId={usuarioActual.id}
-              usuarioRol="admin"
-              usuarioNombre={usuarioActual.nombre || "Admin"}
-              tipoChat={tipoChatAdmin}
-              modoInline
-            />
+            <div style={{ height: 300 }} className="flex flex-col min-h-0">
+              <ChatAsistencia
+                viajeId={chatViajeId}
+                usuarioId={usuarioActual.id}
+                usuarioRol="admin"
+                usuarioNombre={usuarioActual.nombre || "Admin"}
+                tipoChat={tipoChatAdmin}
+                modoInline
+              />
+            </div>
           </div>
         )}
       </section>

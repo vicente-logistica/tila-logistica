@@ -6,6 +6,7 @@ import { supabase } from "../lib/supabase";
 import { useProtegerRuta } from "../hooks/useProtegerRuta";
 import MapaTILA from "../components/MapaTILA";
 import ChatAsistencia from "../components/ChatAsistencia";
+import ChatToast from "../components/ChatToast";
 import BotonCerrarSesion from "../components/BotonCerrarSesion";
 import { playChatSound } from "../utils/chatSound";
 import { labelVehiculo, VehiculoRow } from "../lib/vehiculos";
@@ -197,7 +198,7 @@ function SeguimientoViaje({
 
       {/* ── PANEL CHAT ─────────────────────────────────────────────────── */}
       {mostrarChat && (
-        <div className="absolute bottom-0 left-0 right-0 z-30 max-h-[65vh] flex flex-col bg-zinc-900 border-t border-blue-600 rounded-t-3xl">
+        <div className="absolute bottom-0 left-0 right-0 z-30 flex flex-col bg-zinc-900 border-t border-blue-600 rounded-t-3xl" style={{ height: "58vh" }}>
           {/* Header + selector de tipo */}
           <div className="flex items-center justify-between px-4 pt-3 pb-2 border-b border-zinc-800 flex-shrink-0">
             <div className="flex gap-2">
@@ -218,7 +219,7 @@ function SeguimientoViaje({
             </div>
             <button type="button" onClick={() => setMostrarChat(false)} className="text-zinc-400 font-black px-2">✕</button>
           </div>
-          <div className="flex-1 overflow-y-auto">
+          <div className="flex-1 min-h-0">
             <ChatAsistencia
               viajeId={String(viaje.id)}
               usuarioId={usuarioId}
@@ -565,7 +566,7 @@ export default function PanelClientePage() {
             [vid]: { ...(prev[vid] ?? {}), [tipo]: ((prev[vid]?.[tipo] ?? 0) + 1) },
           }));
           // Alerta visual
-          const textoAlerta = tipo === "viaje" ? "🔴 Nuevo mensaje del chofer" : "🔴 Nuevo mensaje de Soporte TILA";
+          const textoAlerta = tipo === "viaje" ? "🚛 Chofer · Nuevo mensaje" : "🛟 Soporte TILA · Nuevo mensaje";
           if (alertaTimerRef.current) clearTimeout(alertaTimerRef.current);
           setAlertaMensaje(textoAlerta);
           alertaTimerRef.current = setTimeout(() => setAlertaMensaje(null), 4000);
@@ -639,12 +640,8 @@ export default function PanelClientePage() {
       {/* Audio — elemento oculto necesario para unlock en iOS/Safari */}
       <audio ref={audioRef} src="/sounds/alerta-viaje.mp3" preload="auto" />
 
-      {/* ── ALERTA MENSAJE NUEVO ─────────────────────────────────────────── */}
-      {alertaMensaje && (
-        <div className="fixed top-20 left-1/2 -translate-x-1/2 z-[9999] w-[90%] max-w-sm bg-yellow-300 border-4 border-red-600 text-red-700 font-black px-5 py-3 rounded-2xl shadow-2xl text-center animate-bounce pointer-events-none">
-          {alertaMensaje}
-        </div>
-      )}
+      {/* ── TOAST MENSAJE NUEVO ──────────────────────────────────────────── */}
+      <ChatToast texto={alertaMensaje} />
 
       {/* Banner activar alertas sonoras — visible hasta que el usuario otorgue permiso */}
       {!audioListo && (
@@ -876,7 +873,7 @@ export default function PanelClientePage() {
 
                   {/* Panel chat inline */}
                   {chatListaViajeId === String(viaje.id) && usuario?.id && (
-                    <div className="rounded-2xl overflow-hidden border border-zinc-700 flex flex-col" style={{ height: 320 }}>
+                    <div className="rounded-2xl overflow-hidden border border-zinc-700 flex flex-col" style={{ height: 340 }}>
                       <div className="flex gap-2 px-3 pt-2 pb-1 bg-zinc-800 border-b border-zinc-700 flex-shrink-0">
                         <button type="button"
                           onClick={() => { setTipoChatLista("viaje"); setNoLeidosPorViaje(prev => ({ ...prev, [String(viaje.id)]: { ...(prev[String(viaje.id)] ?? {}), viaje: 0 } })); }}
@@ -890,7 +887,7 @@ export default function PanelClientePage() {
                         </button>
                         <button type="button" onClick={() => setChatListaViajeId(null)} className="ml-auto text-zinc-500 font-black px-2">✕</button>
                       </div>
-                      <div className="flex-1 overflow-hidden">
+                      <div className="flex-1 min-h-0">
                         <ChatAsistencia
                           viajeId={String(viaje.id)}
                           usuarioId={usuario.id}

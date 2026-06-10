@@ -10,18 +10,16 @@ interface UseChatRealtimeOpts {
   viajeId: string | number;
   usuarioId: string;
   tipoChat: TipoChat;
-  /** Ref de silencio del sector — se lee en el callback sin stale closure */
+  /** Ref de silencio — se lee en el callback sin stale closure */
   silenciadoRef: React.MutableRefObject<boolean>;
-  /** Texto a mostrar en la burbuja de alerta cuando llega mensaje de otro (solo si chat está cerrado) */
+  /** Texto del toast cuando llega mensaje de otro y chat está cerrado */
   textoAlerta?: string;
-  /**
-   * Ref que indica si el chat está actualmente visible para el usuario.
-   * Cuando es true y llega un mensaje de otro, se marca como leído automáticamente
-   * en lugar de incrementar el badge y mostrar alerta.
-   */
+  /** Ref que indica si el chat está visible para el usuario */
   chatVisibleRef?: React.MutableRefObject<boolean>;
-  /** Callback para notificar al padre del conteo actual de no leídos */
+  /** Callback para notificar al padre del conteo de no leídos */
   onNoLeidosChange?: (n: number) => void;
+  /** Callback disparado al agregar un nuevo mensaje (para que el componente gestione scroll) */
+  onNuevoMensaje?: () => void;
 }
 
 export interface UseChatRealtimeResult {
@@ -32,8 +30,6 @@ export interface UseChatRealtimeResult {
   resetAlerta: () => void;
   marcarLeidos: () => Promise<void>;
   enviarMensaje: (texto: string, rol: string, nombre: string) => Promise<any>;
-  bottomRef: React.RefObject<HTMLDivElement | null>;
-  scrollToBottom: () => void;
 }
 
 export function useChatRealtime({
@@ -44,22 +40,13 @@ export function useChatRealtime({
   textoAlerta,
   chatVisibleRef,
   onNoLeidosChange,
+  onNuevoMensaje,
 }: UseChatRealtimeOpts): UseChatRealtimeResult {
   const [mensajes, setMensajes] = useState<any[]>([]);
   const [noLeidos, setNoLeidos] = useState(0);
   const [alerta, setAlerta]     = useState<string | null>(null);
   const alertaTimerRef          = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const bottomRef               = useRef<HTMLDivElement | null>(null);
-  // Evitar doble-insert por Realtime + polling
   const idsVistos               = useRef<Set<string | number>>(new Set());
-
-  const scrollToBottom = useCallback(() => {
-    requestAnimationFrame(() => {
-      setTimeout(() => {
-        bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-      }, 50);
-    });
-  }, []);
 
   const marcarLeidos = useCallback(async () => {
     await supabase
@@ -91,7 +78,6 @@ export function useChatRealtime({
     return error;
   }, [viajeId, usuarioId, tipoChat]);
 
-  // Carga mensajes y actualiza sin duplicar
   const cargarMensajes = useCallback(async () => {
     const { data } = await supabase
       .from("mensajes_viaje")
@@ -110,7 +96,7 @@ export function useChatRealtime({
   useEffect(() => {
     if (!viajeId || !usuarioId) return;
 
-    cargarMensajes().then(() => scrollToBottom());
+    cargarMensajes();
 
     const canal = supabase
       .channel(`chat-rt-${viajeId}-${tipoChat}-${usuarioId}`)
@@ -125,13 +111,14 @@ export function useChatRealtime({
           idsVistos.current.add(nuevo.id);
 
           console.log("CHAT SYNC nuevo", nuevo);
-
           setMensajes(prev => [...prev, nuevo]);
-          scrollToBottom();
+
+          // Notificar al componente para que gestione el scroll
+          onNuevoMensaje?.();
 
           if (nuevo.remitente_id !== usuarioId) {
             if (chatVisibleRef?.current) {
-              // Chat abierto → marcar leído automáticamente, sin badge ni alerta
+              // Chat abierto — auto-marcar leído, sin badge ni alerta
               supabase
                 .from("mensajes_viaje")
                 .update({ leido: true })
@@ -139,12 +126,9 @@ export function useChatRealtime({
                 .eq("tipo_chat", tipoChat)
                 .neq("remitente_id", usuarioId)
                 .eq("leido", false)
-                .then(() => {
-                  setNoLeidos(0);
-                  onNoLeidosChange?.(0);
-                });
+                .then(() => { setNoLeidos(0); onNoLeidosChange?.(0); });
             } else {
-              // Chat cerrado → badge + alerta + sonido
+              // Chat cerrado — badge + alerta + sonido
               setNoLeidos(prev => {
                 const n = prev + 1;
                 onNoLeidosChange?.(n);
@@ -164,6 +148,7 @@ export function useChatRealtime({
         console.log("CHAT SYNC status", status);
       });
 
+    // Polling de respaldo
     const intervalo = setInterval(cargarMensajes, 8000);
 
     return () => {
@@ -174,15 +159,5 @@ export function useChatRealtime({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viajeId, usuarioId, tipoChat]);
 
-  return {
-    mensajes,
-    noLeidos,
-    setNoLeidos,
-    alerta,
-    resetAlerta,
-    marcarLeidos,
-    enviarMensaje,
-    bottomRef,
-    scrollToBottom,
-  };
+  return { mensajes, noLeidos, setNoLeidos, alerta, resetAlerta, marcarLeidos, enviarMensaje };
 }
