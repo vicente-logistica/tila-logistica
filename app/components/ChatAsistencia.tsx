@@ -54,6 +54,7 @@ export default function ChatAsistencia({
   const [noLeidos, setNoLeidos]       = useState(0);
   const [flashNuevo, setFlashNuevo]   = useState(false);
   const bottomRef   = useRef<HTMLDivElement | null>(null);
+  const inputRef    = useRef<HTMLInputElement | null>(null);
   const abiertoRef  = useRef(false);
   const mensajesRef = useRef<any[]>([]);
 
@@ -148,9 +149,22 @@ export default function ChatAsistencia({
   useEffect(() => {
     if (abierto) {
       marcarLeidos();
-      setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: "smooth" }), 150);
+      setTimeout(() => {
+        bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+        inputRef.current?.focus();
+      }, 150);
     }
   }, [abierto]);
+
+  // En modo inline el componente monta cuando el padre lo muestra — dar foco al montar
+  useEffect(() => {
+    if (modoInline) {
+      setTimeout(() => {
+        inputRef.current?.focus();
+        bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+      }, 100);
+    }
+  }, []);
 
   useEffect(() => {
     if (abierto && mensajes.length > 0) {
@@ -170,8 +184,16 @@ export default function ChatAsistencia({
       leido:            false,
       tipo_chat:        tipoChat,
     }]);
-    if (error) { alert("Error al enviar: " + error.message); }
-    else { setTexto(""); }
+    if (error) {
+      alert("Error al enviar: " + error.message);
+    } else {
+      setTexto("");
+      // Mantener foco y scroll al final después de enviar
+      setTimeout(() => {
+        inputRef.current?.focus();
+        bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+      }, 50);
+    }
     setEnviando(false);
   };
 
@@ -222,6 +244,7 @@ export default function ChatAsistencia({
             value={texto}
             onChange={(e) => setTexto(e.target.value)}
             onKeyDown={handleKeyDown}
+            ref={inputRef}
             placeholder="Escribí un mensaje..."
             className="flex-1 bg-zinc-800 border border-zinc-700 text-white p-3 rounded-xl text-sm outline-none focus:border-yellow-400"
           />

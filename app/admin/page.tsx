@@ -1012,7 +1012,13 @@ export default function AdminPage() {
   // Alerta de mensaje nuevo en admin
   const [alertaMensajeAdmin, setAlertaMensajeAdmin] = useState<string | null>(null);
   const alertaAdminTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [silenciarChatAdmin, setSilenciarChatAdmin] = useState(false);
+  // Silencio por sector — refs para que el callback Realtime lea siempre el valor actual
+  const [silenciarChatOperativo, setSilenciarChatOperativo]       = useState(false);
+  const [silenciarSoporteCliente, setSilenciarSoporteCliente]     = useState(false);
+  const [silenciarSoporteChofer, setSilenciarSoporteChofer]       = useState(false);
+  const silenciarChatOperativoRef  = useRef(false);
+  const silenciarSoporteClienteRef = useRef(false);
+  const silenciarSoporteChoferRef  = useRef(false);
 
   const usuarioActual = typeof window !== "undefined" ? JSON.parse(localStorage.getItem("usuario") || "{}") : {};
 
@@ -1091,6 +1097,11 @@ export default function AdminPage() {
     setClientes(todos.filter((u: any) => u.rol === "cliente" && !u.eliminado));
   }, []);
 
+  // Sincronizar refs de silencio (sin stale closure en callbacks)
+  useEffect(() => { silenciarChatOperativoRef.current  = silenciarChatOperativo; },  [silenciarChatOperativo]);
+  useEffect(() => { silenciarSoporteClienteRef.current = silenciarSoporteCliente; }, [silenciarSoporteCliente]);
+  useEffect(() => { silenciarSoporteChoferRef.current  = silenciarSoporteChofer; },  [silenciarSoporteChofer]);
+
   useEffect(() => {
     const iniciar = async () => {
       setCargando(true);
@@ -1104,9 +1115,14 @@ export default function AdminPage() {
       .on("postgres_changes", { event: "*", schema: "public", table: "cargas" }, () => cargarViajes())
       .on("postgres_changes", { event: "*", schema: "public", table: "usuarios" }, () => cargarUsuarios())
       .on("postgres_changes", { event: "*", schema: "public", table: "paradas_viaje" }, () => cargarViajes())
-      .on("postgres_changes", { event: "*", schema: "public", table: "mensajes_viaje" }, () => cargarResumenMensajes())
-      .on("postgres_changes", { event: "INSERT", schema: "public", table: "mensajes_viaje" },
+      // Un único handler para mensajes_viaje — evita conflicto de dos listeners en mismo canal
+      .on("postgres_changes", { event: "*", schema: "public", table: "mensajes_viaje" },
         (payload) => {
+          // Siempre refrescar resumen de no leídos
+          cargarResumenMensajes();
+          // Solo en INSERT disparar alerta visual + sonido
+          if (payload.eventType !== "INSERT") return;
+          console.log("CHAT ALERT payload", payload.new);
           const msg = payload.new as any;
           if (!msg) return;
           const uid = typeof window !== "undefined" ? (JSON.parse(localStorage.getItem("usuario") || "{}")).id : null;
@@ -1121,17 +1137,22 @@ export default function AdminPage() {
           if (alertaAdminTimerRef.current) clearTimeout(alertaAdminTimerRef.current);
           setAlertaMensajeAdmin(texto);
           alertaAdminTimerRef.current = setTimeout(() => setAlertaMensajeAdmin(null), 4000);
-          if (!silenciarChatAdmin) {
+          // Usar refs — sin stale closure
+          const silenciado =
+            msg.tipo_chat === "viaje"           ? silenciarChatOperativoRef.current :
+            msg.tipo_chat === "soporte_cliente" ? silenciarSoporteClienteRef.current :
+                                                  silenciarSoporteChoferRef.current;
+          if (!silenciado) {
             const snd = new Audio("/sounds/drop.wav");
             snd.volume = 0.7;
             snd.play().catch(() => {
-              const fallback = new Audio("/sounds/alerta-viaje.mp3");
-              fallback.volume = 0.5;
-              fallback.play().catch(() => {});
+              new Audio("/sounds/alerta-viaje.mp3").play().catch(() => {});
             });
           }
         })
-      .subscribe();
+      .subscribe((status) => {
+        console.log("CHAT ALERT realtime status", status);
+      });
 
     const intervalo = setInterval(() => { cargarViajes(); cargarUsuarios(); cargarResumenMensajes(); }, 5000);
     return () => { supabase.removeChannel(channel); clearInterval(intervalo); };
@@ -1353,11 +1374,23 @@ export default function AdminPage() {
       <section className="bg-zinc-900 border border-blue-400 rounded-3xl p-6 mb-8">
         <div className="flex items-center justify-between mb-2">
           <h2 className="text-3xl font-black text-blue-400">💬 Central de Asistencia</h2>
-          <button type="button" onClick={() => setSilenciarChatAdmin(v => !v)}
-            title={silenciarChatAdmin ? "Activar alertas de chat" : "Silenciar alertas de chat"}
-            className={`px-3 py-1.5 rounded-xl text-sm font-black transition ${silenciarChatAdmin ? "bg-zinc-700 text-zinc-500" : "bg-zinc-800 text-zinc-300 hover:bg-zinc-700"}`}>
-            {silenciarChatAdmin ? "🔕 Silenciado" : "🔔 Activo"}
-          </button>
+          <div className="flex gap-2">
+            <button type="button" onClick={() => setSilenciarChatOperativo(v => !v)}
+              title={silenciarChatOperativo ? "Activar sonido chat operativo" : "Silenciar chat operativo"}
+              className={`px-2 py-1.5 rounded-xl text-xs font-black transition ${silenciarChatOperativo ? "bg-zinc-700 text-zinc-500" : "bg-zinc-800 text-zinc-300 hover:bg-zinc-700"}`}>
+              {silenciarChatOperativo ? "🚛🔕" : "🚛🔔"}
+            </button>
+            <button type="button" onClick={() => setSilenciarSoporteCliente(v => !v)}
+              title={silenciarSoporteCliente ? "Activar sonido soporte cliente" : "Silenciar soporte cliente"}
+              className={`px-2 py-1.5 rounded-xl text-xs font-black transition ${silenciarSoporteCliente ? "bg-zinc-700 text-zinc-500" : "bg-zinc-800 text-zinc-300 hover:bg-zinc-700"}`}>
+              {silenciarSoporteCliente ? "👤🔕" : "👤🔔"}
+            </button>
+            <button type="button" onClick={() => setSilenciarSoporteChofer(v => !v)}
+              title={silenciarSoporteChofer ? "Activar sonido soporte chofer" : "Silenciar soporte chofer"}
+              className={`px-2 py-1.5 rounded-xl text-xs font-black transition ${silenciarSoporteChofer ? "bg-zinc-700 text-zinc-500" : "bg-zinc-800 text-zinc-300 hover:bg-zinc-700"}`}>
+              {silenciarSoporteChofer ? "🛟🔕" : "🛟🔔"}
+            </button>
+          </div>
         </div>
         <p className="text-zinc-500 text-sm mb-6">Chats activos por viaje. Seleccioná un viaje para ver la conversación.</p>
 
