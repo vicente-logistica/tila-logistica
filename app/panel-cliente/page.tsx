@@ -340,6 +340,9 @@ export default function PanelClientePage() {
   const [mostrarHistorial, setMostrarHistorial]   = useState(false);
   const [alerta, setAlerta]                   = useState<string | null>(null);
   const [bannerPago, setBannerPago]           = useState<"ok" | "error" | "pendiente" | null>(null);
+  // Chat por viaje en la lista
+  const [chatListaViajeId, setChatListaViajeId]   = useState<string | null>(null);
+  const [tipoChatLista, setTipoChatLista]         = useState<"viaje" | "soporte_cliente">("viaje");
 
   // Leer ?pago= de la URL cuando MP redirige de vuelta (sin useSearchParams para evitar Suspense)
   useEffect(() => {
@@ -722,6 +725,59 @@ export default function PanelClientePage() {
 
                   {/* Fecha */}
                   <p className="text-zinc-600 text-xs">{fmt(viaje.created_at)}{viaje.km_estimados ? ` · ${viaje.km_estimados} km` : ""}</p>
+
+                  {/* Botones de chat por viaje */}
+                  {viaje.estado && !["pendiente", "pendiente_pago"].includes(viaje.estado) && usuario?.id && (
+                    <div className="flex gap-2">
+                      <button type="button"
+                        onClick={() => {
+                          const id = String(viaje.id);
+                          if (chatListaViajeId === id && tipoChatLista === "viaje") { setChatListaViajeId(null); }
+                          else { setChatListaViajeId(id); setTipoChatLista("viaje"); }
+                        }}
+                        className={`flex-1 py-2 rounded-xl text-xs font-black transition ${chatListaViajeId === String(viaje.id) && tipoChatLista === "viaje" ? "bg-blue-600 text-white" : "bg-zinc-800 text-zinc-300 hover:bg-zinc-700"}`}>
+                        💬 Chat con chofer
+                      </button>
+                      <button type="button"
+                        onClick={() => {
+                          const id = String(viaje.id);
+                          if (chatListaViajeId === id && tipoChatLista === "soporte_cliente") { setChatListaViajeId(null); }
+                          else { setChatListaViajeId(id); setTipoChatLista("soporte_cliente"); }
+                        }}
+                        className={`flex-1 py-2 rounded-xl text-xs font-black transition ${chatListaViajeId === String(viaje.id) && tipoChatLista === "soporte_cliente" ? "bg-orange-600 text-white" : "bg-zinc-800 text-zinc-300 hover:bg-zinc-700"}`}>
+                        🛟 Soporte TILA
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Panel chat inline */}
+                  {chatListaViajeId === String(viaje.id) && usuario?.id && (
+                    <div className="rounded-2xl overflow-hidden border border-zinc-700 flex flex-col" style={{ height: 320 }}>
+                      <div className="flex gap-2 px-3 pt-2 pb-1 bg-zinc-800 border-b border-zinc-700 flex-shrink-0">
+                        <button type="button"
+                          onClick={() => setTipoChatLista("viaje")}
+                          className={`px-3 py-1 rounded-xl text-xs font-black transition ${tipoChatLista === "viaje" ? "bg-blue-600 text-white" : "bg-zinc-700 text-zinc-400"}`}>
+                          💬 Con chofer
+                        </button>
+                        <button type="button"
+                          onClick={() => setTipoChatLista("soporte_cliente")}
+                          className={`px-3 py-1 rounded-xl text-xs font-black transition ${tipoChatLista === "soporte_cliente" ? "bg-orange-600 text-white" : "bg-zinc-700 text-zinc-400"}`}>
+                          🛟 Soporte TILA
+                        </button>
+                        <button type="button" onClick={() => setChatListaViajeId(null)} className="ml-auto text-zinc-500 font-black px-2">✕</button>
+                      </div>
+                      <div className="flex-1 overflow-hidden">
+                        <ChatAsistencia
+                          viajeId={String(viaje.id)}
+                          usuarioId={usuario.id}
+                          usuarioRol="cliente"
+                          usuarioNombre={usuario.nombre || "Cliente"}
+                          tipoChat={tipoChatLista}
+                          modoInline
+                        />
+                      </div>
+                    </div>
+                  )}
 
                   {/* Botón: pagar o ver seguimiento */}
                   {viaje.pago_estado === "pendiente_pago" || viaje.pago_estado === "rechazado" ? (
