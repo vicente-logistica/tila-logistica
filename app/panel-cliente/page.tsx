@@ -66,8 +66,9 @@ function SeguimientoViaje({
   usuarioId: string; usuarioNombre: string;
   onCerrar: () => void;
 }) {
-  const [mostrarChat, setMostrarChat]       = useState(false);
-  const [mostrarDetalles, setMostrarDetalles] = useState(false);
+  const [mostrarChat, setMostrarChat]           = useState(false);
+  const [tipoChatCliente, setTipoChatCliente]   = useState<"viaje" | "soporte_cliente">("viaje");
+  const [mostrarDetalles, setMostrarDetalles]   = useState(false);
 
   const tieneGps = viaje?.lat != null && viaje?.lng != null;
   const precio   = viaje?.precio_cliente ? Number(viaje.precio_cliente) : null;
@@ -196,12 +197,35 @@ function SeguimientoViaje({
       {/* ── PANEL CHAT ─────────────────────────────────────────────────── */}
       {mostrarChat && (
         <div className="absolute bottom-0 left-0 right-0 z-30 max-h-[65vh] flex flex-col bg-zinc-900 border-t border-blue-600 rounded-t-3xl">
+          {/* Header + selector de tipo */}
           <div className="flex items-center justify-between px-4 pt-3 pb-2 border-b border-zinc-800 flex-shrink-0">
-            <p className="text-blue-400 font-black text-sm">💬 Chat · VIAJE #{viaje.id}</p>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setTipoChatCliente("viaje")}
+                className={`px-3 py-1 rounded-xl text-xs font-black transition ${tipoChatCliente === "viaje" ? "bg-blue-600 text-white" : "bg-zinc-700 text-zinc-400 hover:bg-zinc-600"}`}
+              >
+                💬 Con chofer
+              </button>
+              <button
+                type="button"
+                onClick={() => setTipoChatCliente("soporte_cliente")}
+                className={`px-3 py-1 rounded-xl text-xs font-black transition ${tipoChatCliente === "soporte_cliente" ? "bg-orange-600 text-white" : "bg-zinc-700 text-zinc-400 hover:bg-zinc-600"}`}
+              >
+                🛟 Soporte TILA
+              </button>
+            </div>
             <button type="button" onClick={() => setMostrarChat(false)} className="text-zinc-400 font-black px-2">✕</button>
           </div>
           <div className="flex-1 overflow-y-auto">
-            <ChatAsistencia viajeId={String(viaje.id)} usuarioId={usuarioId} usuarioRol="cliente" usuarioNombre={usuarioNombre} />
+            <ChatAsistencia
+              viajeId={String(viaje.id)}
+              usuarioId={usuarioId}
+              usuarioRol="cliente"
+              usuarioNombre={usuarioNombre}
+              tipoChat={tipoChatCliente}
+              modoInline
+            />
           </div>
         </div>
       )}

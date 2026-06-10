@@ -1007,6 +1007,7 @@ export default function AdminPage() {
   const [filtroRol, setFiltroRol] = useState("todos");
   const [mostrarEliminados, setMostrarEliminados] = useState(false);
   const [chatViajeId, setChatViajeId] = useState<string | null>(null);
+  const [tipoChatAdmin, setTipoChatAdmin] = useState<"viaje" | "soporte_cliente" | "soporte_chofer">("viaje");
   const [mensajesResumen, setMensajesResumen] = useState<Record<string, number>>({});
 
   const usuarioActual = typeof window !== "undefined" ? JSON.parse(localStorage.getItem("usuario") || "{}") : {};
@@ -1345,11 +1346,31 @@ export default function AdminPage() {
         {/* Chat expandido */}
         {chatViajeId && usuarioActual?.id && (
           <div className="mt-6 border border-blue-400 rounded-2xl overflow-hidden">
+            {/* Selector de tipo de chat */}
+            <div className="flex gap-2 p-3 bg-zinc-900 border-b border-zinc-700">
+              <button type="button"
+                onClick={() => setTipoChatAdmin("viaje")}
+                className={`px-3 py-1 rounded-xl text-xs font-black transition ${tipoChatAdmin === "viaje" ? "bg-blue-600 text-white" : "bg-zinc-700 text-zinc-400 hover:bg-zinc-600"}`}>
+                💬 Chat operativo
+              </button>
+              <button type="button"
+                onClick={() => setTipoChatAdmin("soporte_cliente")}
+                className={`px-3 py-1 rounded-xl text-xs font-black transition ${tipoChatAdmin === "soporte_cliente" ? "bg-orange-600 text-white" : "bg-zinc-700 text-zinc-400 hover:bg-zinc-600"}`}>
+                🛟 Soporte cliente
+              </button>
+              <button type="button"
+                onClick={() => setTipoChatAdmin("soporte_chofer")}
+                className={`px-3 py-1 rounded-xl text-xs font-black transition ${tipoChatAdmin === "soporte_chofer" ? "bg-green-600 text-white" : "bg-zinc-700 text-zinc-400 hover:bg-zinc-600"}`}>
+                🚛 Soporte chofer
+              </button>
+            </div>
             <ChatAsistencia
               viajeId={chatViajeId}
               usuarioId={usuarioActual.id}
               usuarioRol="admin"
               usuarioNombre={usuarioActual.nombre || "Admin"}
+              tipoChat={tipoChatAdmin}
+              modoInline
             />
           </div>
         )}

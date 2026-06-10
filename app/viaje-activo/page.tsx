@@ -591,34 +591,34 @@ export default function ViajeActivoPage() {
         </div>
       </div>
 
-      {/* ─── PANEL CHAT CLIENTE ──────────────────────────────────────────── */}
+      {/* ─── PANEL CHAT CLIENTE (viaje operativo) ───────────────────────── */}
       {mostrarChat && viaje?.id && usuarioRef.current?.id && (
         <div className="absolute bottom-0 left-0 right-0 z-30 max-h-[65vh] flex flex-col bg-zinc-900 border-t border-blue-600 rounded-t-3xl">
           <div className="flex items-center justify-between px-4 pt-3 pb-2 border-b border-zinc-800 flex-shrink-0">
             <div>
-              <p className="text-blue-400 font-black text-sm">💬 Chat Cliente</p>
+              <p className="text-blue-400 font-black text-sm">💬 Chat del viaje</p>
               <p className="text-zinc-500 text-xs">VIAJE #{viaje.id}</p>
             </div>
             <button type="button" onClick={() => setMostrarChat(false)} className="text-zinc-400 font-black px-2">✕</button>
           </div>
           <div className="flex-1 overflow-y-auto">
-            <ChatAsistencia viajeId={viaje.id} usuarioId={usuarioRef.current.id} usuarioRol="chofer" usuarioNombre={usuarioRef.current.nombre || "Chofer"} />
+            <ChatAsistencia viajeId={viaje.id} usuarioId={usuarioRef.current.id} usuarioRol="chofer" usuarioNombre={usuarioRef.current.nombre || "Chofer"} tipoChat="viaje" modoInline />
           </div>
         </div>
       )}
 
-      {/* ─── PANEL SOPORTE TILA ──────────────────────────────────────────── */}
+      {/* ─── PANEL SOPORTE TILA (privado chofer ↔ admin) ────────────────── */}
       {mostrarSoporte && viaje?.id && usuarioRef.current?.id && (
         <div className="absolute bottom-0 left-0 right-0 z-30 max-h-[65vh] flex flex-col bg-zinc-900 border-t border-orange-600 rounded-t-3xl">
           <div className="flex items-center justify-between px-4 pt-3 pb-2 border-b border-zinc-800 flex-shrink-0">
             <div>
-              <p className="text-orange-400 font-black text-sm">🛟 Soporte TILA</p>
+              <p className="text-orange-400 font-black text-sm">🚛 Soporte chofer</p>
               <p className="text-zinc-500 text-xs">Problemas operativos · Incidentes · Soporte técnico</p>
             </div>
             <button type="button" onClick={() => setMostrarSoporte(false)} className="text-zinc-400 font-black px-2">✕</button>
           </div>
           <div className="flex-1 overflow-y-auto">
-            <ChatAsistencia viajeId={viaje.id} usuarioId={usuarioRef.current.id} usuarioRol="chofer" usuarioNombre={usuarioRef.current.nombre || "Chofer"} />
+            <ChatAsistencia viajeId={viaje.id} usuarioId={usuarioRef.current.id} usuarioRol="chofer" usuarioNombre={usuarioRef.current.nombre || "Chofer"} tipoChat="soporte_chofer" modoInline />
           </div>
         </div>
       )}
