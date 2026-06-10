@@ -86,6 +86,9 @@ export default function ViajeActivoPage() {
   const [mostrarChat, setMostrarChat]         = useState(false);
   const [mostrarDetalles, setMostrarDetalles] = useState(false);
   const [mostrarSoporte, setMostrarSoporte]   = useState(false);
+  // Contadores de no leídos por canal
+  const [noLeidosViaje, setNoLeidosViaje]           = useState(0);
+  const [noLeidosSoporte, setNoLeidosSoporte]       = useState(0);
   const [mostrarNavSel, setMostrarNavSel]     = useState(false);
   const [destNavPendiente, setDestNavPendiente] = useState<string | null>(null);
   const [navegadorPreferido, setNavegadorPreferido] = useState<string | null>(null);
@@ -573,9 +576,14 @@ export default function ViajeActivoPage() {
           {/* Secundarios — solo íconos */}
           <div className="flex gap-2 pt-1">
             <button type="button"
-              onClick={() => { setMostrarChat(v => !v); setMostrarSoporte(false); setMostrarDetalles(false); }}
-              className={`flex-1 py-2 rounded-xl text-lg transition ${mostrarChat ? "bg-blue-600" : "bg-zinc-800 hover:bg-zinc-700"}`}>
+              onClick={() => { setMostrarChat(v => !v); setMostrarSoporte(false); setMostrarDetalles(false); if (!mostrarChat) setNoLeidosViaje(0); }}
+              className={`relative flex-1 py-2 rounded-xl text-lg transition ${mostrarChat ? "bg-blue-600" : noLeidosViaje > 0 ? "bg-blue-900 border border-blue-500" : "bg-zinc-800 hover:bg-zinc-700"}`}>
               💬
+              {noLeidosViaje > 0 && !mostrarChat && (
+                <span className="absolute -top-1.5 -right-1.5 bg-red-500 text-white text-xs font-black rounded-full min-w-5 h-5 flex items-center justify-center px-1 animate-pulse">
+                  {noLeidosViaje}
+                </span>
+              )}
             </button>
             <button type="button"
               onClick={() => { setMostrarDetalles(v => !v); setMostrarChat(false); setMostrarSoporte(false); }}
@@ -583,9 +591,14 @@ export default function ViajeActivoPage() {
               📋
             </button>
             <button type="button"
-              onClick={() => { setMostrarSoporte(v => !v); setMostrarChat(false); setMostrarDetalles(false); }}
-              className={`flex-1 py-2 rounded-xl text-lg transition ${mostrarSoporte ? "bg-orange-600" : "bg-zinc-800 hover:bg-zinc-700"}`}>
+              onClick={() => { setMostrarSoporte(v => !v); setMostrarChat(false); setMostrarDetalles(false); if (!mostrarSoporte) setNoLeidosSoporte(0); }}
+              className={`relative flex-1 py-2 rounded-xl text-lg transition ${mostrarSoporte ? "bg-orange-600" : noLeidosSoporte > 0 ? "bg-orange-900 border border-orange-500" : "bg-zinc-800 hover:bg-zinc-700"}`}>
               🛟
+              {noLeidosSoporte > 0 && !mostrarSoporte && (
+                <span className="absolute -top-1.5 -right-1.5 bg-red-500 text-white text-xs font-black rounded-full min-w-5 h-5 flex items-center justify-center px-1 animate-pulse">
+                  {noLeidosSoporte}
+                </span>
+              )}
             </button>
           </div>
         </div>
@@ -602,7 +615,7 @@ export default function ViajeActivoPage() {
             <button type="button" onClick={() => setMostrarChat(false)} className="text-zinc-400 font-black px-2">✕</button>
           </div>
           <div className="flex-1 overflow-y-auto">
-            <ChatAsistencia viajeId={viaje.id} usuarioId={usuarioRef.current.id} usuarioRol="chofer" usuarioNombre={usuarioRef.current.nombre || "Chofer"} tipoChat="viaje" modoInline />
+            <ChatAsistencia viajeId={viaje.id} usuarioId={usuarioRef.current.id} usuarioRol="chofer" usuarioNombre={usuarioRef.current.nombre || "Chofer"} tipoChat="viaje" modoInline onNoLeidosChange={setNoLeidosViaje} />
           </div>
         </div>
       )}
@@ -618,7 +631,7 @@ export default function ViajeActivoPage() {
             <button type="button" onClick={() => setMostrarSoporte(false)} className="text-zinc-400 font-black px-2">✕</button>
           </div>
           <div className="flex-1 overflow-y-auto">
-            <ChatAsistencia viajeId={viaje.id} usuarioId={usuarioRef.current.id} usuarioRol="chofer" usuarioNombre={usuarioRef.current.nombre || "Chofer"} tipoChat="soporte_chofer" modoInline />
+            <ChatAsistencia viajeId={viaje.id} usuarioId={usuarioRef.current.id} usuarioRol="chofer" usuarioNombre={usuarioRef.current.nombre || "Chofer"} tipoChat="soporte_chofer" modoInline onNoLeidosChange={setNoLeidosSoporte} />
           </div>
         </div>
       )}

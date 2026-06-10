@@ -12,6 +12,7 @@ interface ChatAsistenciaProps {
   usuarioNombre: string;
   tipoChat?: TipoChat;
   modoInline?: boolean; // cuando true: sin botón flotante, sin fixed, contenido directo
+  onNoLeidosChange?: (cantidad: number) => void; // callback para avisar no leídos al padre
 }
 
 const colorRol = (rol: string) => {
@@ -44,6 +45,7 @@ export default function ChatAsistencia({
   usuarioNombre,
   tipoChat = "viaje",
   modoInline = false,
+  onNoLeidosChange,
 }: ChatAsistenciaProps) {
   const [abierto, setAbierto]         = useState(false);
   const [mensajes, setMensajes]       = useState<any[]>([]);
@@ -57,6 +59,7 @@ export default function ChatAsistencia({
 
   useEffect(() => { abiertoRef.current = abierto; }, [abierto]);
   useEffect(() => { mensajesRef.current = mensajes; }, [mensajes]);
+  useEffect(() => { onNoLeidosChange?.(noLeidos); }, [noLeidos]);
 
   const calcularNoLeidos = (todos: any[]) =>
     todos.filter(m => !m.leido && m.remitente_id !== usuarioId).length;
