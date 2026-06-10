@@ -713,35 +713,31 @@ export default function ViajeActivoPage() {
         </div>
       </div>
 
-      {/* ─── PANEL CHAT CLIENTE (viaje operativo) ───────────────────────── */}
+      {/* ─── PANEL CHAT CLIENTE (viaje operativo) — ventana compacta ──────── */}
       {mostrarChat && viaje?.id && usuarioRef.current?.id && (
-        <div className="absolute bottom-0 left-0 right-0 z-30 flex flex-col bg-zinc-900 border-t border-blue-600 rounded-t-3xl" style={{ height: "58vh" }}>
-          <div className="flex items-center justify-between px-4 pt-3 pb-2 border-b border-zinc-800 flex-shrink-0">
-            <div>
-              <p className="text-blue-400 font-black text-sm">💬 Chat del viaje</p>
-              <p className="text-zinc-500 text-xs">VIAJE #{viaje.id}</p>
-            </div>
-            <button type="button" onClick={() => setMostrarChat(false)} className="text-zinc-400 font-black px-2">✕</button>
+        <div
+          className="fixed z-40 bg-zinc-900 border border-blue-600 rounded-2xl shadow-2xl flex flex-col overflow-hidden"
+          style={{ bottom: 96, right: 16, left: 16, maxWidth: 360, marginLeft: "auto" }}
+        >
+          <div className="flex items-center justify-between px-3 py-2 border-b border-zinc-800 flex-shrink-0">
+            <p className="text-blue-400 font-black text-sm">💬 Chat del viaje</p>
+            <button type="button" onClick={() => setMostrarChat(false)} className="text-zinc-400 font-black text-sm">✕</button>
           </div>
-          <div className="flex-1 min-h-0">
-            <ChatAsistencia viajeId={viaje.id} usuarioId={usuarioRef.current.id} usuarioRol="chofer" usuarioNombre={usuarioRef.current.nombre || "Chofer"} tipoChat="viaje" modoInline onNoLeidosChange={setNoLeidosViaje} />
-          </div>
+          <ChatAsistencia viajeId={viaje.id} usuarioId={usuarioRef.current.id} usuarioRol="chofer" usuarioNombre={usuarioRef.current.nombre || "Chofer"} tipoChat="viaje" modoInline onNoLeidosChange={setNoLeidosViaje} />
         </div>
       )}
 
-      {/* ─── PANEL SOPORTE TILA (privado chofer ↔ admin) ────────────────── */}
+      {/* ─── PANEL SOPORTE TILA (privado chofer ↔ admin) — ventana compacta ─ */}
       {mostrarSoporte && viaje?.id && usuarioRef.current?.id && (
-        <div className="absolute bottom-0 left-0 right-0 z-30 flex flex-col bg-zinc-900 border-t border-orange-600 rounded-t-3xl" style={{ height: "58vh" }}>
-          <div className="flex items-center justify-between px-4 pt-3 pb-2 border-b border-zinc-800 flex-shrink-0">
-            <div>
-              <p className="text-orange-400 font-black text-sm">🚛 Soporte chofer</p>
-              <p className="text-zinc-500 text-xs">Problemas operativos · Incidentes · Soporte técnico</p>
-            </div>
-            <button type="button" onClick={() => setMostrarSoporte(false)} className="text-zinc-400 font-black px-2">✕</button>
+        <div
+          className="fixed z-40 bg-zinc-900 border border-orange-600 rounded-2xl shadow-2xl flex flex-col overflow-hidden"
+          style={{ bottom: 96, right: 16, left: 16, maxWidth: 360, marginLeft: "auto" }}
+        >
+          <div className="flex items-center justify-between px-3 py-2 border-b border-zinc-800 flex-shrink-0">
+            <p className="text-orange-400 font-black text-sm">🛟 Soporte TILA</p>
+            <button type="button" onClick={() => setMostrarSoporte(false)} className="text-zinc-400 font-black text-sm">✕</button>
           </div>
-          <div className="flex-1 min-h-0">
-            <ChatAsistencia viajeId={viaje.id} usuarioId={usuarioRef.current.id} usuarioRol="chofer" usuarioNombre={usuarioRef.current.nombre || "Chofer"} tipoChat="soporte_chofer" modoInline onNoLeidosChange={setNoLeidosSoporte} />
-          </div>
+          <ChatAsistencia viajeId={viaje.id} usuarioId={usuarioRef.current.id} usuarioRol="chofer" usuarioNombre={usuarioRef.current.nombre || "Chofer"} tipoChat="soporte_chofer" modoInline onNoLeidosChange={setNoLeidosSoporte} />
         </div>
       )}
 

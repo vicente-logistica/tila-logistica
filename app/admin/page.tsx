@@ -1493,16 +1493,14 @@ export default function AdminPage() {
                 );
               })}
             </div>
-            <div style={{ height: 300 }} className="flex flex-col min-h-0">
-              <ChatAsistencia
-                viajeId={chatViajeId}
-                usuarioId={usuarioActual.id}
-                usuarioRol="admin"
-                usuarioNombre={usuarioActual.nombre || "Admin"}
-                tipoChat={tipoChatAdmin}
-                modoInline
-              />
-            </div>
+            <ChatAsistencia
+              viajeId={chatViajeId}
+              usuarioId={usuarioActual.id}
+              usuarioRol="admin"
+              usuarioNombre={usuarioActual.nombre || "Admin"}
+              tipoChat={tipoChatAdmin}
+              modoInline
+            />
           </div>
         )}
       </section>
