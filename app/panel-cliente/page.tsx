@@ -896,8 +896,16 @@ export default function PanelClientePage() {
                     </div>
                   )}
 
-                  {/* Botón: pagar o ver seguimiento */}
-                  {viaje.pago_estado === "pendiente_pago" || viaje.pago_estado === "rechazado" ? (
+                  {/* Botón seguimiento — siempre visible */}
+                  <button type="button" onClick={() => setViajeSeleccionado(viaje)}
+                    className="w-full py-3.5 rounded-xl font-black text-sm bg-yellow-400 text-black hover:bg-yellow-300 active:scale-[0.98] transition">
+                    {viaje.estado === "pendiente" || !viaje.estado
+                      ? "📋 Ver publicación"
+                      : tieneGps ? "📡 Ver ubicación en vivo" : "👁️ Ver seguimiento"}
+                  </button>
+
+                  {/* Botón pagar — solo cuando corresponde */}
+                  {(viaje.pago_estado === "pendiente_pago" || viaje.pago_estado === "rechazado") && (
                     <div className="flex flex-col gap-2">
                       <button
                         type="button"
@@ -938,13 +946,6 @@ export default function PanelClientePage() {
                         <span className="text-zinc-500">Tarjeta de crédito, débito o dinero en Mercado Pago.</span>
                       </p>
                     </div>
-                  ) : (
-                    <button type="button" onClick={() => setViajeSeleccionado(viaje)}
-                      className="w-full py-3.5 rounded-xl font-black text-sm bg-yellow-400 text-black hover:bg-yellow-300 active:scale-[0.98] transition">
-                      {viaje.estado === "pendiente" || !viaje.estado
-                        ? "📋 Ver publicación"
-                        : tieneGps ? "📡 Ver ubicación en vivo" : "👁️ Ver seguimiento"}
-                    </button>
                   )}
                 </div>
               </div>
