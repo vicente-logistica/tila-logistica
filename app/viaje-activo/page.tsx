@@ -713,29 +713,23 @@ export default function ViajeActivoPage() {
         </div>
       </div>
 
-      {/* ─── PANEL CHAT CLIENTE (viaje operativo) — ventana compacta ──────── */}
+      {/* ─── CHAT VIAJE — flotante compacto sobre el mapa ───────────────── */}
       {mostrarChat && viaje?.id && usuarioRef.current?.id && (
-        <div
-          className="fixed z-40 bg-zinc-900 border border-blue-600 rounded-2xl shadow-2xl flex flex-col overflow-hidden"
-          style={{ bottom: 96, right: 16, left: 16, maxWidth: 360, marginLeft: "auto" }}
-        >
-          <div className="flex items-center justify-between px-3 py-2 border-b border-zinc-800 flex-shrink-0">
+        <div className="fixed bottom-24 right-6 z-40 w-80 max-h-[70vh] bg-zinc-900 border border-blue-600 rounded-3xl shadow-2xl flex flex-col overflow-hidden">
+          <div className="flex-shrink-0 flex items-center justify-between px-4 py-3 border-b border-zinc-800">
             <p className="text-blue-400 font-black text-sm">💬 Chat del viaje</p>
-            <button type="button" onClick={() => setMostrarChat(false)} className="text-zinc-400 font-black text-sm">✕</button>
+            <button type="button" onClick={() => setMostrarChat(false)} className="text-zinc-500 hover:text-white w-7 h-7 flex items-center justify-center">✕</button>
           </div>
           <ChatAsistencia viajeId={viaje.id} usuarioId={usuarioRef.current.id} usuarioRol="chofer" usuarioNombre={usuarioRef.current.nombre || "Chofer"} tipoChat="viaje" modoInline onNoLeidosChange={setNoLeidosViaje} />
         </div>
       )}
 
-      {/* ─── PANEL SOPORTE TILA (privado chofer ↔ admin) — ventana compacta ─ */}
+      {/* ─── SOPORTE TILA — flotante compacto sobre el mapa ─────────────── */}
       {mostrarSoporte && viaje?.id && usuarioRef.current?.id && (
-        <div
-          className="fixed z-40 bg-zinc-900 border border-orange-600 rounded-2xl shadow-2xl flex flex-col overflow-hidden"
-          style={{ bottom: 96, right: 16, left: 16, maxWidth: 360, marginLeft: "auto" }}
-        >
-          <div className="flex items-center justify-between px-3 py-2 border-b border-zinc-800 flex-shrink-0">
+        <div className="fixed bottom-24 right-6 z-40 w-80 max-h-[70vh] bg-zinc-900 border border-orange-600 rounded-3xl shadow-2xl flex flex-col overflow-hidden">
+          <div className="flex-shrink-0 flex items-center justify-between px-4 py-3 border-b border-zinc-800">
             <p className="text-orange-400 font-black text-sm">🛟 Soporte TILA</p>
-            <button type="button" onClick={() => setMostrarSoporte(false)} className="text-zinc-400 font-black text-sm">✕</button>
+            <button type="button" onClick={() => setMostrarSoporte(false)} className="text-zinc-500 hover:text-white w-7 h-7 flex items-center justify-center">✕</button>
           </div>
           <ChatAsistencia viajeId={viaje.id} usuarioId={usuarioRef.current.id} usuarioRol="chofer" usuarioNombre={usuarioRef.current.nombre || "Chofer"} tipoChat="soporte_chofer" modoInline onNoLeidosChange={setNoLeidosSoporte} />
         </div>

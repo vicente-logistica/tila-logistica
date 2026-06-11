@@ -196,13 +196,10 @@ function SeguimientoViaje({
         </div>
       </div>
 
-      {/* ── PANEL CHAT — ventana compacta centrada ─────────────────────── */}
+      {/* ── PANEL CHAT — flotante compacto ─────────────────────────────── */}
       {mostrarChat && (
-        <div
-          className="fixed z-40 bg-zinc-900 border border-blue-600 rounded-2xl shadow-2xl flex flex-col overflow-hidden"
-          style={{ bottom: 80, right: 16, left: 16, maxWidth: 360, marginLeft: "auto" }}
-        >
-          <div className="flex items-center justify-between px-3 py-2 border-b border-zinc-800 flex-shrink-0">
+        <div className="fixed bottom-24 right-6 z-40 w-80 max-h-[70vh] bg-zinc-900 border border-blue-600 rounded-3xl shadow-2xl flex flex-col overflow-hidden">
+          <div className="flex-shrink-0 flex items-center justify-between px-4 py-3 border-b border-zinc-800">
             <div className="flex gap-1.5">
               <button type="button" onClick={() => setTipoChatCliente("viaje")}
                 className={`px-2.5 py-1 rounded-lg text-xs font-black transition ${tipoChatCliente === "viaje" ? "bg-blue-600 text-white" : "bg-zinc-700 text-zinc-400"}`}>
@@ -213,7 +210,7 @@ function SeguimientoViaje({
                 🛟 Soporte
               </button>
             </div>
-            <button type="button" onClick={() => setMostrarChat(false)} className="text-zinc-400 font-black text-sm">✕</button>
+            <button type="button" onClick={() => setMostrarChat(false)} className="text-zinc-500 hover:text-white w-7 h-7 flex items-center justify-center">✕</button>
           </div>
           <ChatAsistencia
             viajeId={String(viaje.id)}
@@ -867,8 +864,8 @@ export default function PanelClientePage() {
 
                   {/* Panel chat inline */}
                   {chatListaViajeId === String(viaje.id) && usuario?.id && (
-                    <div className="rounded-2xl overflow-hidden border border-zinc-700">
-                      <div className="flex gap-2 px-3 pt-2 pb-1 bg-zinc-800 border-b border-zinc-700 flex-shrink-0">
+                    <div className="mt-1">
+                      <div className="flex gap-2 px-3 pt-2 pb-1 bg-zinc-800 rounded-t-2xl border border-b-0 border-zinc-700">
                         <button type="button"
                           onClick={() => { setTipoChatLista("viaje"); setNoLeidosPorViaje(prev => ({ ...prev, [String(viaje.id)]: { ...(prev[String(viaje.id)] ?? {}), viaje: 0 } })); }}
                           className={`px-3 py-1 rounded-xl text-xs font-black transition ${tipoChatLista === "viaje" ? "bg-blue-600 text-white" : "bg-zinc-700 text-zinc-400"}`}>
