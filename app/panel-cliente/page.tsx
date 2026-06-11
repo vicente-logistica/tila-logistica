@@ -823,6 +823,14 @@ export default function PanelClientePage() {
                   {/* Fecha */}
                   <p className="text-zinc-600 text-xs">{fmt(viaje.created_at)}{viaje.km_estimados ? ` · ${viaje.km_estimados} km` : ""}</p>
 
+                  {/* Botón seguimiento — visible si hay chofer asignado o viaje no pendiente */}
+                  {(viaje.chofer_id || (viaje.estado && viaje.estado !== "pendiente")) && (
+                    <button type="button" onClick={() => setViajeSeleccionado(viaje)}
+                      className="w-full py-3 rounded-xl font-black text-sm bg-yellow-400 text-black hover:bg-yellow-300 active:scale-[0.98] transition">
+                      {tieneGps ? "📡 Ver ubicación en vivo" : "👁️ Ver seguimiento"}
+                    </button>
+                  )}
+
                   {/* Botones de chat por viaje */}
                   {viaje.estado && !["pendiente", "pendiente_pago"].includes(viaje.estado) && usuario?.id && (
                     <div className="flex gap-2">
@@ -895,14 +903,6 @@ export default function PanelClientePage() {
                       </div>
                     </div>
                   )}
-
-                  {/* Botón seguimiento — siempre visible */}
-                  <button type="button" onClick={() => setViajeSeleccionado(viaje)}
-                    className="w-full py-3.5 rounded-xl font-black text-sm bg-yellow-400 text-black hover:bg-yellow-300 active:scale-[0.98] transition">
-                    {viaje.estado === "pendiente" || !viaje.estado
-                      ? "📋 Ver publicación"
-                      : tieneGps ? "📡 Ver ubicación en vivo" : "👁️ Ver seguimiento"}
-                  </button>
 
                   {/* Botón pagar — solo cuando corresponde */}
                   {(viaje.pago_estado === "pendiente_pago" || viaje.pago_estado === "rechazado") && (
