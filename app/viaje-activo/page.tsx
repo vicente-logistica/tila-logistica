@@ -713,25 +713,35 @@ export default function ViajeActivoPage() {
         </div>
       </div>
 
-      {/* ─── CHAT VIAJE — flotante compacto sobre el mapa ───────────────── */}
+      {/* ─── CHAT VIAJE — ventana flotante sobre el mapa ────────────────── */}
       {mostrarChat && viaje?.id && usuarioRef.current?.id && (
-        <div className="fixed bottom-24 right-6 z-40 w-80 max-h-[70vh] bg-zinc-900 border border-blue-600 rounded-3xl shadow-2xl flex flex-col overflow-hidden">
+        <div
+          className="fixed bottom-24 right-6 z-40 w-80 bg-zinc-900 border border-blue-600 rounded-3xl shadow-2xl flex flex-col overflow-hidden"
+          style={{ height: "min(420px, 70vh)" }}
+        >
           <div className="flex-shrink-0 flex items-center justify-between px-4 py-3 border-b border-zinc-800">
             <p className="text-blue-400 font-black text-sm">💬 Chat del viaje</p>
             <button type="button" onClick={() => setMostrarChat(false)} className="text-zinc-500 hover:text-white w-7 h-7 flex items-center justify-center">✕</button>
           </div>
-          <ChatAsistencia viajeId={viaje.id} usuarioId={usuarioRef.current.id} usuarioRol="chofer" usuarioNombre={usuarioRef.current.nombre || "Chofer"} tipoChat="viaje" modoInline onNoLeidosChange={setNoLeidosViaje} />
+          <div className="flex-1 min-h-0">
+            <ChatAsistencia viajeId={viaje.id} usuarioId={usuarioRef.current.id} usuarioRol="chofer" usuarioNombre={usuarioRef.current.nombre || "Chofer"} tipoChat="viaje" modoInline onNoLeidosChange={setNoLeidosViaje} />
+          </div>
         </div>
       )}
 
-      {/* ─── SOPORTE TILA — flotante compacto sobre el mapa ─────────────── */}
+      {/* ─── SOPORTE TILA — ventana flotante sobre el mapa ──────────────── */}
       {mostrarSoporte && viaje?.id && usuarioRef.current?.id && (
-        <div className="fixed bottom-24 right-6 z-40 w-80 max-h-[70vh] bg-zinc-900 border border-orange-600 rounded-3xl shadow-2xl flex flex-col overflow-hidden">
+        <div
+          className="fixed bottom-24 right-6 z-40 w-80 bg-zinc-900 border border-orange-600 rounded-3xl shadow-2xl flex flex-col overflow-hidden"
+          style={{ height: "min(420px, 70vh)" }}
+        >
           <div className="flex-shrink-0 flex items-center justify-between px-4 py-3 border-b border-zinc-800">
             <p className="text-orange-400 font-black text-sm">🛟 Soporte TILA</p>
             <button type="button" onClick={() => setMostrarSoporte(false)} className="text-zinc-500 hover:text-white w-7 h-7 flex items-center justify-center">✕</button>
           </div>
-          <ChatAsistencia viajeId={viaje.id} usuarioId={usuarioRef.current.id} usuarioRol="chofer" usuarioNombre={usuarioRef.current.nombre || "Chofer"} tipoChat="soporte_chofer" modoInline onNoLeidosChange={setNoLeidosSoporte} />
+          <div className="flex-1 min-h-0">
+            <ChatAsistencia viajeId={viaje.id} usuarioId={usuarioRef.current.id} usuarioRol="chofer" usuarioNombre={usuarioRef.current.nombre || "Chofer"} tipoChat="soporte_chofer" modoInline onNoLeidosChange={setNoLeidosSoporte} />
+          </div>
         </div>
       )}
 

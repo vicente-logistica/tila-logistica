@@ -1422,6 +1422,11 @@ export default function AdminPage() {
                     } else {
                       setChatViajeId(String(carga.id));
                       setTipoChatAdmin("viaje");
+                      // Limpiar badge del tab viaje al abrir
+                      setMensajesResumen(prev => ({
+                        ...prev,
+                        [String(carga.id)]: { ...(prev[String(carga.id)] || {}), viaje: 0 },
+                      }));
                       // Limpiar alerta al abrir chat
                       setAlertaMensajeAdmin(null);
                       if (alertaAdminTimerRef.current) clearTimeout(alertaAdminTimerRef.current);
@@ -1447,23 +1452,48 @@ export default function AdminPage() {
           </div>
         )}
 
-        {/* Panel de chat expandido */}
-        {chatViajeId && usuarioActual?.id && (
-          <div className="border border-zinc-700 rounded-2xl overflow-hidden bg-zinc-950">
-            {/* Pestañas con badge por tipo */}
-            <div className="flex gap-1 px-3 pt-2 pb-1 bg-zinc-900 border-b border-zinc-800">
+      </section>
+
+      {/* ── VENTANA FLOTANTE DE CHAT ADMIN — una sola ventana para todos los viajes ── */}
+      {chatViajeId && usuarioActual?.id && (() => {
+        const cargaActiva = activos.find(c => String(c.id) === chatViajeId);
+        const LABELS_TIPO: Record<string, string> = { viaje: "💬 Operativo", soporte_cliente: "👤 Cliente", soporte_chofer: "🚛 Chofer" };
+        const COLORES_TIPO: Record<string, string> = { viaje: "bg-blue-600", soporte_cliente: "bg-orange-600", soporte_chofer: "bg-green-700" };
+        return (
+          <div
+            className="fixed z-[9990] bg-zinc-900 border border-zinc-700 rounded-3xl shadow-2xl flex flex-col overflow-hidden
+                       right-3 bottom-3 left-3 sm:left-auto sm:right-6 sm:bottom-6 sm:w-[420px]"
+            style={{ height: "clamp(360px, 70vh, 520px)" }}
+          >
+            {/* Header: info viaje + botón cerrar */}
+            <div className="flex-shrink-0 flex items-center justify-between px-4 py-3 border-b border-zinc-800 bg-zinc-900">
+              <div className="min-w-0">
+                <p className="text-yellow-400 font-black text-sm leading-none">
+                  💬 Viaje #{chatViajeId}
+                </p>
+                {cargaActiva && (
+                  <p className="text-zinc-500 text-[11px] truncate mt-0.5">
+                    {cargaActiva.origen?.split(",")[0]} → {cargaActiva.destino?.split(",")[0]}
+                  </p>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setChatViajeId(null);
+                  setAlertaMensajeAdmin(null);
+                  if (alertaAdminTimerRef.current) clearTimeout(alertaAdminTimerRef.current);
+                }}
+                className="flex-shrink-0 ml-3 text-zinc-400 hover:text-white font-black text-sm px-3 py-1.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 transition"
+              >
+                ✕ Cerrar
+              </button>
+            </div>
+
+            {/* Tabs por tipo — cambiar tab NO cierra la ventana */}
+            <div className="flex-shrink-0 flex gap-1 px-3 py-2 border-b border-zinc-800 bg-zinc-900">
               {(["viaje", "soporte_cliente", "soporte_chofer"] as const).map((tipo) => {
-                const labels: Record<string, string> = {
-                  viaje: "💬 Operativo",
-                  soporte_cliente: "👤 Cliente",
-                  soporte_chofer: "🚛 Chofer",
-                };
-                const colores: Record<string, string> = {
-                  viaje: "bg-blue-600",
-                  soporte_cliente: "bg-orange-600",
-                  soporte_chofer: "bg-green-700",
-                };
-                const badgeTipo = mensajesResumen[chatViajeId]?.[tipo] || 0;
+                const badge = mensajesResumen[chatViajeId]?.[tipo] || 0;
                 const activa = tipoChatAdmin === tipo;
                 return (
                   <button
@@ -1471,7 +1501,6 @@ export default function AdminPage() {
                     type="button"
                     onClick={() => {
                       setTipoChatAdmin(tipo);
-                      // Limpiar badge de esta pestaña al entrar
                       setMensajesResumen(prev => ({
                         ...prev,
                         [chatViajeId]: { ...(prev[chatViajeId] || {}), [tipo]: 0 },
@@ -1479,31 +1508,44 @@ export default function AdminPage() {
                       setAlertaMensajeAdmin(null);
                       if (alertaAdminTimerRef.current) clearTimeout(alertaAdminTimerRef.current);
                     }}
-                    className={`relative flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-black transition ${
-                      activa ? `${colores[tipo]} text-white` : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700"
+                    className={`relative flex items-center gap-1 px-2.5 py-1.5 rounded-xl text-[11px] font-black transition ${
+                      activa ? `${COLORES_TIPO[tipo]} text-white` : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700"
                     }`}
                   >
-                    {labels[tipo]}
-                    {badgeTipo > 0 && !activa && (
+                    {LABELS_TIPO[tipo]}
+                    {badge > 0 && !activa && (
                       <span className="bg-red-500 text-white text-[9px] font-black rounded-full min-w-3.5 h-3.5 flex items-center justify-center px-0.5 animate-pulse">
-                        {badgeTipo}
+                        {badge}
                       </span>
                     )}
                   </button>
                 );
               })}
             </div>
-            <ChatAsistencia
-              viajeId={chatViajeId}
-              usuarioId={usuarioActual.id}
-              usuarioRol="admin"
-              usuarioNombre={usuarioActual.nombre || "Admin"}
-              tipoChat={tipoChatAdmin}
-              modoInline
-            />
+
+            {/* Área de chat — flex-1 min-h-0 para que modoInline h-full funcione */}
+            <div className="flex-1 min-h-0">
+              <ChatAsistencia
+                key={`${chatViajeId}-${tipoChatAdmin}`}
+                viajeId={chatViajeId}
+                usuarioId={usuarioActual.id}
+                usuarioRol="admin"
+                usuarioNombre={usuarioActual.nombre || "Admin"}
+                tipoChat={tipoChatAdmin}
+                modoInline
+                onNoLeidosChange={(n) => {
+                  if (n === 0) {
+                    setMensajesResumen(prev => ({
+                      ...prev,
+                      [chatViajeId]: { ...(prev[chatViajeId] || {}), [tipoChatAdmin]: 0 },
+                    }));
+                  }
+                }}
+              />
+            </div>
           </div>
-        )}
-      </section>
+        );
+      })()}
 
       {/* Reportes */}
       <ReportesAdmin cargas={cargas} todosUsuarios={todosUsuarios} />

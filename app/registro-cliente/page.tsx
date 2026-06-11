@@ -183,9 +183,12 @@ function SeguimientoViaje({
         </div>
       </div>
 
-      {/* Chat — flotante compacto */}
+      {/* Chat — ventana flotante compacta */}
       {mostrarChat && (
-        <div className="fixed bottom-24 right-6 z-40 w-80 max-h-[70vh] bg-zinc-900 border border-blue-600 rounded-3xl shadow-2xl flex flex-col overflow-hidden">
+        <div
+          className="fixed bottom-24 right-6 z-40 w-80 bg-zinc-900 border border-blue-600 rounded-3xl shadow-2xl flex flex-col overflow-hidden"
+          style={{ height: "min(420px, 70vh)" }}
+        >
           <div className="flex-shrink-0 flex items-center justify-between px-4 py-3 border-b border-zinc-800">
             <div className="flex gap-1.5">
               <button type="button" onClick={() => setTipoChatCliente("viaje")}
@@ -199,14 +202,16 @@ function SeguimientoViaje({
             </div>
             <button type="button" onClick={() => setMostrarChat(false)} className="text-zinc-500 hover:text-white w-7 h-7 flex items-center justify-center">✕</button>
           </div>
-          <ChatAsistencia
-            viajeId={String(viaje.id)}
-            usuarioId={usuarioId}
-            usuarioRol="cliente"
-            usuarioNombre={usuarioNombre}
-            tipoChat={tipoChatCliente}
-            modoInline
-          />
+          <div className="flex-1 min-h-0">
+            <ChatAsistencia
+              viajeId={String(viaje.id)}
+              usuarioId={usuarioId}
+              usuarioRol="cliente"
+              usuarioNombre={usuarioNombre}
+              tipoChat={tipoChatCliente}
+              modoInline
+            />
+          </div>
         </div>
       )}
     </div>
@@ -557,8 +562,8 @@ export default function PanelClientePage() {
 
                 {/* Panel chat inline */}
                 {chatListaViajeId === String(viaje.id) && usuario?.id && (
-                  <div className="mt-1">
-                    <div className="flex gap-2 px-3 pt-2 pb-1 bg-zinc-800 rounded-t-2xl border border-b-0 border-zinc-700">
+                  <div className="mt-1 border border-zinc-700 rounded-3xl overflow-hidden flex flex-col" style={{ height: 400 }}>
+                    <div className="flex-shrink-0 flex gap-2 px-3 pt-2 pb-2 bg-zinc-800 border-b border-zinc-700">
                       <button type="button"
                         onClick={() => { setTipoChatLista("viaje"); setNoLeidosPorViaje(prev => ({ ...prev, [String(viaje.id)]: { ...(prev[String(viaje.id)] ?? {}), viaje: 0 } })); }}
                         className={`px-3 py-1 rounded-xl text-xs font-black transition ${tipoChatLista === "viaje" ? "bg-blue-600 text-white" : "bg-zinc-700 text-zinc-400"}`}>
@@ -571,14 +576,16 @@ export default function PanelClientePage() {
                       </button>
                       <button type="button" onClick={() => setChatListaViajeId(null)} className="ml-auto text-zinc-500 font-black px-2">✕</button>
                     </div>
-                    <ChatAsistencia
-                      viajeId={String(viaje.id)}
-                      usuarioId={usuario.id}
-                      usuarioRol="cliente"
-                      usuarioNombre={usuario.nombre || "Cliente"}
-                      tipoChat={tipoChatLista}
-                      modoInline
-                    />
+                    <div className="flex-1 min-h-0">
+                      <ChatAsistencia
+                        viajeId={String(viaje.id)}
+                        usuarioId={usuario.id}
+                        usuarioRol="cliente"
+                        usuarioNombre={usuario.nombre || "Cliente"}
+                        tipoChat={tipoChatLista}
+                        modoInline
+                      />
+                    </div>
                   </div>
                 )}
 
