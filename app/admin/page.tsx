@@ -447,6 +447,13 @@ const TarjetaViaje = ({ carga, paradas, choferInfo, onAbrirCliente, onAbrirChofe
         <span className={`px-3 py-2 rounded-2xl font-black text-sm ${colorEstado(carga.estado)}`}>{carga.estado || "Pendiente"}</span>
       </div>
       <p className="text-zinc-500 text-sm">ID: {String(carga.id).slice(0, 8)} · {carga.created_at?.slice(0, 10)}</p>
+      {/* Info obligatoria del viaje */}
+      <div className="bg-zinc-800 rounded-2xl p-3 text-xs space-y-1 mt-1">
+        <p><span className="text-zinc-500">📍 Origen:</span> <span className="text-white font-semibold">{carga.origen || "No informado"}</span></p>
+        <p><span className="text-zinc-500">📍 Destino:</span> <span className="text-white font-semibold">{carga.destino || "No informado"}</span></p>
+        <p><span className="text-zinc-500">📦 Tipo de carga:</span> <span className="text-white font-semibold">{carga.tipo_carga || "No informado"}</span></p>
+        <p><span className="text-zinc-500">⚖️ Kilos:</span> <span className="text-white font-semibold">{carga.peso || "No informado"}</span></p>
+      </div>
     </div>
 
     {/* Estado operativo del chofer */}
@@ -537,13 +544,23 @@ const TarjetaViaje = ({ carga, paradas, choferInfo, onAbrirCliente, onAbrirChofe
 
     {/* ── Evidencias del viaje ─────────────────────────────────────────── */}
     <div className="mt-3 pt-3 border-t border-zinc-800">
-      <button
-        onClick={cargarEvidencias}
-        disabled={cargandoEv}
-        className="w-full bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-black py-2 rounded-xl text-sm mb-2"
-      >
-        {cargandoEv ? "Cargando..." : mostrarEvidencias ? "📋 Actualizar evidencias" : "📋 Ver evidencias del viaje"}
-      </button>
+      <div className="flex gap-2 mb-2">
+        <button
+          onClick={cargarEvidencias}
+          disabled={cargandoEv}
+          className="flex-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-black py-2 rounded-xl text-sm transition"
+        >
+          {cargandoEv ? "Cargando..." : mostrarEvidencias ? "🔄 Actualizar" : "📋 Ver evidencias"}
+        </button>
+        {mostrarEvidencias && (
+          <button
+            onClick={() => setMostrarEvidencias(false)}
+            className="bg-zinc-700 hover:bg-zinc-600 text-zinc-400 hover:text-white font-black py-2 px-4 rounded-xl text-sm transition"
+          >
+            Ocultar ▲
+          </button>
+        )}
+      </div>
 
       {mostrarEvidencias && (
         <div className="space-y-2">
@@ -888,6 +905,15 @@ const HistorialAdmin = ({ cargas, paradasPorCarga, todosUsuarios, onRecargar }: 
                     </div>
                   )}
 
+                  {/* Info obligatoria del viaje */}
+                  <div className="bg-zinc-900 border border-zinc-700 rounded-xl p-3 text-xs space-y-1">
+                    <p className="text-zinc-500 font-black mb-1">DETALLE DE CARGA</p>
+                    <p><span className="text-zinc-500">📍 Origen:</span> <span className="text-white font-semibold ml-1">{carga.origen || "No informado"}</span></p>
+                    <p><span className="text-zinc-500">📍 Destino:</span> <span className="text-white font-semibold ml-1">{carga.destino || "No informado"}</span></p>
+                    <p><span className="text-zinc-500">📦 Tipo de carga:</span> <span className="text-white font-semibold ml-1">{carga.tipo_carga || "No informado"}</span></p>
+                    <p><span className="text-zinc-500">⚖️ Kilos:</span> <span className="text-white font-semibold ml-1">{carga.peso || "No informado"}</span></p>
+                  </div>
+
                   <div className="text-xs space-y-1">
                     <p className="text-zinc-500 font-black mb-1">CRONOLOGÍA</p>
                     {carga.created_at && <p>📋 <span className="text-zinc-400">Publicado:</span> {formatearFechaAdmin(carga.created_at)}</p>}
@@ -898,13 +924,38 @@ const HistorialAdmin = ({ cargas, paradasPorCarga, todosUsuarios, onRecargar }: 
 
                   {/* ── Evidencias del viaje ──────────────────────────── */}
                   <div className="pt-3 border-t border-zinc-700">
-                    <button
-                      onClick={() => cargarEvidenciasViaje(carga.id)}
-                      disabled={cargandoEvPorViaje[String(carga.id)]}
-                      className="w-full bg-zinc-700 hover:bg-zinc-600 text-zinc-300 font-black py-2 rounded-xl text-sm mb-2 transition"
-                    >
-                      {cargandoEvPorViaje[String(carga.id)] ? "Cargando..." : "📋 Ver evidencias del viaje"}
-                    </button>
+                    <div className="flex gap-2 mb-2">
+                      <button
+                        onClick={() => {
+                          if (evidenciasPorViaje[String(carga.id)] !== undefined) {
+                            // Ya cargadas: recargar
+                            cargarEvidenciasViaje(carga.id);
+                          } else {
+                            cargarEvidenciasViaje(carga.id);
+                          }
+                        }}
+                        disabled={cargandoEvPorViaje[String(carga.id)]}
+                        className="flex-1 bg-zinc-700 hover:bg-zinc-600 text-zinc-300 font-black py-2 rounded-xl text-sm transition"
+                      >
+                        {cargandoEvPorViaje[String(carga.id)]
+                          ? "Cargando..."
+                          : evidenciasPorViaje[String(carga.id)] !== undefined
+                          ? "🔄 Actualizar"
+                          : "📋 Ver evidencias"}
+                      </button>
+                      {evidenciasPorViaje[String(carga.id)] !== undefined && (
+                        <button
+                          onClick={() => setEvidenciasPorViaje(prev => {
+                            const next = { ...prev };
+                            delete next[String(carga.id)];
+                            return next;
+                          })}
+                          className="bg-zinc-600 hover:bg-zinc-500 text-zinc-400 hover:text-white font-black py-2 px-4 rounded-xl text-sm transition"
+                        >
+                          Ocultar ▲
+                        </button>
+                      )}
+                    </div>
 
                     {evidenciasPorViaje[String(carga.id)] !== undefined && (
                       <div className="space-y-2">
