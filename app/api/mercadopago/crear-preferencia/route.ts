@@ -6,11 +6,13 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 // Cliente con service role para escribir sin restricciones de RLS.
-// Si SUPABASE_SERVICE_ROLE_KEY no está configurada, cae a anon key.
-const supabaseAdmin = createClient(
-  "https://imbtepvdscdtpxkleihi.supabase.co",
-  process.env.SUPABASE_SERVICE_ROLE_KEY ?? "sb_publishable_rpOk0QmsJhg-QsngXIE91w_bqHzl7hQ"
-);
+const _prefSupabaseUrl    = process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL;
+const _prefServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+if (!_prefSupabaseUrl)    throw new Error("Falta SUPABASE_URL en variables de entorno (crear-preferencia)");
+if (!_prefServiceRoleKey) throw new Error("Falta SUPABASE_SERVICE_ROLE_KEY en variables de entorno (crear-preferencia)");
+
+const supabaseAdmin = createClient(_prefSupabaseUrl, _prefServiceRoleKey);
 
 export async function POST(req: Request) {
   try {
@@ -37,13 +39,6 @@ export async function POST(req: Request) {
         { error: "MercadoPago no configurado en el servidor" },
         { status: 500 }
       );
-    }
-
-    // ── 3. Verificar service role key ────────────────────────────────────────
-    const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-    console.log("[MP] SUPABASE_SERVICE_ROLE_KEY presente:", !!serviceKey, "| es anon key:", serviceKey === "sb_publishable_rpOk0QmsJhg-QsngXIE91w_bqHzl7hQ");
-    if (!serviceKey || serviceKey === "REEMPLAZAR_CON_SERVICE_ROLE_KEY") {
-      console.warn("[MP] ⚠️  SUPABASE_SERVICE_ROLE_KEY no configurada — usando anon key (puede fallar por RLS)");
     }
 
     const baseUrl =

@@ -5,10 +5,13 @@ import { createClient } from "@supabase/supabase-js";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const supabaseAdmin = createClient(
-  "https://imbtepvdscdtpxkleihi.supabase.co",
-  process.env.SUPABASE_SERVICE_ROLE_KEY ?? "sb_publishable_rpOk0QmsJhg-QsngXIE91w_bqHzl7hQ"
-);
+const _webhookSupabaseUrl     = process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL;
+const _webhookServiceRoleKey  = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+if (!_webhookSupabaseUrl)    throw new Error("Falta SUPABASE_URL en variables de entorno (webhook)");
+if (!_webhookServiceRoleKey) throw new Error("Falta SUPABASE_SERVICE_ROLE_KEY en variables de entorno (webhook)");
+
+const supabaseAdmin = createClient(_webhookSupabaseUrl, _webhookServiceRoleKey);
 
 export async function POST(req: Request) {
   try {
