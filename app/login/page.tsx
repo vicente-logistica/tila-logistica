@@ -17,12 +17,7 @@ export default function LoginPage() {
     if (!email || !password) { alert("Completá email y contraseña"); return; }
     setLoading(true);
     try {
-      // ── DIAGNÓSTICO TEMPORAL — eliminar después ──────────────────────────
       const emailNorm = email.toLowerCase();
-      console.log("[LOGIN-DIAG] email normalizado:", emailNorm);
-      console.log("[LOGIN-DIAG] largo de password:", password.length);
-      console.log("[LOGIN-DIAG] NEXT_PUBLIC_SUPABASE_URL presente:", !!process.env.NEXT_PUBLIC_SUPABASE_URL);
-      // ─────────────────────────────────────────────────────────────────────
 
       const { data, error } = await supabase
         .from("usuarios")
@@ -30,12 +25,6 @@ export default function LoginPage() {
         .eq("email", emailNorm)
         .eq("password", password)
         .single();
-
-      // ── DIAGNÓSTICO TEMPORAL — eliminar después ──────────────────────────
-      console.log("[LOGIN-DIAG] data devuelta:", data ? "SI" : "NO");
-      console.log("[LOGIN-DIAG] error.message:", error?.message ?? "ninguno");
-      console.log("[LOGIN-DIAG] error.code:", error?.code ?? "ninguno");
-      // ─────────────────────────────────────────────────────────────────────
 
       if (error || !data) { alert("Email o contraseña incorrectos"); setLoading(false); return; }
 
