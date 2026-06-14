@@ -308,9 +308,9 @@ const TarjetaChofer = ({ chofer, onActualizarAprobacion }: { chofer: any; onActu
     )}
 
     {/* Documentación */}
-    <button onClick={cargarDocs} disabled={cargandoDocs}
+    <button onClick={mostrarDocs ? () => setMostrarDocs(false) : cargarDocs} disabled={cargandoDocs}
       className="w-full bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-black py-2 rounded-xl text-sm mb-3">
-      {cargandoDocs ? "Cargando..." : mostrarDocs ? "🗂️ Actualizar docs" : "🗂️ Ver documentación"}
+      {cargandoDocs ? "Cargando..." : mostrarDocs ? "Ocultar docs ▲" : "🗂️ Ver docs"}
     </button>
 
     {mostrarDocs && (
