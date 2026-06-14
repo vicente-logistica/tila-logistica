@@ -1027,7 +1027,11 @@ const HistorialAdmin = ({ cargas, paradasPorCarga, todosUsuarios, onRecargar }: 
                         }
                         await supabase.from("mensajes_viaje").delete().eq("viaje_id", carga.id);
                         await supabase.from("paradas_viaje").delete().eq("carga_id", carga.id);
-                        await supabase.from("billetera_chofer").delete().eq("viaje_id", String(carga.id));
+                        await fetch("/api/admin/billetera", {
+                          method: "DELETE",
+                          headers: { "x-user-id": adminObj.id, "Content-Type": "application/json" },
+                          body: JSON.stringify({ viaje_id: String(carga.id) }),
+                        });
                         const { error } = await supabase.from("cargas").delete().eq("id", carga.id);
                         if (error) { alert("Error al eliminar: " + error.message); return; }
                         await onRecargar();
