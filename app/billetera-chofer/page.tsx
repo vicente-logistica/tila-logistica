@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { supabase } from "../lib/supabase";
 import { useProtegerRuta } from "../hooks/useProtegerRuta";
 
 export default function BilleteraChoferPage() {
@@ -28,24 +27,24 @@ export default function BilleteraChoferPage() {
         return;
       }
 
-      const { data, error } = await supabase
-        .from("billetera_chofer")
-        .select("*")
-        .eq("chofer_id", usuario.id)
-        .order("created_at", { ascending: false });
+      const res = await fetch("/api/chofer/billetera", {
+        headers: { "x-user-id": usuario.id },
+      });
 
-      if (error) {
-        console.log(error);
+      if (!res.ok) {
+        console.log("[billetera] error HTTP:", res.status);
         alert("Error cargando billetera");
         return;
       }
 
+      const { data } = await res.json();
+
       setMovimientos(data || []);
 
       const total =
-        data?.reduce((acc, item) => {
+        (data || []).reduce((acc: number, item: any) => {
           return acc + Number(item.monto || 0);
-        }, 0) || 0;
+        }, 0);
 
       setSaldo(total);
     } catch (error) {
