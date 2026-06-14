@@ -607,9 +607,13 @@ const ReportesAdmin = ({ cargas, todosUsuarios }: { cargas: any[]; todosUsuarios
   const [billetera, setBilletera] = useState<any[]>([]);
 
   useEffect(() => {
-    supabase.from("billetera_chofer").select("*").then(({ data }) => {
-      if (data) setBilletera(data);
-    });
+    const usuarioGuardado = localStorage.getItem("usuario");
+    if (!usuarioGuardado) return;
+    const { id: userId } = JSON.parse(usuarioGuardado);
+    fetch("/api/admin/billetera", { headers: { "x-user-id": userId } })
+      .then(res => res.json())
+      .then(({ data }) => { if (data) setBilletera(data); })
+      .catch(err => console.error("[admin] error cargando billetera:", err));
   }, []);
 
   const filtrarPorFecha = (items: any[], campo: string) => {
