@@ -370,11 +370,25 @@ export default function ViajeActivoPage() {
   };
 
   const acreditarBilletera = async (data: any) => {
-    const choferId = data?.chofer_id, viajeId = data?.id, monto = Number(data?.pago_chofer || 0);
-    if (!choferId || !esUuidValido(choferId) || !viajeId || !monto) return;
-    const { data: existe } = await supabase.from("billetera_chofer").select("id").eq("viaje_id", String(viajeId)).maybeSingle();
-    if (existe) return;
-    await supabase.from("billetera_chofer").insert([{ chofer_id: choferId, viaje_id: String(viajeId), monto }]);
+    const viajeId = data?.id;
+    if (!viajeId) return;
+    const usuarioGuardado = localStorage.getItem("usuario");
+    if (!usuarioGuardado) return;
+    const { id: userId } = JSON.parse(usuarioGuardado);
+    try {
+      const res = await fetch("/api/chofer/billetera/acreditar", {
+        method: "POST",
+        headers: { "x-user-id": userId, "Content-Type": "application/json" },
+        body: JSON.stringify({ viaje_id: viajeId }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        console.error("[acreditarBilletera] error API:", res.status, err);
+      }
+    } catch (err) {
+      console.error("[acreditarBilletera] error de red:", err);
+    }
+    // Los errores NO bloquean el cierre del viaje ni el redirect
   };
 
   // ─── Navegación externa ───────────────────────────────────────────────────
