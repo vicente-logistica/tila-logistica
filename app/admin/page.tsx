@@ -415,10 +415,10 @@ const LABELS_EVENTO: Record<string, string> = {
   viaje_finalizado:     "🏆 Viaje finalizado",
 };
 
-const TarjetaViaje = ({ carga, paradas, choferInfo, onAbrirCliente, onAbrirChofer, onAsignarChofer, onEliminarViaje, onActualizarEstado }: {
+const TarjetaViaje = ({ carga, paradas, choferInfo, onAbrirCliente, onAbrirChofer, onEliminarViaje, onActualizarEstado }: {
   carga: any; paradas: any[]; choferInfo?: any;
   onAbrirCliente: (id: string) => void; onAbrirChofer: (id: string) => void;
-  onAsignarChofer: (id: string) => void; onEliminarViaje: (id: string) => void;
+  onEliminarViaje: (id: string) => void;
   onActualizarEstado: (id: string, estado: string) => void;
 }) => {
   const [evidencias, setEvidencias]         = useState<any[]>([]);
@@ -530,8 +530,7 @@ const TarjetaViaje = ({ carga, paradas, choferInfo, onAbrirCliente, onAbrirChofe
     <div className="grid grid-cols-2 gap-2">
       <button onClick={() => onAbrirCliente(carga.id)} className="bg-yellow-400 text-black font-black py-3 rounded-2xl">Cliente</button>
       <button onClick={() => onAbrirChofer(carga.id)} className="bg-green-600 text-white font-black py-3 rounded-2xl">Chofer</button>
-      <button onClick={() => onAsignarChofer(carga.id)} className="bg-blue-600 text-white font-black py-3 rounded-2xl">Asignar</button>
-      <button onClick={() => onEliminarViaje(carga.id)} className="bg-red-900 text-white font-black py-3 rounded-2xl">Eliminar</button>
+      <button onClick={() => onEliminarViaje(carga.id)} className="bg-red-900 text-white font-black py-3 rounded-2xl col-span-2">Eliminar</button>
     </div>
     <div className="grid grid-cols-2 gap-2 mt-3">
       {ESTADOS_VIAJE.map((estado) => (
@@ -1306,12 +1305,6 @@ export default function AdminPage() {
     await cargarViajes();
   };
 
-  const asignarChofer = async (id: string) => {
-    const { error } = await supabase.from("cargas").update({ estado: "Chofer asignado", chofer_id: "chofer_demo", tracking: true }).eq("id", id);
-    if (error) { alert("Error: " + error.message); return; }
-    await cargarViajes();
-  };
-
   const eliminarViaje = async (id: string) => {
     const ok = confirm("¿Eliminar este viaje?");
     if (!ok) return;
@@ -1614,21 +1607,21 @@ export default function AdminPage() {
           <h2 className="text-3xl font-black text-yellow-400 mb-4">Pendientes</h2>
           <div className="grid gap-4">
             {pendientes.length === 0 ? <p className="text-zinc-500">Sin pendientes.</p> :
-              pendientes.map((carga) => <TarjetaViaje key={carga.id} carga={carga} paradas={paradasPorCarga[String(carga.id)] || []} choferInfo={choferInfoPorCarga[String(carga.id)]} onAbrirCliente={abrirCliente} onAbrirChofer={abrirChofer} onAsignarChofer={asignarChofer} onEliminarViaje={eliminarViaje} onActualizarEstado={actualizarEstado} />)}
+              pendientes.map((carga) => <TarjetaViaje key={carga.id} carga={carga} paradas={paradasPorCarga[String(carga.id)] || []} choferInfo={choferInfoPorCarga[String(carga.id)]} onAbrirCliente={abrirCliente} onAbrirChofer={abrirChofer} onEliminarViaje={eliminarViaje} onActualizarEstado={actualizarEstado} />)}
           </div>
         </div>
         <div>
           <h2 className="text-3xl font-black text-green-400 mb-4">Activos</h2>
           <div className="grid gap-4">
             {activos.length === 0 ? <p className="text-zinc-500">Sin activos.</p> :
-              activos.map((carga) => <TarjetaViaje key={carga.id} carga={carga} paradas={paradasPorCarga[String(carga.id)] || []} choferInfo={choferInfoPorCarga[String(carga.id)]} onAbrirCliente={abrirCliente} onAbrirChofer={abrirChofer} onAsignarChofer={asignarChofer} onEliminarViaje={eliminarViaje} onActualizarEstado={actualizarEstado} />)}
+              activos.map((carga) => <TarjetaViaje key={carga.id} carga={carga} paradas={paradasPorCarga[String(carga.id)] || []} choferInfo={choferInfoPorCarga[String(carga.id)]} onAbrirCliente={abrirCliente} onAbrirChofer={abrirChofer} onEliminarViaje={eliminarViaje} onActualizarEstado={actualizarEstado} />)}
           </div>
         </div>
         <div>
           <h2 className="text-3xl font-black text-red-400 mb-4">Finalizados</h2>
           <div className="grid gap-4">
             {finalizados.length === 0 ? <p className="text-zinc-500">Sin finalizados.</p> :
-              finalizados.map((carga) => <TarjetaViaje key={carga.id} carga={carga} paradas={paradasPorCarga[String(carga.id)] || []} choferInfo={choferInfoPorCarga[String(carga.id)]} onAbrirCliente={abrirCliente} onAbrirChofer={abrirChofer} onAsignarChofer={asignarChofer} onEliminarViaje={eliminarViaje} onActualizarEstado={actualizarEstado} />)}
+              finalizados.map((carga) => <TarjetaViaje key={carga.id} carga={carga} paradas={paradasPorCarga[String(carga.id)] || []} choferInfo={choferInfoPorCarga[String(carga.id)]} onAbrirCliente={abrirCliente} onAbrirChofer={abrirChofer} onEliminarViaje={eliminarViaje} onActualizarEstado={actualizarEstado} />)}
           </div>
         </div>
       </section>
