@@ -170,8 +170,9 @@ export function useChatRealtime({
         console.log("CHAT SYNC status", status);
       });
 
-    // Polling de respaldo (8 s) sin disparar notificaciones extra
-    const intervalo = setInterval(() => cargarMensajesRef.current(), 8000);
+    // Polling de respaldo cada 3 s con detección de mensajes nuevos
+    // (cubre el caso en que Realtime no dispare por RLS sin SELECT policy)
+    const intervalo = setInterval(() => cargarMensajesRef.current(true), 3000);
 
     return () => {
       supabase.removeChannel(canal);

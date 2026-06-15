@@ -416,7 +416,11 @@ export default function PanelClientePage() {
         console.log("CHAT ALERT realtime status", status);
       });
 
+    // Polling fallback por si Realtime no dispara con RLS sin SELECT policy
+    const polling = setInterval(() => actualizarNoLeidos(), 4000);
+
     return () => {
+      clearInterval(polling);
       supabase.removeChannel(canalMensajes);
       if (alertaTimerRef.current) clearTimeout(alertaTimerRef.current);
     };
