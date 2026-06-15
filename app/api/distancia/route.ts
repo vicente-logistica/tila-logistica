@@ -17,7 +17,13 @@ export async function GET(req: Request) {
       );
     }
 
-    const key = process.env.GOOGLE_MAPS_API_KEY;
+    const key = process.env.GOOGLE_SERVER_API_KEY;
+    if (!key) {
+      return NextResponse.json(
+        { error: "Falta GOOGLE_SERVER_API_KEY en variables de entorno" },
+        { status: 500 }
+      );
+    }
 
     const url = `https://maps.googleapis.com/maps/api/directions/json?origin=${encodeURIComponent(
       `${origen}, Argentina`
