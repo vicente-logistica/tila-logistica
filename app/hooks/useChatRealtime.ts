@@ -85,18 +85,25 @@ export function useChatRealtime({
   }, [viajeId, usuarioId, tipoChat]);
 
   const cargarMensajes = useCallback(async () => {
-    const { data } = await supabase
-      .from("mensajes_viaje")
-      .select("*")
-      .eq("viaje_id", Number(viajeId))
-      .eq("tipo_chat", tipoChat)
-      .order("created_at", { ascending: true });
-    if (!data) return;
-    data.forEach(m => idsVistos.current.add(m.id));
-    setMensajes(data);
-    const nl = data.filter(m => !m.leido && m.remitente_id !== usuarioId).length;
-    setNoLeidos(nl);
-    onNoLeidosChange?.(nl);
+    try {
+      const res = await fetch(
+        `/api/chat/mensajes?viaje_id=${viajeId}&tipo_chat=${tipoChat}`,
+        { headers: { "x-user-id": usuarioId } },
+      );
+      if (!res.ok) {
+        console.error("[cargarMensajes] error API:", res.status);
+        return;
+      }
+      const { data } = await res.json();
+      if (!data) return;
+      data.forEach((m: any) => idsVistos.current.add(m.id));
+      setMensajes(data);
+      const nl = data.filter((m: any) => !m.leido && m.remitente_id !== usuarioId).length;
+      setNoLeidos(nl);
+      onNoLeidosChange?.(nl);
+    } catch (err) {
+      console.error("[cargarMensajes] error de red:", err);
+    }
   }, [viajeId, tipoChat, usuarioId, onNoLeidosChange]);
 
   useEffect(() => {
