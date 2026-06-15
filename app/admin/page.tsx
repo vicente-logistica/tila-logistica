@@ -1084,19 +1084,22 @@ export default function AdminPage() {
   const usuarioActual = typeof window !== "undefined" ? JSON.parse(localStorage.getItem("usuario") || "{}") : {};
 
   const cargarResumenMensajes = useCallback(async () => {
-    const { data } = await supabase
-      .from("mensajes_viaje")
-      .select("viaje_id, leido, remitente_id, tipo_chat")
-      .eq("leido", false);
-    if (data) {
-      const resumen: Record<string, Record<string, number>> = {};
-      data.forEach((m: any) => {
-        const vkey = String(m.viaje_id);
-        if (!resumen[vkey]) resumen[vkey] = { viaje: 0, soporte_cliente: 0, soporte_chofer: 0 };
-        const tipo = m.tipo_chat as string;
-        if (tipo in resumen[vkey]) resumen[vkey][tipo]++;
+    const uid = typeof window !== "undefined"
+      ? (JSON.parse(localStorage.getItem("usuario") || "{}")).id
+      : null;
+    if (!uid) return;
+    try {
+      const res = await fetch("/api/chat/resumen-admin", {
+        headers: { "x-user-id": uid },
       });
-      setMensajesResumen(resumen);
+      if (!res.ok) {
+        console.error("[cargarResumenMensajes] error API:", res.status);
+        return;
+      }
+      const { resumen } = await res.json();
+      if (resumen) setMensajesResumen(resumen);
+    } catch (err) {
+      console.error("[cargarResumenMensajes] error de red:", err);
     }
   }, []);
 
