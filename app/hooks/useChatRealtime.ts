@@ -49,13 +49,15 @@ export function useChatRealtime({
   const idsVistos               = useRef<Set<string | number>>(new Set());
 
   const marcarLeidos = useCallback(async () => {
-    await supabase
-      .from("mensajes_viaje")
-      .update({ leido: true })
-      .eq("viaje_id", Number(viajeId))
-      .eq("tipo_chat", tipoChat)
-      .neq("remitente_id", usuarioId)
-      .eq("leido", false);
+    try {
+      await fetch("/api/chat/marcar-leidos", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json", "x-user-id": usuarioId },
+        body:    JSON.stringify({ viaje_id: viajeId, tipo_chat: tipoChat }),
+      });
+    } catch (err) {
+      console.error("[marcarLeidos] error de red:", err);
+    }
     setNoLeidos(0);
     onNoLeidosChange?.(0);
   }, [viajeId, tipoChat, usuarioId, onNoLeidosChange]);
@@ -132,13 +134,12 @@ export function useChatRealtime({
           if (nuevo.remitente_id !== usuarioId) {
             if (chatVisibleRef?.current) {
               // Chat abierto — auto-marcar leído, sin badge ni alerta
-              supabase
-                .from("mensajes_viaje")
-                .update({ leido: true })
-                .eq("viaje_id", Number(viajeId))
-                .eq("tipo_chat", tipoChat)
-                .neq("remitente_id", usuarioId)
-                .eq("leido", false)
+              fetch("/api/chat/marcar-leidos", {
+                method:  "POST",
+                headers: { "Content-Type": "application/json", "x-user-id": usuarioId },
+                body:    JSON.stringify({ viaje_id: viajeId, tipo_chat: tipoChat }),
+              })
+                .catch(err => console.error("[marcarLeidos-realtime] error:", err))
                 .then(() => { setNoLeidos(0); onNoLeidosChange?.(0); });
             } else {
               // Chat cerrado — badge + alerta + sonido
