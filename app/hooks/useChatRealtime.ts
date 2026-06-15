@@ -65,17 +65,23 @@ export function useChatRealtime({
     setAlerta(null);
   }, []);
 
-  const enviarMensaje = useCallback(async (texto: string, rol: string, nombre: string) => {
-    const { error } = await supabase.from("mensajes_viaje").insert([{
-      viaje_id:         Number(viajeId),
-      remitente_id:     usuarioId,
-      remitente_rol:    rol,
-      remitente_nombre: nombre,
-      mensaje:          texto.trim(),
-      leido:            false,
-      tipo_chat:        tipoChat,
-    }]);
-    return error;
+  const enviarMensaje = useCallback(async (texto: string, _rol: string, _nombre: string) => {
+    try {
+      const res = await fetch("/api/chat/mensaje", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json", "x-user-id": usuarioId },
+        body:    JSON.stringify({ viaje_id: viajeId, tipo_chat: tipoChat, mensaje: texto.trim() }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        console.error("[enviarMensaje] error API:", res.status, data);
+        return { message: data?.error ?? "Error al enviar mensaje" };
+      }
+      return null;
+    } catch (err: any) {
+      console.error("[enviarMensaje] error de red:", err);
+      return { message: err?.message ?? "Error de red" };
+    }
   }, [viajeId, usuarioId, tipoChat]);
 
   const cargarMensajes = useCallback(async () => {
