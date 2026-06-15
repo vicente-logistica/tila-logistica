@@ -527,11 +527,12 @@ export default function PanelClientePage() {
       const nuevoConteo: Record<string, Record<string, number>> = {};
       await Promise.all(viajesActivos.map(async (v) => {
         const vid = String(v.id);
-        const [{ data: dViaje }, { data: dSoporte }] = await Promise.all([
-          supabase.from("mensajes_viaje").select("id").eq("viaje_id", v.id).eq("tipo_chat", "viaje").eq("leido", false).neq("remitente_id", uid),
-          supabase.from("mensajes_viaje").select("id").eq("viaje_id", v.id).eq("tipo_chat", "soporte_cliente").eq("leido", false).neq("remitente_id", uid),
+        const headers = { "x-user-id": uid };
+        const [resViaje, resSoporte] = await Promise.all([
+          fetch(`/api/chat/no-leidos?viaje_id=${v.id}&tipo_chat=viaje`,           { headers }).then(r => r.ok ? r.json() : { count: 0 }),
+          fetch(`/api/chat/no-leidos?viaje_id=${v.id}&tipo_chat=soporte_cliente`, { headers }).then(r => r.ok ? r.json() : { count: 0 }),
         ]);
-        nuevoConteo[vid] = { viaje: dViaje?.length ?? 0, soporte_cliente: dSoporte?.length ?? 0 };
+        nuevoConteo[vid] = { viaje: resViaje.count ?? 0, soporte_cliente: resSoporte.count ?? 0 };
       }));
       setNoLeidosPorViaje(nuevoConteo);
     };

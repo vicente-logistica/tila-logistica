@@ -255,12 +255,13 @@ export default function ViajeActivoPage() {
     const cargarNoLeidos = async () => {
       const uid = usuarioRef.current?.id;
       if (!uid) return;
-      const [{ data: dViaje }, { data: dSoporte }] = await Promise.all([
-        supabase.from("mensajes_viaje").select("id").eq("viaje_id", Number(viajeId)).eq("tipo_chat", "viaje").eq("leido", false).neq("remitente_id", uid),
-        supabase.from("mensajes_viaje").select("id").eq("viaje_id", Number(viajeId)).eq("tipo_chat", "soporte_chofer").eq("leido", false).neq("remitente_id", uid),
+      const headers = { "x-user-id": uid };
+      const [resViaje, resSoporte] = await Promise.all([
+        fetch(`/api/chat/no-leidos?viaje_id=${viajeId}&tipo_chat=viaje`,          { headers }).then(r => r.ok ? r.json() : { count: 0 }),
+        fetch(`/api/chat/no-leidos?viaje_id=${viajeId}&tipo_chat=soporte_chofer`, { headers }).then(r => r.ok ? r.json() : { count: 0 }),
       ]);
-      setNoLeidosViaje(dViaje?.length ?? 0);
-      setNoLeidosSoporte(dSoporte?.length ?? 0);
+      setNoLeidosViaje(resViaje.count   ?? 0);
+      setNoLeidosSoporte(resSoporte.count ?? 0);
     };
     // Pequeño delay para que usuarioRef esté cargado
     const t = setTimeout(cargarNoLeidos, 500);
