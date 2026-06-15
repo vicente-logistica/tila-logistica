@@ -91,6 +91,8 @@ export default function ViajeActivoPage() {
   // Contadores de no leídos por canal
   const [noLeidosViaje, setNoLeidosViaje]           = useState(0);
   const [noLeidosSoporte, setNoLeidosSoporte]       = useState(0);
+  const noLeidosViajeRef    = useRef(0);
+  const noLeidosSoporteRef  = useRef(0);
   // Alerta de mensaje nuevo
   const [alertaMensaje, setAlertaMensaje]           = useState<string | null>(null);
   const alertaTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -137,6 +139,8 @@ export default function ViajeActivoPage() {
   useEffect(() => { silenciarSoporteChoferRef.current = silenciarSoporteChofer; }, [silenciarSoporteChofer]);
   useEffect(() => { mostrarChatRef.current    = mostrarChat; },    [mostrarChat]);
   useEffect(() => { mostrarSoporteRef.current = mostrarSoporte; }, [mostrarSoporte]);
+  useEffect(() => { noLeidosViajeRef.current   = noLeidosViaje; },   [noLeidosViaje]);
+  useEffect(() => { noLeidosSoporteRef.current = noLeidosSoporte; }, [noLeidosSoporte]);
 
   useEffect(() => {
     finalizadoAudioRef.current = new Audio("/sounds/alerta-viaje.mp3?v=final");
@@ -273,22 +277,36 @@ export default function ViajeActivoPage() {
       if (!silenciado) playChatSound();
     };
 
+    // Con RLS ON payload.new llega vacío → usamos el evento como trigger y pedimos la API
+    const actualizarNoLeidos = async () => {
+      const uid = usuarioRef.current?.id;
+      if (!uid) return;
+      const headers = { "x-user-id": uid };
+      const [resViaje, resSoporte] = await Promise.all([
+        fetch(`/api/chat/no-leidos?viaje_id=${viajeId}&tipo_chat=viaje`,          { headers }).then(r => r.ok ? r.json() : { count: 0 }),
+        fetch(`/api/chat/no-leidos?viaje_id=${viajeId}&tipo_chat=soporte_chofer`, { headers }).then(r => r.ok ? r.json() : { count: 0 }),
+      ]);
+      const nuevoViaje   = resViaje.count   ?? 0;
+      const nuevoSoporte = resSoporte.count ?? 0;
+
+      if (nuevoViaje > noLeidosViajeRef.current && !mostrarChatRef.current) {
+        dispararAlerta("📦 Cliente · Nuevo mensaje", silenciarChatViajeRef.current);
+      }
+      if (nuevoSoporte > noLeidosSoporteRef.current && !mostrarSoporteRef.current) {
+        dispararAlerta("🛟 Soporte TILA · Nuevo mensaje", silenciarSoporteChoferRef.current);
+      }
+
+      setNoLeidosViaje(nuevoViaje);
+      setNoLeidosSoporte(nuevoSoporte);
+    };
+
     const canalMensajes = supabase
       .channel(`viaje-activo-chat-${viajeId}`)
       .on("postgres_changes",
         { event: "INSERT", schema: "public", table: "mensajes_viaje", filter: `viaje_id=eq.${viajeId}` },
-        (payload) => {
-          console.log("CHAT ALERT payload", payload.new);
-          const msg = payload.new as any;
-          if (!msg) return;
-          if (msg.remitente_id === usuarioRef.current?.id) return;
-          if (msg.tipo_chat === "viaje" && !mostrarChatRef.current) {
-            setNoLeidosViaje(prev => prev + 1);
-            dispararAlerta("📦 Cliente · Nuevo mensaje", silenciarChatViajeRef.current);
-          } else if (msg.tipo_chat === "soporte_chofer" && !mostrarSoporteRef.current) {
-            setNoLeidosSoporte(prev => prev + 1);
-            dispararAlerta("🛟 Soporte TILA · Nuevo mensaje", silenciarSoporteChoferRef.current);
-          }
+        (_payload) => {
+          console.log("CHAT ALERT trigger (RLS-safe)");
+          actualizarNoLeidos();
         })
       .subscribe((status) => {
         console.log("CHAT ALERT realtime status", status);

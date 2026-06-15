@@ -68,8 +68,8 @@ export async function GET(req: Request) {
 
   // ── 7. Validar permiso según tipo_chat ────────────────────────────────────────
   const esAdmin   = usuario.rol === "admin";
-  const esCliente = usuario.id  === carga.cliente_id;
-  const esChofer  = usuario.id  === carga.chofer_id;
+  const esCliente = String(usuario.id) === String(carga.cliente_id);
+  const esChofer  = String(usuario.id) === String(carga.chofer_id);
 
   let permitido = false;
 
@@ -95,7 +95,7 @@ export async function GET(req: Request) {
     .eq("viaje_id", Number(viaje_id))
     .eq("tipo_chat", tipoValidado)
     .eq("leido", false)
-    .neq("remitente_id", userId);
+    .neq("remitente_id", String(userId));
 
   if (selectError) {
     console.error("[chat/no-leidos] error contando:", selectError.message);

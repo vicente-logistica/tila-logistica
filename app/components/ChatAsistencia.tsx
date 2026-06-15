@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useChatRealtime } from "../hooks/useChatRealtime";
+import ChatToast from "./ChatToast";
 
 export type TipoChat = "viaje" | "soporte_cliente" | "soporte_chofer";
 
@@ -89,7 +90,7 @@ export default function ChatAsistencia({
   }, []);
 
   // ── Hook de datos ─────────────────────────────────────────────────────────
-  const { mensajes, noLeidos, setNoLeidos, marcarLeidos, enviarMensaje } =
+  const { mensajes, noLeidos, setNoLeidos, alerta, resetAlerta, marcarLeidos, enviarMensaje } =
     useChatRealtime({
       viajeId,
       usuarioId,
@@ -224,8 +225,13 @@ export default function ChatAsistencia({
   // ──────────────────────────────────────────────────────────────────────────
   return (
     <>
+      {/* Toast de notificación cuando llega mensaje con chat cerrado */}
+      {!abierto && alerta && (
+        <ChatToast texto={alerta} />
+      )}
+
       <button
-        onClick={() => { setAbierto(v => !v); if (!abierto) setNoLeidos(0); }}
+        onClick={() => { setAbierto(v => !v); if (!abierto) { setNoLeidos(0); resetAlerta(); } }}
         className={`fixed bottom-6 right-6 z-50 rounded-full w-14 h-14 flex items-center justify-center shadow-2xl transition-transform active:scale-95 ${
           noLeidos > 0 && !abierto ? "bg-red-500" : "bg-yellow-400 hover:bg-yellow-500"
         } text-black`}

@@ -355,7 +355,8 @@ export default function PanelClientePage() {
   const silenciarChatViajeRef     = useRef(false);
   const silenciarSoporteClienteRef = useRef(false);
   // IDs de viajes activos en ref para callbacks (evita stale + evita re-subscribe)
-  const viajesActivosIdsRef = useRef<Set<string>>(new Set());
+  const viajesActivosIdsRef    = useRef<Set<string>>(new Set());
+  const noLeidosPorViajeRef    = useRef<Record<string, Record<string, number>>>({});
 
   // Leer ?pago= de la URL cuando MP redirige de vuelta (sin useSearchParams para evitar Suspense)
   useEffect(() => {
@@ -539,37 +540,60 @@ export default function PanelClientePage() {
     cargarTodosNoLeidos();
   }, [viajesActivos]);
 
+  // Mantener ref sincronizado para Realtime sin stale closure
+  useEffect(() => {
+    noLeidosPorViajeRef.current = noLeidosPorViaje;
+  }, [noLeidosPorViaje]);
+
   // ── Listener externo de mensajes (siempre activo, sin stale closure) ──────
   useEffect(() => {
     if (!usuario?.id) return;
     const uid = usuario.id;
 
+    // Con RLS ON payload.new llega vacío → usamos el evento como trigger y pedimos la API
+    const actualizarNoLeidos = async () => {
+      const ids = Array.from(viajesActivosIdsRef.current);
+      if (ids.length === 0) return;
+      const headers = { "x-user-id": uid };
+      const nuevoConteo: Record<string, Record<string, number>> = {};
+      await Promise.all(ids.map(async (vid) => {
+        const [resViaje, resSoporte] = await Promise.all([
+          fetch(`/api/chat/no-leidos?viaje_id=${vid}&tipo_chat=viaje`,           { headers }).then(r => r.ok ? r.json() : { count: 0 }),
+          fetch(`/api/chat/no-leidos?viaje_id=${vid}&tipo_chat=soporte_cliente`, { headers }).then(r => r.ok ? r.json() : { count: 0 }),
+        ]);
+        nuevoConteo[vid] = { viaje: resViaje.count ?? 0, soporte_cliente: resSoporte.count ?? 0 };
+      }));
+
+      // Comparar con ref para detectar mensajes nuevos y disparar alerta/sonido
+      for (const vid of ids) {
+        const prevViaje   = noLeidosPorViajeRef.current[vid]?.viaje          ?? 0;
+        const prevSoporte = noLeidosPorViajeRef.current[vid]?.soporte_cliente ?? 0;
+        const nuevoViaje   = nuevoConteo[vid]?.viaje          ?? 0;
+        const nuevoSoporte = nuevoConteo[vid]?.soporte_cliente ?? 0;
+
+        if (nuevoViaje > prevViaje && !(chatListaViajeIdRef.current === vid && tipoChatListaRef.current === "viaje")) {
+          if (alertaTimerRef.current) clearTimeout(alertaTimerRef.current);
+          setAlertaMensaje("🚛 Chofer · Nuevo mensaje");
+          alertaTimerRef.current = setTimeout(() => setAlertaMensaje(null), 4000);
+          if (audioDesbloquedoRef.current && !silenciarChatViajeRef.current) playChatSound();
+        }
+        if (nuevoSoporte > prevSoporte && !(chatListaViajeIdRef.current === vid && tipoChatListaRef.current === "soporte_cliente")) {
+          if (alertaTimerRef.current) clearTimeout(alertaTimerRef.current);
+          setAlertaMensaje("🛟 Soporte TILA · Nuevo mensaje");
+          alertaTimerRef.current = setTimeout(() => setAlertaMensaje(null), 4000);
+          if (audioDesbloquedoRef.current && !silenciarSoporteClienteRef.current) playChatSound();
+        }
+      }
+
+      setNoLeidosPorViaje(nuevoConteo);
+    };
+
     const canalMensajes = supabase
       .channel(`cliente-mensajes-${uid}`)
       .on("postgres_changes", { event: "INSERT", schema: "public", table: "mensajes_viaje" },
-        (payload) => {
-          console.log("CHAT ALERT payload", payload.new);
-          const msg = payload.new as any;
-          if (!msg || msg.remitente_id === uid) return;
-          const vid = String(msg.viaje_id);
-          // Usa ref para no tener stale closure sobre viajesActivos
-          if (!viajesActivosIdsRef.current.has(vid)) return;
-          const tipo = msg.tipo_chat as string;
-          if (tipo !== "viaje" && tipo !== "soporte_cliente") return;
-          // Si el chat de ese viaje/tipo ya está abierto, no incrementar (usa refs)
-          if (chatListaViajeIdRef.current === vid && tipoChatListaRef.current === tipo) return;
-          setNoLeidosPorViaje(prev => ({
-            ...prev,
-            [vid]: { ...(prev[vid] ?? {}), [tipo]: ((prev[vid]?.[tipo] ?? 0) + 1) },
-          }));
-          // Alerta visual
-          const textoAlerta = tipo === "viaje" ? "🚛 Chofer · Nuevo mensaje" : "🛟 Soporte TILA · Nuevo mensaje";
-          if (alertaTimerRef.current) clearTimeout(alertaTimerRef.current);
-          setAlertaMensaje(textoAlerta);
-          alertaTimerRef.current = setTimeout(() => setAlertaMensaje(null), 4000);
-          // Audio (usa ref para silencio — sin stale closure)
-          const silenciado = tipo === "viaje" ? silenciarChatViajeRef.current : silenciarSoporteClienteRef.current;
-          if (audioDesbloquedoRef.current && !silenciado) playChatSound();
+        (_payload) => {
+          console.log("CHAT ALERT trigger (RLS-safe)");
+          actualizarNoLeidos();
         })
       .subscribe((status) => {
         console.log("CHAT ALERT realtime status", status);
