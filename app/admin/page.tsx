@@ -1025,7 +1025,11 @@ const HistorialAdmin = ({ cargas, paradasPorCarga, todosUsuarios, onRecargar }: 
                           alert("❌ Contraseña incorrecta. Eliminación cancelada.");
                           return;
                         }
-                        await supabase.from("mensajes_viaje").delete().eq("viaje_id", carga.id);
+                        await fetch("/api/chat/mensajes-viaje", {
+                          method: "DELETE",
+                          headers: { "Content-Type": "application/json", "x-user-id": adminObj.id },
+                          body: JSON.stringify({ viaje_id: String(carga.id) }),
+                        });
                         await supabase.from("paradas_viaje").delete().eq("carga_id", carga.id);
                         await fetch("/api/admin/billetera", {
                           method: "DELETE",
