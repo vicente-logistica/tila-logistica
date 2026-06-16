@@ -1305,10 +1305,15 @@ export default function AdminPage() {
   };
 
   const actualizarEstado = async (id: string, estado: string) => {
-    const updateData: any = { estado };
-    if (estado === "Viaje finalizado") updateData.tracking = false;
-    const { error } = await supabase.from("cargas").update(updateData).eq("id", id);
-    if (error) { alert("Error: " + error.message); return; }
+    const u = localStorage.getItem("usuario");
+    const adminObj = u ? JSON.parse(u) : null;
+    if (!adminObj?.id) { alert("Error: sesión no encontrada."); return; }
+    const res = await fetch("/api/admin/cargas/estado", {
+      method:  "PATCH",
+      headers: { "Content-Type": "application/json", "x-user-id": adminObj.id },
+      body:    JSON.stringify({ carga_id: String(id), nuevo_estado: estado }),
+    });
+    if (!res.ok) { alert("Error al actualizar el estado"); return; }
     await cargarViajes();
   };
 
