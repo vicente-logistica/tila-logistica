@@ -1002,10 +1002,15 @@ const HistorialAdmin = ({ cargas, paradasPorCarga, todosUsuarios, onRecargar }: 
                   <div className="pt-3 border-t border-zinc-700 grid grid-cols-2 gap-2">
                     <button
                       onClick={async () => {
-                        const { error } = await supabase.from("cargas").update({
-                          oculto_cliente: true, oculto_chofer: true, auto_oculto_at: new Date().toISOString()
-                        }).eq("id", carga.id);
-                        if (!error) await onRecargar();
+                        const u = localStorage.getItem("usuario");
+                        const adminObj = u ? JSON.parse(u) : null;
+                        if (!adminObj?.id) return;
+                        const res = await fetch("/api/admin/cargas/ocultar", {
+                          method:  "PATCH",
+                          headers: { "Content-Type": "application/json", "x-user-id": adminObj.id },
+                          body:    JSON.stringify({ carga_id: String(carga.id) }),
+                        });
+                        if (res.ok) await onRecargar();
                       }}
                       className="py-2 rounded-xl font-black text-xs border border-orange-700 text-orange-400 hover:bg-orange-900/20 transition"
                     >
