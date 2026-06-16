@@ -34,7 +34,6 @@ export async function GET(req: Request) {
     .eq("id", userId)
     .single();
 
-  console.log("[DIAG cargas/activa] paso 1", { userId, usuario, rol: usuario?.rol, error: userError, cantidad: undefined });
   if (userError || !usuario) {
     return NextResponse.json({ error: "No autorizado: usuario no encontrado" }, { status: 401 });
   }
@@ -81,6 +80,5 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: "Error al buscar viaje activo" }, { status: 500 });
   }
 
-  console.log("[DIAG cargas/activa] paso 2", { userId, usuario, rol: usuario?.rol, error: cargaError, cantidad: carga ? 1 : 0 });
   return NextResponse.json({ carga: carga ?? null });
 }

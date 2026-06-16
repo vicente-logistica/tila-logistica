@@ -130,6 +130,8 @@ export async function POST(req: Request) {
       pagado_cliente:      false,
       tracking:            false,
       chofer_id:           null,
+      oculto_cliente:      false,
+      oculto_chofer:       false,
       // ── Datos del viaje (del body, ya validados) ─────────────────────────
       origen:              origen.trim(),
       destino:             destino.trim(),

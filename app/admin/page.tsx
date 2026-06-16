@@ -1109,7 +1109,10 @@ export default function AdminPage() {
   }, []);
 
   const cargarViajes = useCallback(async () => {
-    const adminId = JSON.parse(localStorage.getItem("usuario") || "{}").id;
+    const adminRaw = localStorage.getItem("usuario");
+    if (!adminRaw) return;
+    const adminId = JSON.parse(adminRaw).id;
+    if (!adminId) return;
     const res = await fetch("/api/admin/cargas", { headers: { "x-user-id": String(adminId) } });
     if (!res.ok) { console.error("Error cargando viajes:", res.status); return; }
     const { cargas: cargasData = [] } = await res.json() as { cargas: any[] };
