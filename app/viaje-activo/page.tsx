@@ -445,13 +445,21 @@ export default function ViajeActivoPage() {
     if (!viaje?.id) return;
     if (bloqueadoPorParadas) { alert("Completá todas las paradas antes de finalizar"); return; }
 
-    const now = new Date().toISOString();
-    const upd: any = { estado: nuevoEstado };
-    if (nuevoEstado === "En camino")        upd.hora_inicio      = now;
-    if (nuevoEstado === "Chofer asignado")  upd.hora_aceptacion  = now;
-    if (nuevoEstado === "Viaje finalizado") { upd.tracking = false; upd.hora_finalizacion = now; viajeTerminado.current = true; }
-    const { data, error } = await supabase.from("cargas").update(upd).eq("id", viaje.id).select().single();
-    if (error) { alert("Error al actualizar estado"); viajeTerminado.current = false; return; }
+    if (nuevoEstado === "Viaje finalizado") viajeTerminado.current = true;
+    const uid = usuarioRef.current?.id;
+    if (!uid) { alert("Error al actualizar estado"); return; }
+    const res = await fetch("/api/cargas/estado", {
+      method:  "PATCH",
+      headers: { "Content-Type": "application/json", "x-user-id": uid },
+      body:    JSON.stringify({ carga_id: viaje.id, nuevo_estado: nuevoEstado }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      alert(err?.error ?? "Error al actualizar estado");
+      viajeTerminado.current = false;
+      return;
+    }
+    const { carga: data } = await res.json();
     setViaje(data);
 
     // ── Evidencia automática — se omite si el modal ya la registró ───────────
