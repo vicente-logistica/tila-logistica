@@ -26,7 +26,7 @@ export async function GET(req: Request) {
     .eq("id", userId)
     .single();
 
-  console.log("[DIAG admin/cargas] userId:", userId, "userError:", userError?.message, "usuario:", usuario);
+  console.log("[DIAG admin/cargas] paso 1", { userId, usuario, rol: usuario?.rol, error: userError, cantidad: undefined });
   if (userError || !usuario) {
     return NextResponse.json({ error: "No autorizado: usuario no encontrado" }, { status: 401 });
   }
@@ -42,7 +42,7 @@ export async function GET(req: Request) {
     .select("*")
     .order("created_at", { ascending: false });
 
-  console.log("[DIAG admin/cargas] data.length:", data?.length, "error:", error?.message);
+  console.log("[DIAG admin/cargas] paso 2", { userId, usuario, rol: usuario?.rol, error, cantidad: data?.length });
   if (error) {
     console.error("[admin/cargas GET] error SELECT:", error.message);
     return NextResponse.json({ error: "Error al obtener cargas" }, { status: 500 });
