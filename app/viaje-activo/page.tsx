@@ -339,7 +339,13 @@ export default function ViajeActivoPage() {
         setGpsEstado("🟢"); setVelocidadGps(vel);
         setUltimaSenal(new Date(now).toLocaleTimeString("es-AR", { hour:"2-digit", minute:"2-digit" }));
         setViaje((prev: any) => prev ? { ...prev, lat, lng, velocidad: vel, gps_actualizado: now } : prev);
-        await supabase.from("cargas").update({ lat, lng, velocidad: vel, velocidad_kmh: vel, gps_actualizado: now }).eq("id", viaje.id);
+        if (usuarioRef.current?.id) {
+          fetch("/api/cargas/gps", {
+            method:  "PATCH",
+            headers: { "Content-Type": "application/json", "x-user-id": usuarioRef.current.id },
+            body:    JSON.stringify({ carga_id: viaje.id, lat, lng, velocidad: vel }),
+          }).catch((err) => console.error("[gps] error:", err));
+        }
         if (usuarioRef.current?.id) {
           await supabase.from("usuarios").update({ ultima_senal_at: now, bateria_nivel: bateriaNivel, bateria_cargando: bateriaCargando }).eq("id", usuarioRef.current.id);
         }
