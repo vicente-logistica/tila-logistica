@@ -131,17 +131,15 @@ export default function PanelChoferPage() {
         if (!u) return;
         const usuario = JSON.parse(u);
         if (!usuario?.id) return;
-        const { data } = await supabase
-          .from("cargas")
-          .select("id, origen, destino, estado, pago_chofer")
-          .eq("chofer_id", usuario.id)
-          .in("estado", ESTADOS_ACTIVOS)
-          .order("created_at", { ascending: false })
-          .limit(1)
-          .maybeSingle();
-        if (data) {
-          setViajeActivo(data);
-          localStorage.setItem("viajeActivoId", String(data.id));
+        const res = await fetch("/api/cargas/activa", {
+          headers: { "x-user-id": String(usuario.id) },
+        });
+        if (res.ok) {
+          const { carga } = await res.json();
+          if (carga) {
+            setViajeActivo(carga);
+            localStorage.setItem("viajeActivoId", String(carga.id));
+          }
         }
       } finally {
         setBuscandoViajeActivo(false);
