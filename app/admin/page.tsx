@@ -1109,11 +1109,14 @@ export default function AdminPage() {
   }, []);
 
   const cargarViajes = useCallback(async () => {
+    console.log("[DIAG] cargarViajes START");
     const adminRaw = localStorage.getItem("usuario");
+    console.log("[DIAG] adminRaw:", adminRaw ? "existe" : "NULL");
     if (!adminRaw) return;
     const adminId = JSON.parse(adminRaw).id;
+    console.log("[DIAG] adminId:", adminId);
     if (!adminId) return;
-    console.log("[DIAG] admin/cargas GET x-user-id:", String(adminId));
+    console.log("[DIAG] fetch /api/admin/cargas", adminId);
     const res = await fetch("/api/admin/cargas", { headers: { "x-user-id": String(adminId) } });
     if (!res.ok) {
       const txt = await res.text();
