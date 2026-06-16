@@ -208,42 +208,35 @@ export default function PublicarPage() {
       porcentajeComisionTila: 14,
     });
 
-    const vehiculoTexto = [tipoVehiculo, tipoCarroceria, categoriaLegal]
-      .filter(Boolean)
-      .join(" - ");
+    const paradasValidas = paradasIntermedias.map(p => p.trim()).filter(Boolean);
 
-    const { data, error } = await supabase.from("cargas").insert([{
-      cliente_id: usuario.id,
-      origen,
-      destino,
-      vehiculo: vehiculoTexto,
-      categoria_legal: categoriaLegal,
-      tipo_vehiculo: tipoVehiculo,
-      tipo_carroceria: tipoCarroceria,
-      peso,
-      tipo_carga: tipoCargaNombre,
-      detalles: presentacion,
-      km_estimados: kilometros,
-      precio_base: tarifaFinal.subtotalAntesComision,
-      precio_cliente: tarifaFinal.precioCliente,
-      pago_chofer: tarifaFinal.choferCobra,
-      comision_plataforma: tarifaFinal.comisionTila,
-      // ── Flujo operativo: la carga es visible inmediatamente para choferes.
-      //    El pago se solicita al cliente después de que un chofer acepta.
-      estado: "pendiente",
-      pago_estado: "pendiente_pago",
-      pagado_cliente: false,
-      tracking: false,
-    }]).select().single();
+    const pubRes = await fetch("/api/cargas/publicar", {
+      method:  "POST",
+      headers: { "Content-Type": "application/json", "x-user-id": usuario.id },
+      body:    JSON.stringify({
+        origen,
+        destino,
+        tipo_vehiculo:      tipoVehiculo,
+        tipo_carroceria:    tipoCarroceria,
+        categoria_legal:    categoriaLegal,
+        peso,
+        tipo_carga:         tipoCargaNombre,
+        detalles:           presentacion,
+        km_estimados:       kilometros,
+        paradas_intermedias: paradasValidas,
+      }),
+    });
 
-    if (error) {
-      alert("Error publicando carga: " + error.message);
+    if (!pubRes.ok) {
+      const err = await pubRes.json().catch(() => ({}));
+      alert("Error publicando carga: " + (err?.error ?? pubRes.status));
       setPublicando(false);
       return;
     }
 
-    // Paradas intermedias — sin cambios
-    const paradasValidas = paradasIntermedias.map(p => p.trim()).filter(Boolean);
+    const { carga: data } = await pubRes.json();
+
+    // Paradas intermedias
     if (paradasValidas.length > 0) {
       const paradasParaInsertar = [
         { carga_id: Number(data.id), orden: 0, tipo: "retiro", direccion: origen.trim(), estado: "pendiente" },
