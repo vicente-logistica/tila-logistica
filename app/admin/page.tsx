@@ -1059,7 +1059,6 @@ const HistorialAdmin = ({ cargas, paradasPorCarga, todosUsuarios, onRecargar }: 
 // ─── Componente principal ─────────────────────────────────────────────────────
 
 export default function AdminPage() {
-  console.log("[DIAG] AdminPage render");
   const { autorizado } = useProtegerRuta("admin");
 
   const [cargas, setCargas] = useState<any[]>([]);
@@ -1110,23 +1109,13 @@ export default function AdminPage() {
   }, []);
 
   const cargarViajes = useCallback(async () => {
-    console.log("[DIAG] cargarViajes START");
     const adminRaw = localStorage.getItem("usuario");
-    console.log("[DIAG] adminRaw:", adminRaw ? "existe" : "NULL");
     if (!adminRaw) return;
     const adminId = JSON.parse(adminRaw).id;
-    console.log("[DIAG] adminId:", adminId);
     if (!adminId) return;
-    console.log("[DIAG] fetch /api/admin/cargas", adminId);
     const res = await fetch("/api/admin/cargas", { headers: { "x-user-id": String(adminId) } });
-    if (!res.ok) {
-      const txt = await res.text();
-      console.error("[DIAG] admin/cargas GET status:", res.status, "body:", txt);
-      return;
-    }
+    if (!res.ok) return;
     const { cargas: cargasData = [] } = await res.json() as { cargas: any[] };
-    console.log("[DIAG] setCargas cantidad", cargasData.length);
-    if (cargasData[0]) console.log("[DIAG] primer carga estado:", cargasData[0].estado, "oculto_cliente:", cargasData[0].oculto_cliente);
     setCargas(cargasData);
 
     if (cargasData.length > 0) {
@@ -1190,7 +1179,6 @@ export default function AdminPage() {
 
   // ── Canal principal: cargas/usuarios/paradas/resumen mensajes ───────────────
   useEffect(() => {
-    console.log("[DIAG] AdminPage useEffect main");
     const iniciar = async () => {
       setCargando(true);
       try { await Promise.all([cargarViajes(), cargarUsuarios(), cargarResumenMensajes()]); }
@@ -1257,7 +1245,6 @@ export default function AdminPage() {
   const pendientes = useMemo(() => cargas.filter((c) => !c.estado || c.estado.toLowerCase() === "pendiente"), [cargas]);
   const activos = useMemo(() => cargas.filter((c) => ESTADOS_ACTIVOS.includes(c.estado)), [cargas]);
   const finalizados = useMemo(() => cargas.filter((c) => c.estado === "Viaje finalizado"), [cargas]);
-  console.log("[DIAG] cargas state", cargas.length, "pendientes", pendientes.length, "activos", activos.length, "finalizados", finalizados.length);
   const choferesOnline = useMemo(() => choferes.filter((c) => c.online === true), [choferes]);
   const gpsActivos = useMemo(() => cargas.filter((c) => c.lat && c.lng && ESTADOS_ACTIVOS.includes(c.estado)), [cargas]);
   const primerGpsActivo = gpsActivos[0];

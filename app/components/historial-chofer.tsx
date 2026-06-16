@@ -37,18 +37,14 @@ export default function HistorialChofer() {
     if (!u) return;
     const usuario = JSON.parse(u);
 
-    console.log("[DIAG] historial-chofer x-user-id:", String(usuario.id));
     const res = await fetch("/api/cargas/historial-chofer", {
       headers: { "x-user-id": String(usuario.id) },
     });
     if (!res.ok) {
-      const txt = await res.text();
-      console.error("[DIAG] historial-chofer status:", res.status, "body:", txt);
       setCargando(false);
       return;
     }
     const { cargas: data } = await res.json() as { cargas: any[] };
-    console.log("[DIAG] historial-chofer cantidad:", data?.length);
     setViajes(data || []);
 
     if (data && data.length > 0) {

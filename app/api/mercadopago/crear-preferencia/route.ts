@@ -32,7 +32,6 @@ export async function POST(req: Request) {
 
     // ── 2. Verificar token MP ────────────────────────────────────────────────
     const accessToken = process.env.MERCADOPAGO_ACCESS_TOKEN;
-    console.log("[MP] MERCADOPAGO_ACCESS_TOKEN presente:", !!accessToken, "| primeros 8 chars:", accessToken?.slice(0, 8) ?? "—");
     if (!accessToken || accessToken === "REEMPLAZAR_CON_TU_TOKEN") {
       console.error("[MP] ❌ MERCADOPAGO_ACCESS_TOKEN no configurado o es placeholder");
       return NextResponse.json(

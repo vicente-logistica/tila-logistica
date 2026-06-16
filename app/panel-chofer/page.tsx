@@ -131,14 +131,9 @@ export default function PanelChoferPage() {
         if (!u) return;
         const usuario = JSON.parse(u);
         if (!usuario?.id) return;
-        console.log("[DIAG] panel-chofer activa x-user-id:", String(usuario.id));
         const res = await fetch("/api/cargas/activa", {
           headers: { "x-user-id": String(usuario.id) },
         });
-        if (!res.ok) {
-          const txt = await res.text();
-          console.error("[DIAG] panel-chofer activa status:", res.status, "body:", txt);
-        }
         if (res.ok) {
           const { carga } = await res.json();
           if (carga) {
@@ -245,17 +240,11 @@ export default function PanelChoferPage() {
     console.log("CATEGORIA LEGAL", JSON.stringify(usuario?.categoria_legal));
 
     if (!usuario?.id) return;
-    console.log("[DIAG] panel-chofer disponibles x-user-id:", String(usuario.id));
     const res = await fetch("/api/cargas/disponibles", {
       headers: { "x-user-id": String(usuario.id) },
     });
-    if (!res.ok) {
-      const txt = await res.text();
-      console.error("[DIAG] panel-chofer disponibles status:", res.status, "body:", txt);
-      return;
-    }
+    if (!res.ok) return;
     const { cargas: data } = await res.json() as { cargas: any[] };
-    console.log("[DIAG] panel-chofer disponibles cantidad:", data?.length);
     const error = null;
 
     console.log("CARGAS RAW SUPABASE count:", data?.length, data?.map((c: any) => ({ id: c.id, tipo_vehiculo: JSON.stringify(c.tipo_vehiculo), categoria_legal: c.categoria_legal, estado: c.estado })));
