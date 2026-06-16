@@ -1059,6 +1059,7 @@ const HistorialAdmin = ({ cargas, paradasPorCarga, todosUsuarios, onRecargar }: 
 // ─── Componente principal ─────────────────────────────────────────────────────
 
 export default function AdminPage() {
+  console.log("[DIAG] AdminPage render");
   const { autorizado } = useProtegerRuta("admin");
 
   const [cargas, setCargas] = useState<any[]>([]);
@@ -1188,6 +1189,7 @@ export default function AdminPage() {
 
   // ── Canal principal: cargas/usuarios/paradas/resumen mensajes ───────────────
   useEffect(() => {
+    console.log("[DIAG] AdminPage useEffect main");
     const iniciar = async () => {
       setCargando(true);
       try { await Promise.all([cargarViajes(), cargarUsuarios(), cargarResumenMensajes()]); }
