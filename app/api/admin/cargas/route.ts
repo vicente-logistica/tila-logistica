@@ -12,6 +12,43 @@ if (!_roleKey) throw new Error("Falta SUPABASE_SERVICE_ROLE_KEY en variables de 
 
 const supabaseAdmin = createClient(_url, _roleKey);
 
+export async function GET(req: Request) {
+  // ── 1. Leer x-user-id ────────────────────────────────────────────────────
+  const userId = req.headers.get("x-user-id");
+  if (!userId) {
+    return NextResponse.json({ error: "No autorizado: falta x-user-id" }, { status: 401 });
+  }
+
+  // ── 2. Verificar usuario en BD ────────────────────────────────────────────
+  const { data: usuario, error: userError } = await supabaseAdmin
+    .from("usuarios")
+    .select("id, rol")
+    .eq("id", userId)
+    .single();
+
+  if (userError || !usuario) {
+    return NextResponse.json({ error: "No autorizado: usuario no encontrado" }, { status: 401 });
+  }
+
+  // ── 3. Validar rol admin ──────────────────────────────────────────────────
+  if (usuario.rol !== "admin") {
+    return NextResponse.json({ error: "Prohibido: solo administradores pueden ver todas las cargas" }, { status: 403 });
+  }
+
+  // ── 4. Consultar todas las cargas ─────────────────────────────────────────
+  const { data, error } = await supabaseAdmin
+    .from("cargas")
+    .select("*")
+    .order("created_at", { ascending: false });
+
+  if (error) {
+    console.error("[admin/cargas GET] error SELECT:", error.message);
+    return NextResponse.json({ error: "Error al obtener cargas" }, { status: 500 });
+  }
+
+  return NextResponse.json({ cargas: data ?? [] });
+}
+
 export async function DELETE(req: Request) {
   // ── 1. Leer x-user-id ────────────────────────────────────────────────────
   const userId = req.headers.get("x-user-id");

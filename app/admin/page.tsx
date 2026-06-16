@@ -1109,9 +1109,10 @@ export default function AdminPage() {
   }, []);
 
   const cargarViajes = useCallback(async () => {
-    const { data, error } = await supabase.from("cargas").select("*").order("created_at", { ascending: false });
-    if (error) { console.error("Error cargando viajes:", error); return; }
-    const cargasData = data || [];
+    const adminId = JSON.parse(localStorage.getItem("usuario") || "{}").id;
+    const res = await fetch("/api/admin/cargas", { headers: { "x-user-id": String(adminId) } });
+    if (!res.ok) { console.error("Error cargando viajes:", res.status); return; }
+    const { cargas: cargasData = [] } = await res.json() as { cargas: any[] };
     setCargas(cargasData);
 
     if (cargasData.length > 0) {
