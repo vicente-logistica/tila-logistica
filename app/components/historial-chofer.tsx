@@ -37,14 +37,11 @@ export default function HistorialChofer() {
     if (!u) return;
     const usuario = JSON.parse(u);
 
-    const { data, error } = await supabase
-      .from("cargas")
-      .select("*")
-      .eq("chofer_id", usuario.id)
-      .neq("oculto_chofer", true)
-      .order("created_at", { ascending: false });
-
-    if (error) { console.error(error); setCargando(false); return; }
+    const res = await fetch("/api/cargas/historial-chofer", {
+      headers: { "x-user-id": String(usuario.id) },
+    });
+    if (!res.ok) { console.error("Error cargando historial:", res.status); setCargando(false); return; }
+    const { cargas: data } = await res.json() as { cargas: any[] };
     setViajes(data || []);
 
     if (data && data.length > 0) {

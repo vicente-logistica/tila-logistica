@@ -261,14 +261,11 @@ export default function PanelClientePage() {
 
   const cargarViajes = async () => {
     if (!usuario?.id) return;
-    const { data, error } = await supabase
-      .from("cargas")
-      .select("*")
-      .eq("cliente_id", usuario.id)
-      .eq("oculto_cliente", false)
-      .order("created_at", { ascending: false });
-    if (error) { console.error(error); return; }
-    const todos = data || [];
+    const res = await fetch("/api/cargas/historial-cliente", {
+      headers: { "x-user-id": String(usuario.id) },
+    });
+    if (!res.ok) { console.error("Error cargando viajes:", res.status); return; }
+    const { cargas: todos = [] } = await res.json() as { cargas: any[] };
     setViajes(todos);
 
     // Detectar cambios de estado para alerta sonora

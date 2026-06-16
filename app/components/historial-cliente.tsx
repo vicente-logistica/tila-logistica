@@ -60,14 +60,11 @@ export default function HistorialCliente() {
     if (!u) return;
     const usuario = JSON.parse(u);
 
-    const { data, error } = await supabase
-      .from("cargas")
-      .select("*")
-      .eq("cliente_id", usuario.id)
-      .neq("oculto_cliente", true)
-      .order("created_at", { ascending: false });
-
-    if (error) { console.error(error); setCargando(false); return; }
+    const res = await fetch("/api/cargas/historial-cliente", {
+      headers: { "x-user-id": String(usuario.id) },
+    });
+    if (!res.ok) { console.error("Error cargando historial:", res.status); setCargando(false); return; }
+    const { cargas: data } = await res.json() as { cargas: any[] };
     setViajes(data || []);
 
     if (data && data.length > 0) {
