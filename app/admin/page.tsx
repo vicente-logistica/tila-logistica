@@ -1015,29 +1015,25 @@ const HistorialAdmin = ({ cargas, paradasPorCarga, todosUsuarios, onRecargar }: 
                       onClick={async () => {
                         const ok1 = window.confirm("⚠️ Esta acción eliminará definitivamente el viaje del sistema.\n¿Continuar?");
                         if (!ok1) return;
-                        const pass = window.prompt("Ingresá tu contraseña de admin para confirmar:");
-                        if (!pass) return;
                         const adminGuardado = localStorage.getItem("usuario");
                         if (!adminGuardado) { alert("Error: sesión no encontrada."); return; }
                         const adminObj = JSON.parse(adminGuardado);
-                        const { data: adminData } = await supabase.from("usuarios").select("password").eq("id", adminObj.id).single();
-                        if (!adminData || adminData.password !== pass) {
-                          alert("❌ Contraseña incorrecta. Eliminación cancelada.");
-                          return;
-                        }
                         await fetch("/api/chat/mensajes-viaje", {
                           method: "DELETE",
                           headers: { "Content-Type": "application/json", "x-user-id": adminObj.id },
                           body: JSON.stringify({ viaje_id: String(carga.id) }),
                         });
-                        await supabase.from("paradas_viaje").delete().eq("carga_id", carga.id);
                         await fetch("/api/admin/billetera", {
                           method: "DELETE",
                           headers: { "x-user-id": adminObj.id, "Content-Type": "application/json" },
                           body: JSON.stringify({ viaje_id: String(carga.id) }),
                         });
-                        const { error } = await supabase.from("cargas").delete().eq("id", carga.id);
-                        if (error) { alert("Error al eliminar: " + error.message); return; }
+                        const delRes = await fetch("/api/admin/cargas", {
+                          method: "DELETE",
+                          headers: { "Content-Type": "application/json", "x-user-id": adminObj.id },
+                          body: JSON.stringify({ carga_id: String(carga.id) }),
+                        });
+                        if (!delRes.ok) { alert("Error al eliminar el viaje"); return; }
                         await onRecargar();
                       }}
                       className="py-2 rounded-xl font-black text-xs border border-red-800 text-red-500 hover:bg-red-900/20 transition"
@@ -1319,8 +1315,15 @@ export default function AdminPage() {
   const eliminarViaje = async (id: string) => {
     const ok = confirm("¿Eliminar este viaje?");
     if (!ok) return;
-    const { error } = await supabase.from("cargas").delete().eq("id", id);
-    if (error) { alert("Error: " + error.message); return; }
+    const u = localStorage.getItem("usuario");
+    const adminObj = u ? JSON.parse(u) : null;
+    if (!adminObj?.id) { alert("Error: sesión no encontrada."); return; }
+    const res = await fetch("/api/admin/cargas", {
+      method:  "DELETE",
+      headers: { "Content-Type": "application/json", "x-user-id": adminObj.id },
+      body:    JSON.stringify({ carga_id: String(id) }),
+    });
+    if (!res.ok) { alert("Error al eliminar el viaje"); return; }
     await cargarViajes();
   };
 
