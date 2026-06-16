@@ -26,6 +26,7 @@ export async function GET(req: Request) {
     .eq("id", userId)
     .single();
 
+  console.log("[DIAG historial-cliente] userId:", userId, "userError:", userError?.message, "usuario:", usuario);
   if (userError || !usuario) {
     return NextResponse.json({ error: "No autorizado: usuario no encontrado" }, { status: 401 });
   }
@@ -42,6 +43,7 @@ export async function GET(req: Request) {
     .neq("oculto_cliente", true)
     .order("created_at", { ascending: false });
 
+  console.log("[DIAG historial-cliente] data.length:", data?.length, "error:", error?.message);
   if (error) {
     console.error("[cargas/historial-cliente] error SELECT:", error.message);
     return NextResponse.json({ error: "Error al obtener cargas" }, { status: 500 });
