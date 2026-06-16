@@ -1113,9 +1113,15 @@ export default function AdminPage() {
     if (!adminRaw) return;
     const adminId = JSON.parse(adminRaw).id;
     if (!adminId) return;
+    console.log("[DIAG] admin/cargas GET x-user-id:", String(adminId));
     const res = await fetch("/api/admin/cargas", { headers: { "x-user-id": String(adminId) } });
-    if (!res.ok) { console.error("Error cargando viajes:", res.status); return; }
+    if (!res.ok) {
+      const txt = await res.text();
+      console.error("[DIAG] admin/cargas GET status:", res.status, "body:", txt);
+      return;
+    }
     const { cargas: cargasData = [] } = await res.json() as { cargas: any[] };
+    console.log("[DIAG] admin/cargas GET cantidad:", cargasData.length);
     setCargas(cargasData);
 
     if (cargasData.length > 0) {

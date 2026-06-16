@@ -261,11 +261,17 @@ export default function PanelClientePage() {
 
   const cargarViajes = async () => {
     if (!usuario?.id) return;
+    console.log("[DIAG] registro-cliente historial-cliente x-user-id:", String(usuario.id));
     const res = await fetch("/api/cargas/historial-cliente", {
       headers: { "x-user-id": String(usuario.id) },
     });
-    if (!res.ok) { console.error("Error cargando viajes:", res.status); return; }
+    if (!res.ok) {
+      const txt = await res.text();
+      console.error("[DIAG] registro-cliente historial-cliente status:", res.status, "body:", txt);
+      return;
+    }
     const { cargas: todos = [] } = await res.json() as { cargas: any[] };
+    console.log("[DIAG] registro-cliente historial-cliente cantidad:", todos.length);
     setViajes(todos);
 
     // Detectar cambios de estado para alerta sonora

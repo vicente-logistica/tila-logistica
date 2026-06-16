@@ -362,10 +362,16 @@ export default function ViajeActivoPage() {
     const u2 = localStorage.getItem("usuario");
     const userId = u2 ? JSON.parse(u2).id : null;
     if (!userId) { router.replace("/panel-chofer"); return; }
+    console.log("[DIAG] viaje-activo activa x-user-id:", String(userId), "carga_id:", viajeId);
     const res = await fetch(`/api/cargas/activa?carga_id=${viajeId}`, {
       headers: { "x-user-id": String(userId) },
     });
-    if (!res.ok) { alert("Error al cargar viaje"); return; }
+    if (!res.ok) {
+      const txt = await res.text();
+      console.error("[DIAG] viaje-activo activa status:", res.status, "body:", txt);
+      alert("Error al cargar viaje");
+      return;
+    }
     const { carga } = await res.json();
     setViaje(carga);
     const { data: dp } = await supabase.from("paradas_viaje").select("*").eq("carga_id", Number(viajeId)).order("orden", { ascending: true });

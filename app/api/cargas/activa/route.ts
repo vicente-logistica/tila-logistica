@@ -24,7 +24,7 @@ export async function GET(req: Request) {
   // ── 1. Leer x-user-id ────────────────────────────────────────────────────
   const userId = req.headers.get("x-user-id");
   if (!userId) {
-    return NextResponse.json({ error: "No autorizado: falta x-user-id" }, { status: 401 });
+    return NextResponse.json({ error: "missing x-user-id" }, { status: 401 });
   }
 
   // ── 2. Verificar usuario en BD ────────────────────────────────────────────
