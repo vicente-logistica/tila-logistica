@@ -417,16 +417,15 @@ export default function PanelChoferPage() {
     silenciadoRef.current = false;
     const u = localStorage.getItem("usuario");
     const usuario = u ? JSON.parse(u) : null;
-    if (!usuario?.id || usuario?.rol !== "chofer") { alert("Sesión inválida: ingresá como chofer"); return; }
-    const { data, error } = await supabase
-      .from("cargas")
-      .update({ estado: "Chofer asignado", chofer_id: usuario.id, tracking: true })
-      .eq("estado", "pendiente")
-      .eq("id", carga.id)
-      .select()
-      .single();
-    if (error) { alert("Este viaje ya fue tomado por otro chofer"); cargarCargasRef.current(); return; }
-    localStorage.setItem("viajeActivoId", String(data.id));
+    if (!usuario?.id) { alert("Sesión inválida: ingresá como chofer"); return; }
+    const res = await fetch("/api/cargas/aceptar", {
+      method:  "POST",
+      headers: { "Content-Type": "application/json", "x-user-id": usuario.id },
+      body:    JSON.stringify({ carga_id: carga.id }),
+    });
+    if (!res.ok) { alert("Este viaje ya fue tomado por otro chofer"); cargarCargasRef.current(); return; }
+    const { viaje_id } = await res.json();
+    localStorage.setItem("viajeActivoId", String(viaje_id));
     window.location.href = "/viaje-activo";
   };
 
