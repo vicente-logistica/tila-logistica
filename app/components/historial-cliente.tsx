@@ -111,12 +111,15 @@ export default function HistorialCliente() {
     if (!confirmado) return;
 
     setOcultando(viajeId);
-    const { error } = await supabase
-      .from("cargas")
-      .update({ oculto_cliente: true, auto_oculto_at: new Date().toISOString() })
-      .eq("id", viajeId);
+    const u = localStorage.getItem("usuario");
+    const userId = u ? JSON.parse(u).id : null;
+    const res = await fetch("/api/cargas/ocultar-historial", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", "x-user-id": String(userId) },
+      body: JSON.stringify({ carga_id: viajeId }),
+    });
 
-    if (error) { alert("Error: " + error.message); }
+    if (!res.ok) { const d = await res.json(); alert("Error: " + (d.error ?? res.status)); }
     else { setViajes(prev => prev.filter(v => String(v.id) !== viajeId)); }
     setOcultando(null);
   };
