@@ -241,13 +241,13 @@ export default function PanelChoferPage() {
     console.log("TIPO ACTIVO", JSON.stringify(tipoActivo), "len:", tipoActivo.length);
     console.log("CATEGORIA LEGAL", JSON.stringify(usuario?.categoria_legal));
 
-    const { data, error } = await supabase
-      .from("cargas")
-      .select("*")
-      .eq("estado", "pendiente")
-      .order("created_at", { ascending: true });
-
-    if (error) { console.error("Error cargando cargas:", error); return; }
+    if (!usuario?.id) return;
+    const res = await fetch("/api/cargas/disponibles", {
+      headers: { "x-user-id": String(usuario.id) },
+    });
+    if (!res.ok) { console.error("Error cargando cargas:", res.status); return; }
+    const { cargas: data } = await res.json() as { cargas: any[] };
+    const error = null;
 
     console.log("CARGAS RAW SUPABASE count:", data?.length, data?.map((c: any) => ({ id: c.id, tipo_vehiculo: JSON.stringify(c.tipo_vehiculo), categoria_legal: c.categoria_legal, estado: c.estado })));
 
