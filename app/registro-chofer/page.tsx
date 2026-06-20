@@ -105,6 +105,8 @@ export default function RegistroChoferPage() {
 
 
 
+  const [aceptaTerminos, setAceptaTerminos] = useState(false);
+
   const [archivos, setArchivos] = useState<Record<string, File>>({});
 
   const [previews, setPreviews] = useState<Record<string, string>>({});
@@ -210,6 +212,11 @@ export default function RegistroChoferPage() {
       return;
     }
 
+    if (!aceptaTerminos) {
+      alert("Debés aceptar los Términos y Condiciones, la Política de Privacidad y el Contrato de Transportista para continuar.");
+      return;
+    }
+
     setLoading(true);
 
 
@@ -229,6 +236,7 @@ export default function RegistroChoferPage() {
       rol: "chofer",
 
       acepta_terminos: true,
+      fecha_aceptacion_terminos: new Date().toISOString(),
 
       dni, cuit_cuil: cuitCuil,
 
@@ -660,9 +668,28 @@ export default function RegistroChoferPage() {
 
 
 
-          <button type="button" onClick={registrarChofer} disabled={loading}
+          {/* Aceptación de términos */}
+          <label className={`flex items-start gap-3 cursor-pointer rounded-2xl border p-4 transition ${aceptaTerminos ? "border-yellow-400 bg-zinc-800" : "border-zinc-700 bg-zinc-900"}`}>
+            <input
+              type="checkbox"
+              checked={aceptaTerminos}
+              onChange={e => setAceptaTerminos(e.target.checked)}
+              className="mt-0.5 w-5 h-5 accent-yellow-400 flex-shrink-0"
+            />
+            <span className="text-sm text-zinc-300 leading-relaxed">
+              He leído y acepto los{" "}
+              <a href="/terminos" target="_blank" rel="noreferrer" className="text-yellow-400 hover:underline font-black">Términos y Condiciones</a>,
+              la{" "}
+              <a href="/privacidad" target="_blank" rel="noreferrer" className="text-yellow-400 hover:underline font-black">Política de Privacidad</a>
+              {" "}y el{" "}
+              <a href="/contrato-transportista" target="_blank" rel="noreferrer" className="text-yellow-400 hover:underline font-black">Contrato de Transportista Independiente</a>
+              {" "}de TILA. *
+            </span>
+          </label>
 
-            className="w-full bg-yellow-400 hover:bg-yellow-500 text-black font-black text-xl py-4 rounded-2xl">
+          <button type="button" onClick={registrarChofer} disabled={loading || !aceptaTerminos}
+
+            className={`w-full font-black text-xl py-4 rounded-2xl transition ${!aceptaTerminos ? "bg-zinc-700 text-zinc-500 cursor-not-allowed" : "bg-yellow-400 hover:bg-yellow-500 text-black"}`}>
 
             {loading ? "Enviando y subiendo archivos..." : "Enviar solicitud de validación"}
 

@@ -35,6 +35,13 @@ export default function CrearCuentaPage() {
             REGISTRARME COMO CHOFER
           </Link>
         </div>
+
+        <div className="flex flex-wrap justify-center gap-4 mt-10 text-xs text-zinc-600">
+          <Link href="/terminos" className="hover:text-yellow-400 transition">Términos y Condiciones</Link>
+          <Link href="/privacidad" className="hover:text-yellow-400 transition">Política de Privacidad</Link>
+          <Link href="/contrato-transportista" className="hover:text-yellow-400 transition">Contrato Transportista</Link>
+          <a href="mailto:logisticatila@gmail.com" className="hover:text-yellow-400 transition">Contacto</a>
+        </div>
       </section>
     </main>
   );
