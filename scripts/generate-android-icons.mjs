@@ -7,7 +7,7 @@ import { fileURLToPath } from "url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, "..");
-const SRC = join(ROOT, "public", "icon-512-maskable.png");
+const SRC = join(ROOT, "public", "icon-512.png");
 const RES = join(ROOT, "android", "app", "src", "main", "res");
 
 if (!existsSync(SRC)) {
