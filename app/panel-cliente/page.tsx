@@ -1034,9 +1034,34 @@ export default function PanelClientePage() {
                     const enEjecucion = ["En camino", "Carga retirada", "En ruta", "Descarga completada"].includes(viaje.estado);
                     if (enEjecucion) {
                       return (
-                        <div className="rounded-xl border border-orange-700 bg-orange-950/50 px-4 py-3 text-center">
-                          <p className="text-orange-400 font-black text-sm">⏳ Pago pendiente del cliente</p>
-                          <p className="text-zinc-500 text-xs mt-1">El equipo de TILA gestionará el cobro.</p>
+                        <div className="flex flex-col gap-2">
+                          <div className="rounded-xl border border-orange-700 bg-orange-950/50 px-4 py-3 text-center">
+                            <p className="text-orange-400 font-black text-sm">⏳ Pago pendiente del cliente</p>
+                            <p className="text-zinc-500 text-xs mt-1">Podés pagarlo ahora o al finalizar el viaje.</p>
+                          </div>
+                          <button
+                            type="button"
+                            className="w-full py-3 rounded-xl font-black text-sm bg-zinc-800 border border-blue-600 text-blue-400 hover:bg-blue-950 active:scale-[0.98] transition"
+                            onClick={async () => {
+                              try {
+                                const payload = {
+                                  carga_id: viaje.id,
+                                  monto: viaje.precio_cliente,
+                                  descripcion: `TILA · ${viaje.origen} → ${viaje.destino}`,
+                                };
+                                const res = await fetch("/api/mercadopago/crear-preferencia", {
+                                  method: "POST",
+                                  headers: { "Content-Type": "application/json" },
+                                  body: JSON.stringify(payload),
+                                });
+                                const d = await res.json();
+                                if (d.init_point) { window.location.href = d.init_point; }
+                                else { alert("Error al iniciar el pago. Intentá de nuevo."); }
+                              } catch { alert("Error de red al iniciar el pago."); }
+                            }}
+                          >
+                            💳 Pagar ahora
+                          </button>
                         </div>
                       );
                     }
