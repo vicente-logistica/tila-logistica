@@ -628,7 +628,14 @@ export default function ViajeActivoPage() {
 
       {/* ─── HEADER FLOTANTE ─────────────────────────────────────────────── */}
       <div className="absolute top-0 left-0 right-0 z-20 p-3 pointer-events-none">
-        <div className="bg-black/85 backdrop-blur-sm rounded-2xl px-4 py-2 flex items-center justify-between gap-2">
+        <div className="bg-black/85 backdrop-blur-sm rounded-2xl px-3 py-2 flex items-center gap-2">
+          <button
+            type="button"
+            className="pointer-events-auto text-yellow-400 font-black text-sm flex-shrink-0 px-1"
+            onClick={() => router.push("/panel-chofer")}
+          >
+            ← Panel
+          </button>
           <p className="text-yellow-400 font-black text-sm truncate flex-1">
             {viaje.origen} → {viaje.destino}
           </p>
