@@ -93,7 +93,7 @@ function SeguimientoViaje({
         <div className="flex items-center gap-3 min-w-0">
           <button type="button" onClick={onCerrar}
             className="text-zinc-400 hover:text-yellow-400 font-black text-sm flex-shrink-0">
-            ←
+            ← Viajes
           </button>
           <div className="min-w-0">
             <p className="text-yellow-400 font-black text-sm leading-none">VIAJE #{viaje.id}</p>
@@ -191,7 +191,7 @@ function SeguimientoViaje({
           </button>
           <button type="button" onClick={onCerrar}
             className="flex-1 py-2.5 rounded-xl text-xs font-black bg-zinc-800 text-zinc-300 hover:bg-zinc-700 transition">
-            ← Viajes
+            🗺 Cerrar mapa
           </button>
         </div>
       </div>
@@ -923,7 +923,7 @@ export default function PanelClientePage() {
                   {(viaje.chofer_id || (viaje.estado && viaje.estado !== "pendiente")) && (
                     <button type="button" onClick={() => setViajeSeleccionado(viaje)}
                       className="w-full py-3 rounded-xl font-black text-sm bg-yellow-400 text-black hover:bg-yellow-300 active:scale-[0.98] transition">
-                      {tieneGps ? "📡 Ver ubicación en vivo" : "👁️ Ver seguimiento"}
+                      {tieneGps ? "📡 Ver ubicación del chofer" : "👁️ Ver seguimiento"}
                     </button>
                   )}
 
