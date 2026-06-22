@@ -12,7 +12,7 @@ if (!_roleKey) throw new Error("Falta SUPABASE_SERVICE_ROLE_KEY en variables de 
 
 const supabaseAdmin = createClient(_url, _roleKey);
 
-const ESTADOS_CANCELABLES = ["pendiente", "Chofer asignado"];
+const ESTADOS_CANCELABLES = ["pendiente", "Chofer asignado", "En camino"];
 
 export async function POST(req: Request) {
   const userId = req.headers.get("x-user-id");

@@ -645,9 +645,9 @@ export default function PanelChoferPage() {
                     localStorage.removeItem("viajeActivoId");
                     setViajeActivo(null);
                   }}
-                  className="w-full mt-2 py-2.5 rounded-2xl font-black text-sm bg-zinc-900 border border-red-700 text-red-400 hover:bg-red-950 transition"
+                  className="w-full mt-3 py-4 rounded-2xl font-black text-base bg-red-950 border-2 border-red-500 text-red-300 hover:bg-red-900 active:scale-[0.98] transition"
                 >
-                  Cancelar viaje
+                  ✕ Cancelar viaje
                 </button>
               )}
             </div>

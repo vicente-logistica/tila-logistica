@@ -1000,8 +1000,8 @@ export default function PanelClientePage() {
                     </div>
                   )}
 
-                  {/* Cancelar viaje — solo si todavía no empezó */}
-                  {["pendiente", "Chofer asignado"].includes(viaje.estado) && (
+                  {/* Cancelar viaje — hasta antes de "Carga retirada" */}
+                  {["pendiente", "Chofer asignado", "En camino"].includes(viaje.estado) && (
                     <button
                       type="button"
                       onClick={async () => {
@@ -1030,48 +1030,59 @@ export default function PanelClientePage() {
                   )}
 
                   {/* Botón pagar — solo cuando corresponde */}
-                  {(viaje.pago_estado === "pendiente_pago" || viaje.pago_estado === "rechazado") && (
-                    <div className="flex flex-col gap-2">
-                      <button
-                        type="button"
-                        className="w-full py-3.5 rounded-xl font-black text-sm bg-blue-600 hover:bg-blue-500 text-white active:scale-[0.98] transition"
-                        onClick={async () => {
-                          try {
-                            const payload = {
-                              carga_id: viaje.id,
-                              monto: viaje.precio_cliente,
-                              descripcion: `TILA · ${viaje.origen} → ${viaje.destino}`,
-                            };
-                            console.log("[PAGO] enviando a crear-preferencia:", payload);
-                            const res = await fetch("/api/mercadopago/crear-preferencia", {
-                              method: "POST",
-                              headers: { "Content-Type": "application/json" },
-                              body: JSON.stringify(payload),
-                            });
-                            console.log("[PAGO] response status:", res.status);
-                            const d = await res.json();
-                            console.log("[PAGO] response body:", d);
-                            if (d.init_point) {
-                              console.log("[PAGO] redirigiendo a:", d.init_point.slice(0, 80));
-                              window.location.href = d.init_point;
-                            } else {
-                              console.error("[PAGO] init_point ausente — body:", d);
-                              alert("Error al iniciar el pago. Intentá de nuevo.");
+                  {(viaje.pago_estado === "pendiente_pago" || viaje.pago_estado === "rechazado") && (() => {
+                    const enEjecucion = ["En camino", "Carga retirada", "En ruta", "Descarga completada"].includes(viaje.estado);
+                    if (enEjecucion) {
+                      return (
+                        <div className="rounded-xl border border-orange-700 bg-orange-950/50 px-4 py-3 text-center">
+                          <p className="text-orange-400 font-black text-sm">⏳ Pago pendiente del cliente</p>
+                          <p className="text-zinc-500 text-xs mt-1">El equipo de TILA gestionará el cobro.</p>
+                        </div>
+                      );
+                    }
+                    return (
+                      <div className="flex flex-col gap-2">
+                        <button
+                          type="button"
+                          className="w-full py-3.5 rounded-xl font-black text-sm bg-blue-600 hover:bg-blue-500 text-white active:scale-[0.98] transition"
+                          onClick={async () => {
+                            try {
+                              const payload = {
+                                carga_id: viaje.id,
+                                monto: viaje.precio_cliente,
+                                descripcion: `TILA · ${viaje.origen} → ${viaje.destino}`,
+                              };
+                              console.log("[PAGO] enviando a crear-preferencia:", payload);
+                              const res = await fetch("/api/mercadopago/crear-preferencia", {
+                                method: "POST",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify(payload),
+                              });
+                              console.log("[PAGO] response status:", res.status);
+                              const d = await res.json();
+                              console.log("[PAGO] response body:", d);
+                              if (d.init_point) {
+                                console.log("[PAGO] redirigiendo a:", d.init_point.slice(0, 80));
+                                window.location.href = d.init_point;
+                              } else {
+                                console.error("[PAGO] init_point ausente — body:", d);
+                                alert("Error al iniciar el pago. Intentá de nuevo.");
+                              }
+                            } catch (err) {
+                              console.error("[PAGO] error de red / fetch:", err);
+                              alert("Error de red al iniciar el pago.");
                             }
-                          } catch (err) {
-                            console.error("[PAGO] error de red / fetch:", err);
-                            alert("Error de red al iniciar el pago.");
-                          }
-                        }}
-                      >
-                        💳 {viaje.pago_estado === "rechazado" ? "Reintentar pago" : "Pagar ahora"}
-                      </button>
-                      <p className="text-center text-zinc-400 text-xs leading-snug">
-                        Pagar con tarjeta / Mercado Pago<br />
-                        <span className="text-zinc-500">Tarjeta de crédito, débito o dinero en Mercado Pago.</span>
-                      </p>
-                    </div>
-                  )}
+                          }}
+                        >
+                          💳 {viaje.pago_estado === "rechazado" ? "Reintentar pago" : "Pagar ahora"}
+                        </button>
+                        <p className="text-center text-zinc-400 text-xs leading-snug">
+                          Pagar con tarjeta / Mercado Pago<br />
+                          <span className="text-zinc-500">Tarjeta de crédito, débito o dinero en Mercado Pago.</span>
+                        </p>
+                      </div>
+                    );
+                  })()}
                 </div>
               </div>
             );
