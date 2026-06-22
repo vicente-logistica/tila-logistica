@@ -19,8 +19,8 @@ type ParadaMapa = {
 };
 
 // "pendiente_pago" se muestra al cliente mientras espera confirmación del pago
-const ESTADOS_ACTIVOS   = ["pendiente_pago", "pendiente", "Chofer asignado", "En camino", "Carga retirada", "En ruta", "Descarga completada"];
-const ESTADOS_HISTORIAL = ["Viaje finalizado", "cancelado"];
+const ESTADOS_ACTIVOS   = ["pendiente_pago", "pendiente", "Chofer asignado", "En camino", "Carga retirada", "En ruta", "Descarga completada", "Cancelado por chofer"];
+const ESTADOS_HISTORIAL = ["Viaje finalizado", "cancelado", "Cancelado por cliente"];
 
 const SOPORTE_WHATSAPP = "5491158689383";
 const SOPORTE_EMAIL    = "logisticatila@gmail.com";
@@ -34,8 +34,10 @@ const colorEstado = (estado: string) => {
     case "Carga retirada":      return "bg-blue-600 text-white";
     case "En ruta":             return "bg-purple-600 text-white";
     case "Descarga completada": return "bg-red-600 text-white";
-    case "Viaje finalizado":    return "bg-green-500 text-white";
-    default:                    return "bg-zinc-800 text-zinc-400";
+    case "Viaje finalizado":      return "bg-green-500 text-white";
+    case "Cancelado por chofer":  return "bg-orange-700 text-white";
+    case "Cancelado por cliente": return "bg-zinc-600 text-zinc-300";
+    default:                      return "bg-zinc-800 text-zinc-400";
   }
 };
 
@@ -868,6 +870,34 @@ export default function PanelClientePage() {
                 </div>
 
                 <div className="px-4 pt-3 pb-4 space-y-3">
+
+                  {/* Aviso cancelación por chofer */}
+                  {viaje.estado === "Cancelado por chofer" && (
+                    <div className="rounded-xl border border-orange-600 bg-orange-950/60 px-4 py-3">
+                      <p className="text-orange-400 font-black text-sm mb-1">⚠️ El chofer canceló el viaje</p>
+                      <p className="text-zinc-400 text-xs mb-3">Tu viaje puede volver a quedar disponible para otro chofer.</p>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          const res = await fetch("/api/cargas/republicar", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json", "x-user-id": String(usuario?.id) },
+                            body: JSON.stringify({ carga_id: viaje.id }),
+                          });
+                          if (!res.ok) {
+                            const d = await res.json().catch(() => ({}));
+                            alert("No se pudo republicar: " + (d?.error ?? res.status));
+                            return;
+                          }
+                          cargarViajes();
+                        }}
+                        className="w-full py-2.5 rounded-xl font-black text-sm bg-orange-500 hover:bg-orange-400 text-black transition"
+                      >
+                        🔄 Buscar nuevo chofer
+                      </button>
+                    </div>
+                  )}
+
                   {/* Ruta */}
                   <div>
                     <p className="text-yellow-400 font-black text-base leading-tight truncate">{viaje.origen}</p>

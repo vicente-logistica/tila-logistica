@@ -7,12 +7,10 @@ export const dynamic = "force-dynamic";
 const _url     = process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL;
 const _roleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-if (!_url)     throw new Error("Falta SUPABASE_URL en variables de entorno (cargas/cancelar-chofer)");
-if (!_roleKey) throw new Error("Falta SUPABASE_SERVICE_ROLE_KEY en variables de entorno (cargas/cancelar-chofer)");
+if (!_url)     throw new Error("Falta SUPABASE_URL en variables de entorno (cargas/republicar)");
+if (!_roleKey) throw new Error("Falta SUPABASE_SERVICE_ROLE_KEY en variables de entorno (cargas/republicar)");
 
 const supabaseAdmin = createClient(_url, _roleKey);
-
-const ESTADOS_CANCELABLES = ["Chofer asignado", "En camino"];
 
 export async function POST(req: Request) {
   const userId = req.headers.get("x-user-id");
@@ -22,8 +20,8 @@ export async function POST(req: Request) {
     .from("usuarios").select("id, rol").eq("id", userId).single();
   if (userError || !usuario)
     return NextResponse.json({ error: "No autorizado: usuario no encontrado" }, { status: 401 });
-  if (usuario.rol !== "chofer")
-    return NextResponse.json({ error: "Prohibido: solo choferes pueden cancelar por esta ruta" }, { status: 403 });
+  if (usuario.rol !== "cliente")
+    return NextResponse.json({ error: "Prohibido: solo clientes pueden republicar" }, { status: 403 });
 
   let carga_id: unknown;
   try { ({ carga_id } = await req.json()); } catch {
@@ -32,33 +30,27 @@ export async function POST(req: Request) {
   if (!carga_id) return NextResponse.json({ error: "Falta carga_id" }, { status: 400 });
 
   const { data: carga, error: cargaError } = await supabaseAdmin
-    .from("cargas").select("id, estado, chofer_id").eq("id", carga_id).single();
+    .from("cargas").select("id, estado, cliente_id").eq("id", carga_id).single();
   if (cargaError || !carga)
     return NextResponse.json({ error: "Carga no encontrada" }, { status: 404 });
 
-  if (String(carga.chofer_id) !== String(userId))
+  if (String(carga.cliente_id) !== String(userId))
     return NextResponse.json({ error: "Prohibido: este viaje no te pertenece" }, { status: 403 });
 
-  if (!ESTADOS_CANCELABLES.includes(carga.estado))
+  if (carga.estado !== "Cancelado por chofer")
     return NextResponse.json(
-      { error: `No se puede cancelar en estado "${carga.estado}". Solo antes de "Carga retirada".` },
+      { error: `Solo se pueden republicar viajes en estado "Cancelado por chofer". Estado actual: "${carga.estado}"` },
       { status: 422 },
     );
 
   const { error: updateError } = await supabaseAdmin
     .from("cargas")
-    .update({
-      estado:          "Cancelado por chofer",
-      chofer_id:       null,
-      tracking:        false,
-      hora_inicio:     null,
-      hora_aceptacion: null,
-    })
+    .update({ estado: "pendiente" })
     .eq("id", carga_id);
 
   if (updateError) {
-    console.error("[cancelar-chofer] error UPDATE:", updateError.message);
-    return NextResponse.json({ error: "Error al cancelar el viaje" }, { status: 500 });
+    console.error("[cargas/republicar] error UPDATE:", updateError.message);
+    return NextResponse.json({ error: "Error al republicar el viaje" }, { status: 500 });
   }
 
   return NextResponse.json({ ok: true });

@@ -228,6 +228,29 @@ export default function ViajeActivoPage() {
 
   const instruccion = useMemo(() => getInstruccion(viaje?.estado || "", paradas, paradaActivaIndex), [viaje?.estado, paradas, paradaActivaIndex]);
 
+  // ─── Polling: detectar si el cliente canceló el viaje ────────────────────
+  useEffect(() => {
+    const viajeId = localStorage.getItem("viajeActivoId");
+    if (!viajeId) return;
+    const poll = setInterval(async () => {
+      const uid = usuarioRef.current?.id;
+      if (!uid) return;
+      const res = await fetch(`/api/cargas/activa?carga_id=${viajeId}`, {
+        headers: { "x-user-id": String(uid) },
+      });
+      if (!res.ok) return;
+      const { carga } = await res.json();
+      if (!carga) return;
+      if (carga.estado === "Cancelado por cliente") {
+        clearInterval(poll);
+        localStorage.removeItem("viajeActivoId");
+        alert("El cliente canceló el viaje.");
+        router.push("/panel-chofer");
+      }
+    }, 5000);
+    return () => clearInterval(poll);
+  }, [router]);
+
   // ─── Realtime ─────────────────────────────────────────────────────────────
   useEffect(() => {
     const viajeId = localStorage.getItem("viajeActivoId");

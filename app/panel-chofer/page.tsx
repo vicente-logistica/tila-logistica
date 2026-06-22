@@ -40,6 +40,7 @@ export default function PanelChoferPage() {
 
   const [viajeActivo, setViajeActivo]               = useState<any>(null);
   const [buscandoViajeActivo, setBuscandoViajeActivo] = useState(true);
+  const [canceladoPorCliente, setCanceladoPorCliente] = useState(false);
   // true cuando el browser bloqueó autoplay — muestra overlay "Tocar para activar sonido"
   const [necesitaDesbloqueo, setNecesitaDesbloqueo] = useState(false);
 
@@ -147,6 +148,27 @@ export default function PanelChoferPage() {
     };
     buscarViajeActivo();
   }, []);
+
+  // ─── Polling: detectar si el cliente canceló el viaje activo ─────────────
+  useEffect(() => {
+    if (!viajeActivo) return;
+    const u = localStorage.getItem("usuario");
+    if (!u) return;
+    const uid = JSON.parse(u).id;
+    const poll = setInterval(async () => {
+      const res = await fetch("/api/cargas/activa", {
+        headers: { "x-user-id": String(uid) },
+      });
+      if (!res.ok) return;
+      const { carga } = await res.json();
+      if (!carga) {
+        setViajeActivo(null);
+        localStorage.removeItem("viajeActivoId");
+        setCanceladoPorCliente(true);
+      }
+    }, 10000);
+    return () => clearInterval(poll);
+  }, [viajeActivo?.id]);
 
   // ─── Perfil chofer + vehículo activo ─────────────────────────────────────
   const cargarPerfilChofer = useCallback(async () => {
@@ -603,6 +625,18 @@ export default function PanelChoferPage() {
         <audio ref={audioRef} src="/sounds/alerta-viaje.mp3" loop preload="auto" />
 
         <div className="w-full max-w-5xl flex flex-col gap-6">
+
+          {/* Banner: viaje cancelado por el cliente */}
+          {canceladoPorCliente && (
+            <div className="bg-orange-950 border-2 border-orange-500 rounded-3xl p-5 text-center">
+              <p className="text-orange-400 font-black text-base mb-1">⚠️ Viaje cancelado por el cliente</p>
+              <p className="text-zinc-400 text-sm mb-3">El viaje fue cancelado mientras estabas en camino. Podés buscar un nuevo viaje.</p>
+              <button type="button" onClick={() => setCanceladoPorCliente(false)}
+                className="px-6 py-2 rounded-xl text-sm font-black bg-zinc-800 text-zinc-300 hover:bg-zinc-700 transition">
+                Entendido
+              </button>
+            </div>
+          )}
 
           {/* Tarjeta viaje activo */}
           {!buscandoViajeActivo && viajeActivo && (
