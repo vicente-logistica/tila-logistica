@@ -165,6 +165,16 @@ export default function PanelChoferPage() {
         setViajeActivo(null);
         localStorage.removeItem("viajeActivoId");
         setCanceladoPorCliente(true);
+        // Disparar sonido de alerta (audio ya desbloqueado por el usuario)
+        if (audioDesbloqueadoRef.current && audioRef.current) {
+          audioRef.current.loop = false;
+          audioRef.current.currentTime = 0;
+          audioRef.current.volume = 1;
+          audioRef.current.play().catch(() => {});
+          setTimeout(() => {
+            if (audioRef.current) { audioRef.current.pause(); audioRef.current.currentTime = 0; }
+          }, 3000);
+        }
       }
     }, 10000);
     return () => clearInterval(poll);
@@ -628,11 +638,18 @@ export default function PanelChoferPage() {
 
           {/* Banner: viaje cancelado por el cliente */}
           {canceladoPorCliente && (
-            <div className="bg-orange-950 border-2 border-orange-500 rounded-3xl p-5 text-center">
-              <p className="text-orange-400 font-black text-base mb-1">⚠️ Viaje cancelado por el cliente</p>
-              <p className="text-zinc-400 text-sm mb-3">El viaje fue cancelado mientras estabas en camino. Podés buscar un nuevo viaje.</p>
-              <button type="button" onClick={() => setCanceladoPorCliente(false)}
-                className="px-6 py-2 rounded-xl text-sm font-black bg-zinc-800 text-zinc-300 hover:bg-zinc-700 transition">
+            <div className="relative bg-red-950 border-4 border-red-500 rounded-3xl p-6 text-center shadow-2xl animate-pulse overflow-hidden">
+              {/* Aro de atención */}
+              <div className="absolute inset-0 rounded-3xl ring-4 ring-red-500/40 animate-ping pointer-events-none" />
+              <p className="text-4xl mb-2">🚫</p>
+              <p className="text-red-400 font-black text-xl mb-1 tracking-wide">VIAJE CANCELADO</p>
+              <p className="text-red-300 font-black text-sm mb-1">El cliente canceló el viaje</p>
+              <p className="text-zinc-400 text-xs mb-4">El viaje ya no está activo. Podés buscar un nuevo viaje en el panel.</p>
+              <button
+                type="button"
+                onClick={() => setCanceladoPorCliente(false)}
+                className="px-8 py-3 rounded-2xl font-black text-base bg-red-600 hover:bg-red-500 text-white transition active:scale-95"
+              >
                 Entendido
               </button>
             </div>
