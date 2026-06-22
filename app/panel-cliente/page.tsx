@@ -338,6 +338,8 @@ export default function PanelClientePage() {
   const [mostrarHistorial, setMostrarHistorial]   = useState(false);
   const [alerta, setAlerta]                   = useState<string | null>(null);
   const [bannerPago, setBannerPago]           = useState<"ok" | "error" | "pendiente" | null>(null);
+  const [bannerPublicado, setBannerPublicado] = useState<string | null>(null); // carga_id recién publicada
+  const [pagandoBanner, setPagandoBanner]     = useState(false);
   // Chat por viaje en la lista
   const [chatListaViajeId, setChatListaViajeId]   = useState<string | null>(null);
   const [tipoChatLista, setTipoChatLista]         = useState<"viaje" | "soporte_cliente">("viaje");
@@ -358,17 +360,21 @@ export default function PanelClientePage() {
   const viajesActivosIdsRef    = useRef<Set<string>>(new Set());
   const noLeidosPorViajeRef    = useRef<Record<string, Record<string, number>>>({});
 
-  // Leer ?pago= de la URL cuando MP redirige de vuelta (sin useSearchParams para evitar Suspense)
+  // Leer params de la URL al montar (sin useSearchParams para evitar Suspense)
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const pago = params.get("pago");
+    const publicado = params.get("publicado");
+    const url = new URL(window.location.href);
     if (pago === "ok" || pago === "error" || pago === "pendiente") {
       setBannerPago(pago as "ok" | "error" | "pendiente");
-      // Limpiar el param de la URL sin recargar
-      const url = new URL(window.location.href);
       url.searchParams.delete("pago");
-      window.history.replaceState({}, "", url.toString());
     }
+    if (publicado) {
+      setBannerPublicado(publicado);
+      url.searchParams.delete("publicado");
+    }
+    if (pago || publicado) window.history.replaceState({}, "", url.toString());
   }, []);
 
   const audioRef              = useRef<HTMLAudioElement | null>(null);
@@ -688,6 +694,69 @@ export default function PanelClientePage() {
           </div>
         </div>
       )}
+
+      {/* Banner viaje recién publicado — pendiente de pago */}
+      {bannerPublicado && (() => {
+        const viaje = viajes.find(v => String(v.id) === bannerPublicado);
+        return (
+          <div className="mb-4 rounded-2xl border-2 border-yellow-400 bg-zinc-900 p-4">
+            <div className="flex items-start justify-between gap-2 mb-3">
+              <div>
+                <p className="text-yellow-400 font-black text-sm">✅ Viaje creado</p>
+                {viaje && (
+                  <p className="text-zinc-300 text-xs mt-0.5 truncate">
+                    {viaje.origen} → {viaje.destino}
+                  </p>
+                )}
+                <p className="text-zinc-500 text-xs mt-1">
+                  Queda pendiente de pago. Podés pagarlo ahora o después desde el panel.
+                </p>
+              </div>
+              <button type="button" onClick={() => setBannerPublicado(null)}
+                className="text-zinc-500 font-black text-lg leading-none flex-shrink-0">×</button>
+            </div>
+            <div className="flex flex-col gap-2">
+              <button
+                type="button"
+                disabled={pagandoBanner}
+                onClick={async () => {
+                  const v = viajes.find(vj => String(vj.id) === bannerPublicado);
+                  if (!v) { setBannerPublicado(null); return; }
+                  setPagandoBanner(true);
+                  try {
+                    const res = await fetch("/api/mercadopago/crear-preferencia", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({
+                        carga_id: v.id,
+                        monto: v.precio_cliente,
+                        descripcion: `TILA · ${v.origen} → ${v.destino}`,
+                      }),
+                    });
+                    const d = await res.json();
+                    if (d.init_point) { window.location.href = d.init_point; }
+                    else { alert("Error al iniciar el pago. Intentá desde la tarjeta del viaje."); }
+                  } catch { alert("Error de red al iniciar el pago."); }
+                  finally { setPagandoBanner(false); }
+                }}
+                className="w-full py-3 rounded-xl font-black text-sm bg-blue-600 hover:bg-blue-500 text-white disabled:opacity-60 transition"
+              >
+                {pagandoBanner ? "Iniciando pago..." : "💳 Pagar ahora"}
+              </button>
+              <div className="flex gap-2">
+                <button type="button" onClick={() => setBannerPublicado(null)}
+                  className="flex-1 py-2.5 rounded-xl font-black text-sm bg-zinc-800 text-zinc-300 hover:bg-zinc-700 transition">
+                  Pagar después
+                </button>
+                <button type="button" onClick={() => setBannerPublicado(null)}
+                  className="flex-1 py-2.5 rounded-xl font-black text-sm bg-zinc-800 text-zinc-300 hover:bg-zinc-700 transition">
+                  Ver mis viajes
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Banner retorno MercadoPago */}
       {bannerPago && (

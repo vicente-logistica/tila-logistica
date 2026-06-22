@@ -253,38 +253,9 @@ export default function PublicarPage() {
       if (errorParadas) console.error("Error insertando paradas_viaje:", errorParadas);
     }
 
-    // ── Crear preferencia MercadoPago y redirigir al checkout ─────────────────
-    try {
-      const mpRes = await fetch("/api/mercadopago/crear-preferencia", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          carga_id: data.id,
-          monto: tarifaFinal.precioCliente,
-          descripcion: `TILA · ${tipoVehiculo} · ${origen} → ${destino}`,
-        }),
-      });
-
-      const mpData = await mpRes.json();
-
-      if (!mpRes.ok || !mpData.init_point) {
-        console.error("[PUBLICAR] Error MP:", mpData);
-        // Si MP falla, igual redirigir al panel — el cliente puede pagar desde allí
-        alert("Carga publicada. Completá el pago desde tu panel.");
-        router.push("/panel-cliente");
-        return;
-      }
-
-      console.log("[PUBLICAR] Redirigiendo a MP checkout:", mpData.init_point);
-      // Redirigir al Checkout Pro de MercadoPago
-      window.location.href = mpData.init_point;
-    } catch (mpError: any) {
-      console.error("[PUBLICAR] Error llamando a MP:", mpError);
-      alert("Carga publicada. Completá el pago desde tu panel.");
-      router.push("/panel-cliente");
-    } finally {
-      setPublicando(false);
-    }
+    // Viaje creado — redirigir al panel para que el cliente elija cuándo pagar
+    setPublicando(false);
+    router.push("/panel-cliente?publicado=" + data.id);
   };
 
   if (!autorizado) return null;
