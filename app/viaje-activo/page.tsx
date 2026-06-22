@@ -84,6 +84,8 @@ export default function ViajeActivoPage() {
   const [paradaActivaIndex, setParadaActivaIndex] = useState(0);
   const [confirmandoParada, setConfirmandoParada] = useState(false);
 
+  const [viajeCanceladoPorCliente, setViajeCanceladoPorCliente] = useState(false);
+
   // UI
   const [mostrarChat, setMostrarChat]         = useState(false);
   const [mostrarDetalles, setMostrarDetalles] = useState(false);
@@ -243,9 +245,15 @@ export default function ViajeActivoPage() {
       if (!carga) return;
       if (carga.estado === "Cancelado por cliente") {
         clearInterval(poll);
-        localStorage.removeItem("viajeActivoId");
-        alert("El cliente canceló el viaje.");
-        router.push("/panel-chofer");
+        // Intentar reproducir alerta (no bloquea si el navegador lo impide)
+        try {
+          const snd = new Audio("/sounds/alerta-viaje.mp3");
+          snd.volume = 1;
+          snd.loop = false;
+          snd.play().catch(() => {});
+          setTimeout(() => { snd.pause(); snd.currentTime = 0; }, 3000);
+        } catch { /* silencioso */ }
+        setViajeCanceladoPorCliente(true);
       }
     }, 5000);
     return () => clearInterval(poll);
@@ -599,6 +607,28 @@ export default function ViajeActivoPage() {
   // ─── Guards ───────────────────────────────────────────────────────────────
   if (!autorizado) return <main className="min-h-screen bg-black flex items-center justify-center"><p className="text-yellow-400 font-black text-2xl animate-pulse">Cargando...</p></main>;
   if (cargando)    return <main className="min-h-screen bg-black flex items-center justify-center"><p className="text-yellow-400 font-black text-2xl animate-pulse">Cargando viaje...</p></main>;
+
+  if (viajeCanceladoPorCliente) return (
+    <main className="min-h-screen bg-black flex items-center justify-center p-6">
+      <div className="relative bg-red-950 border-4 border-red-500 rounded-3xl p-8 text-center shadow-2xl max-w-sm w-full overflow-hidden animate-pulse">
+        <div className="absolute inset-0 rounded-3xl ring-4 ring-red-500/30 animate-ping pointer-events-none" />
+        <p className="text-5xl mb-4">🚫</p>
+        <p className="text-red-400 font-black text-2xl mb-2 tracking-wide">VIAJE CANCELADO</p>
+        <p className="text-red-300 font-black text-sm mb-1">El cliente canceló el viaje</p>
+        <p className="text-zinc-400 text-xs mb-6">El viaje ya no está activo.</p>
+        <button
+          type="button"
+          onClick={() => {
+            localStorage.removeItem("viajeActivoId");
+            router.push("/panel-chofer");
+          }}
+          className="w-full py-4 rounded-2xl font-black text-lg bg-red-600 hover:bg-red-500 text-white transition active:scale-95"
+        >
+          Volver al panel
+        </button>
+      </div>
+    </main>
+  );
   if (festejo)     return (
     <main className="min-h-screen bg-black flex items-center justify-center p-6">
       <div className="relative bg-green-950 border-4 border-green-400 rounded-3xl p-8 text-center shadow-2xl max-w-xl w-full overflow-hidden">
