@@ -770,6 +770,36 @@ export default function ViajeActivoPage() {
               {silenciarSoporteChofer ? "🛟🔕" : "🛟🔔"}
             </button>
           </div>
+
+          {/* Cancelar viaje — solo antes de "Carga retirada" */}
+          {viaje && ["Chofer asignado", "En camino"].includes(viaje.estado) && (
+            <div className="pt-1">
+              <button
+                type="button"
+                onClick={async () => {
+                  const ok = window.confirm("¿Cancelar el viaje? El viaje volverá a estado pendiente y quedará disponible para otro chofer.");
+                  if (!ok) return;
+                  const usuario = usuarioRef.current;
+                  if (!usuario?.id) return;
+                  const res = await fetch("/api/cargas/cancelar-chofer", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json", "x-user-id": String(usuario.id) },
+                    body: JSON.stringify({ carga_id: viaje.id }),
+                  });
+                  if (!res.ok) {
+                    const d = await res.json().catch(() => ({}));
+                    alert("No se pudo cancelar: " + (d?.error ?? res.status));
+                    return;
+                  }
+                  localStorage.removeItem("viajeActivoId");
+                  router.push("/panel-chofer");
+                }}
+                className="w-full py-2.5 rounded-xl font-black text-sm bg-zinc-900 border border-red-700 text-red-400 hover:bg-red-950 transition"
+              >
+                Cancelar viaje
+              </button>
+            </div>
+          )}
         </div>
       </div>
 

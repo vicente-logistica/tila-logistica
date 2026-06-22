@@ -623,6 +623,33 @@ export default function PanelChoferPage() {
                 className="w-full bg-green-500 hover:bg-green-400 text-black font-black text-xl md:text-2xl py-5 rounded-2xl transition hover:scale-105">
                 🚛 Retomar viaje activo
               </button>
+              {["Chofer asignado", "En camino"].includes(viajeActivo.estado) && (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const ok = window.confirm("¿Cancelar el viaje? Volverá a estado pendiente y quedará disponible para otro chofer.");
+                    if (!ok) return;
+                    const u = localStorage.getItem("usuario");
+                    const usuario = u ? JSON.parse(u) : null;
+                    if (!usuario?.id) return;
+                    const res = await fetch("/api/cargas/cancelar-chofer", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json", "x-user-id": String(usuario.id) },
+                      body: JSON.stringify({ carga_id: viajeActivo.id }),
+                    });
+                    if (!res.ok) {
+                      const d = await res.json().catch(() => ({}));
+                      alert("No se pudo cancelar: " + (d?.error ?? res.status));
+                      return;
+                    }
+                    localStorage.removeItem("viajeActivoId");
+                    setViajeActivo(null);
+                  }}
+                  className="w-full mt-2 py-2.5 rounded-2xl font-black text-sm bg-zinc-900 border border-red-700 text-red-400 hover:bg-red-950 transition"
+                >
+                  Cancelar viaje
+                </button>
+              )}
             </div>
           )}
 

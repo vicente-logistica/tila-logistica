@@ -1000,6 +1000,35 @@ export default function PanelClientePage() {
                     </div>
                   )}
 
+                  {/* Cancelar viaje — solo si todavía no empezó */}
+                  {["pendiente", "Chofer asignado"].includes(viaje.estado) && (
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        const ok = window.confirm(
+                          viaje.pago_estado === "pagado"
+                            ? "¿Cancelar el viaje? Como ya fue pagado, quedará marcado para revisión. El equipo de TILA se contactará con vos."
+                            : "¿Cancelar el viaje?"
+                        );
+                        if (!ok) return;
+                        const res = await fetch("/api/cargas/cancelar-cliente", {
+                          method: "POST",
+                          headers: { "Content-Type": "application/json", "x-user-id": String(usuario?.id) },
+                          body: JSON.stringify({ carga_id: viaje.id }),
+                        });
+                        if (!res.ok) {
+                          const d = await res.json().catch(() => ({}));
+                          alert("No se pudo cancelar: " + (d?.error ?? res.status));
+                          return;
+                        }
+                        cargarViajes();
+                      }}
+                      className="w-full py-2.5 rounded-xl font-black text-xs bg-zinc-900 border border-red-800 text-red-400 hover:bg-red-950 transition"
+                    >
+                      Cancelar viaje
+                    </button>
+                  )}
+
                   {/* Botón pagar — solo cuando corresponde */}
                   {(viaje.pago_estado === "pendiente_pago" || viaje.pago_estado === "rechazado") && (
                     <div className="flex flex-col gap-2">
