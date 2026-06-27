@@ -726,9 +726,10 @@ export default function PanelClientePage() {
                   if (!v) { setBannerPublicado(null); return; }
                   setPagandoBanner(true);
                   try {
+                    if (!usuario?.id) { alert("Tu sesión expiró. Volvé a iniciar sesión."); setPagandoBanner(false); return; }
                     const res = await fetch("/api/mercadopago/crear-preferencia", {
                       method: "POST",
-                      headers: { "Content-Type": "application/json" },
+                      headers: { "Content-Type": "application/json", "x-user-id": String(usuario.id) },
                       body: JSON.stringify({
                         carga_id: v.id,
                         monto: v.precio_cliente,
@@ -1074,6 +1075,7 @@ export default function PanelClientePage() {
                             className="w-full py-3 rounded-xl font-black text-sm bg-zinc-800 border border-blue-600 text-blue-400 hover:bg-blue-950 active:scale-[0.98] transition"
                             onClick={async () => {
                               try {
+                                if (!usuario?.id) { alert("Tu sesión expiró. Volvé a iniciar sesión."); return; }
                                 const payload = {
                                   carga_id: viaje.id,
                                   monto: viaje.precio_cliente,
@@ -1081,7 +1083,7 @@ export default function PanelClientePage() {
                                 };
                                 const res = await fetch("/api/mercadopago/crear-preferencia", {
                                   method: "POST",
-                                  headers: { "Content-Type": "application/json" },
+                                  headers: { "Content-Type": "application/json", "x-user-id": String(usuario.id) },
                                   body: JSON.stringify(payload),
                                 });
                                 const d = await res.json();
@@ -1102,29 +1104,24 @@ export default function PanelClientePage() {
                           className="w-full py-3.5 rounded-xl font-black text-sm bg-blue-600 hover:bg-blue-500 text-white active:scale-[0.98] transition"
                           onClick={async () => {
                             try {
+                              if (!usuario?.id) { alert("Tu sesión expiró. Volvé a iniciar sesión."); return; }
                               const payload = {
                                 carga_id: viaje.id,
                                 monto: viaje.precio_cliente,
                                 descripcion: `TILA · ${viaje.origen} → ${viaje.destino}`,
                               };
-                              console.log("[PAGO] enviando a crear-preferencia:", payload);
                               const res = await fetch("/api/mercadopago/crear-preferencia", {
                                 method: "POST",
-                                headers: { "Content-Type": "application/json" },
+                                headers: { "Content-Type": "application/json", "x-user-id": String(usuario.id) },
                                 body: JSON.stringify(payload),
                               });
-                              console.log("[PAGO] response status:", res.status);
                               const d = await res.json();
-                              console.log("[PAGO] response body:", d);
                               if (d.init_point) {
-                                console.log("[PAGO] redirigiendo a:", d.init_point.slice(0, 80));
                                 window.location.href = d.init_point;
                               } else {
-                                console.error("[PAGO] init_point ausente — body:", d);
                                 alert("Error al iniciar el pago. Intentá de nuevo.");
                               }
-                            } catch (err) {
-                              console.error("[PAGO] error de red / fetch:", err);
+                            } catch {
                               alert("Error de red al iniciar el pago.");
                             }
                           }}
