@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { supabase } from "@/app/lib/supabase";
 
 const SOPORTE_WHATSAPP = "5491158689383";
 const SOPORTE_EMAIL = "logisticatila@gmail.com";
@@ -17,36 +16,29 @@ export default function LoginPage() {
     if (!email || !password) { alert("Completá email y contraseña"); return; }
     setLoading(true);
     try {
-      const emailNorm = email.toLowerCase();
+      const res = await fetch("/api/auth/login", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ email, password }),
+      });
 
-      const { data, error } = await supabase
-        .from("usuarios")
-        .select("*")
-        .eq("email", emailNorm)
-        .eq("password", password)
-        .single();
+      const data = await res.json();
 
-      if (error || !data) { alert("Email o contraseña incorrectos"); setLoading(false); return; }
-
-      if (data.rol === "chofer") {
-        const aprobacion = data.estado_aprobacion || "pendiente";
-        if (aprobacion === "pendiente") { alert("Tu cuenta de chofer está pendiente de aprobación por el administrador. Te avisaremos cuando esté habilitada."); setLoading(false); return; }
-        if (aprobacion === "rechazado") { alert("Tu cuenta de chofer fue rechazada. Contactá al administrador para más información."); setLoading(false); return; }
-        if (aprobacion === "suspendido") { alert("Tu cuenta de chofer está suspendida. Contactá al administrador para reactivarla."); setLoading(false); return; }
-        if (aprobacion !== "aprobado" && data.estado_validacion !== "aprobado") { alert("Tu cuenta de chofer todavía está pendiente de validación."); setLoading(false); return; }
+      if (!res.ok) {
+        alert(data.error ?? "Email o contraseña incorrectos");
+        return;
       }
 
-      const { password: _password, cuit_cuil, antecedentes, alias_cbu_cvu, titular_cuenta, banco_billetera, metodo_cobro, cnrt_ruta, vtv_rto, ...usuarioSeguro } = data;
-      localStorage.setItem("usuario", JSON.stringify(usuarioSeguro));
+      localStorage.setItem("usuario", JSON.stringify(data.usuario));
 
-      if (data.rol === "cliente") router.push("/panel-cliente");
-      else if (data.rol === "chofer") router.push("/panel-chofer");
-      else if (data.rol === "admin") router.push("/admin");
+      const rol = data.usuario?.rol;
+      if (rol === "cliente")      router.push("/panel-cliente");
+      else if (rol === "chofer")  router.push("/panel-chofer");
+      else if (rol === "admin")   router.push("/admin");
       else alert("Rol inválido");
 
-    } catch (error) {
-      console.log(error);
-      alert("Error inesperado");
+    } catch {
+      alert("Error de conexión. Intentá de nuevo.");
     } finally {
       setLoading(false);
     }

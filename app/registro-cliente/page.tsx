@@ -1,664 +1,146 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { supabase } from "../lib/supabase";
-import { useProtegerRuta } from "../hooks/useProtegerRuta";
-import MapaTILA from "../components/MapaTILA";
-import ChatAsistencia from "../components/ChatAsistencia";
-import ChatToast from "../components/ChatToast";
-import BotonCerrarSesion from "../components/BotonCerrarSesion";
-import { playChatSound } from "../utils/chatSound";
-import HistorialCliente from "../components/historial-cliente";
+import { useState } from "react";
+import { useRouter } from "next/navigation";
 
-// ─── Tipos ────────────────────────────────────────────────────────────────────
-type ParadaMapa = {
-  direccion: string;
-  tipo: "retiro" | "entrega" | "parada";
-  estado: "pendiente" | "en_curso" | "completada";
-};
+export default function RegistroClientePage() {
+  const router = useRouter();
 
-const ESTADOS_ACTIVOS = ["pendiente", "Chofer asignado", "En camino", "Carga retirada", "En ruta", "Descarga completada"];
-const ESTADOS_HISTORIAL = ["Viaje finalizado", "cancelado"];
+  const [nombre,          setNombre]          = useState("");
+  const [email,           setEmail]           = useState("");
+  const [telefono,        setTelefono]        = useState("");
+  const [password,        setPassword]        = useState("");
+  const [confirmar,       setConfirmar]       = useState("");
+  const [aceptaTerminos,  setAceptaTerminos]  = useState(false);
+  const [loading,         setLoading]         = useState(false);
+  const [error,           setError]           = useState<string | null>(null);
 
-const SOPORTE_WHATSAPP = "5491158689383";
-const SOPORTE_EMAIL    = "logisticatila@gmail.com";
+  const registrar = async () => {
+    setError(null);
 
-// ─── Colores de estado ────────────────────────────────────────────────────────
-const colorEstado = (estado: string) => {
-  switch (estado) {
-    case "pendiente":           return "bg-zinc-700 text-zinc-300";
-    case "Chofer asignado":     return "bg-green-700 text-white";
-    case "En camino":           return "bg-yellow-400 text-black";
-    case "Carga retirada":      return "bg-blue-600 text-white";
-    case "En ruta":             return "bg-purple-600 text-white";
-    case "Descarga completada": return "bg-red-600 text-white";
-    case "Viaje finalizado":    return "bg-green-500 text-white";
-    default:                    return "bg-zinc-800 text-zinc-400";
-  }
-};
+    if (!nombre.trim())       return setError("El nombre es obligatorio");
+    if (!email.trim())        return setError("El email es obligatorio");
+    if (password.length < 6)  return setError("La contraseña debe tener al menos 6 caracteres");
+    if (password !== confirmar) return setError("Las contraseñas no coinciden");
+    if (!aceptaTerminos)      return setError("Debés aceptar los Términos y Condiciones");
 
-const formatearFecha = (iso: string | null | undefined) => {
-  if (!iso) return null;
-  const d = new Date(iso);
-  return `${String(d.getDate()).padStart(2,"0")}/${String(d.getMonth()+1).padStart(2,"0")}/${d.getFullYear()} ${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`;
-};
-
-const tiempoRelativo = (iso: string | null | undefined) => {
-  if (!iso) return "—";
-  const diff = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
-  if (diff < 60)   return "hace un momento";
-  if (diff < 3600) return `hace ${Math.floor(diff / 60)} min`;
-  return `hace ${Math.floor(diff / 3600)}h`;
-};
-
-// ─── Componente de seguimiento de un viaje ────────────────────────────────────
-function SeguimientoViaje({
-  viaje, paradas, choferInfo, usuarioId, usuarioNombre,
-  onCerrar,
-}: {
-  viaje: any; paradas: any[]; choferInfo: any;
-  usuarioId: string; usuarioNombre: string;
-  onCerrar: () => void;
-}) {
-  const [mostrarChat, setMostrarChat]           = useState(false);
-  const [tipoChatCliente, setTipoChatCliente]   = useState<"viaje" | "soporte_cliente">("viaje");
-
-  const paradasParaMapa: ParadaMapa[] = paradas.map(p => ({
-    direccion: p.direccion,
-    tipo:      p.tipo as "retiro" | "entrega" | "parada",
-    estado:    p.estado as "pendiente" | "en_curso" | "completada",
-  }));
-
-  const tieneGps = viaje?.lat != null && viaje?.lng != null;
-  // Altura del mapa = pantalla completa menos header (~56px) menos bottom (~120px)
-  const alturaMapaStr = "calc(100dvh - 180px)";
-
-  return (
-    <div className="fixed inset-0 z-50 bg-black flex flex-col" style={{ height: "100dvh" }}>
-
-      {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800 bg-zinc-900 flex-shrink-0">
-        <div className="flex items-center gap-3">
-          <button type="button" onClick={onCerrar}
-            className="text-zinc-400 hover:text-yellow-400 font-black text-sm px-1">
-            ← Volver
-          </button>
-          <div>
-            <p className="text-yellow-400 font-black text-sm">VIAJE #{viaje.id}</p>
-            <p className="text-zinc-400 text-xs truncate max-w-[200px]">{viaje.origen} → {viaje.destino}</p>
-          </div>
-        </div>
-        <span className={`text-xs font-black px-2 py-1 rounded-lg flex-shrink-0 ${colorEstado(viaje.estado)}`}>
-          {viaje.estado || "Pendiente"}
-        </span>
-      </div>
-
-      {/* Mapa o fallback */}
-      <div
-        className="relative flex-shrink-0 bg-zinc-900"
-        style={{ height: alturaMapaStr }}
-      >
-        {tieneGps ? (
-          <MapaTILA
-            lat={Number(viaje.lat)}
-            lng={Number(viaje.lng)}
-            origen={viaje.origen}
-            destino={viaje.destino}
-            soloLectura={true}
-            altura={alturaMapaStr}
-            paradas={paradasParaMapa.length >= 2 ? paradasParaMapa : undefined}
-          />
-        ) : (
-          /* Sin GPS: mostrar mapa de origen/destino o mensaje claro */
-          viaje.origen && viaje.destino ? (
-            <MapaTILA
-              lat={null}
-              lng={null}
-              origen={viaje.origen}
-              destino={viaje.destino}
-              soloLectura={true}
-              altura={alturaMapaStr}
-              paradas={paradasParaMapa.length >= 2 ? paradasParaMapa : undefined}
-            />
-          ) : (
-            <div className="flex items-center justify-center h-full">
-              <div className="text-center px-6">
-                <p className="text-4xl mb-3">📡</p>
-                <p className="text-zinc-300 font-black">Esperando ubicación del chofer</p>
-                <p className="text-zinc-500 text-sm mt-1">El mapa se actualizará cuando el chofer comparta su posición</p>
-              </div>
-            </div>
-          )
-        )}
-
-        {/* Badge info chofer flotante */}
-        {choferInfo && (
-          <div className="absolute top-2 left-2 right-2 z-10 bg-black/85 backdrop-blur-sm rounded-xl px-3 py-2">
-            <div className="flex items-center justify-between text-xs">
-              <span className="text-zinc-300">🚛 {choferInfo.nombre || "Chofer"}</span>
-              {tieneGps && viaje.velocidad_kmh != null && (
-                <span className="text-yellow-400 font-black">{viaje.velocidad_kmh} km/h</span>
-              )}
-              <span className="text-zinc-500">{tiempoRelativo(choferInfo.ultima_senal_at)}</span>
-            </div>
-          </div>
-        )}
-
-        {!tieneGps && (
-          <div className="absolute bottom-2 left-2 right-2 z-10 bg-black/80 rounded-xl px-3 py-2 text-center">
-            <p className="text-zinc-400 text-xs">📡 Esperando GPS del chofer...</p>
-          </div>
-        )}
-      </div>
-
-      {/* Bottom panel */}
-      <div className="flex-1 bg-zinc-900 border-t border-zinc-800 px-4 py-3 space-y-2 overflow-y-auto">
-        {/* Paradas */}
-        {paradas.length > 0 && (
-          <div className="flex gap-2 overflow-x-auto pb-1">
-            {paradas.map((p, i) => (
-              <div key={p.id} className={`flex-shrink-0 rounded-xl px-3 py-2 text-xs border ${
-                p.estado === "completada" ? "bg-green-900/40 border-green-700 text-green-400" :
-                p.estado === "en_curso"   ? "bg-yellow-400/10 border-yellow-400 text-yellow-400" :
-                "bg-zinc-800 border-zinc-700 text-zinc-400"
-              }`}>
-                <p className="font-black">{String.fromCharCode(65+i)}: {p.tipo === "retiro" ? "Retiro" : p.tipo === "entrega" ? "Entrega" : "Parada"}</p>
-                <p className="truncate max-w-[120px]">{p.direccion}</p>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {/* Botones */}
-        <div className="flex gap-2">
-          <button type="button" onClick={() => setMostrarChat(v => !v)}
-            className={`flex-1 py-2.5 rounded-xl text-xs font-black transition ${mostrarChat ? "bg-blue-600 text-white" : "bg-zinc-800 text-zinc-300"}`}>
-            💬 Chat
-          </button>
-          <button type="button" onClick={onCerrar}
-            className="flex-1 py-2.5 rounded-xl text-xs font-black bg-zinc-800 text-zinc-300 transition hover:bg-zinc-700">
-            ← Mis viajes
-          </button>
-        </div>
-      </div>
-
-      {/* Chat — ventana flotante compacta */}
-      {mostrarChat && (
-        <div
-          className="fixed bottom-24 right-6 z-40 w-80 bg-zinc-900 border border-blue-600 rounded-3xl shadow-2xl flex flex-col overflow-hidden"
-          style={{ height: "min(420px, 70vh)" }}
-        >
-          <div className="flex-shrink-0 flex items-center justify-between px-4 py-3 border-b border-zinc-800">
-            <div className="flex gap-1.5">
-              <button type="button" onClick={() => setTipoChatCliente("viaje")}
-                className={`px-2.5 py-1 rounded-lg text-xs font-black transition ${tipoChatCliente === "viaje" ? "bg-blue-600 text-white" : "bg-zinc-700 text-zinc-400"}`}>
-                💬 Chofer
-              </button>
-              <button type="button" onClick={() => setTipoChatCliente("soporte_cliente")}
-                className={`px-2.5 py-1 rounded-lg text-xs font-black transition ${tipoChatCliente === "soporte_cliente" ? "bg-orange-600 text-white" : "bg-zinc-700 text-zinc-400"}`}>
-                🛟 Soporte
-              </button>
-            </div>
-            <button type="button" onClick={() => setMostrarChat(false)} className="text-zinc-500 hover:text-white w-7 h-7 flex items-center justify-center">✕</button>
-          </div>
-          <div className="flex-1 min-h-0">
-            <ChatAsistencia
-              viajeId={String(viaje.id)}
-              usuarioId={usuarioId}
-              usuarioRol="cliente"
-              usuarioNombre={usuarioNombre}
-              tipoChat={tipoChatCliente}
-              modoInline
-            />
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ─── Componente principal ─────────────────────────────────────────────────────
-export default function PanelClientePage() {
-  const { autorizado } = useProtegerRuta("cliente");
-
-  const [viajes, setViajes]             = useState<any[]>([]);
-  const [paradasPorViaje, setParadasPorViaje] = useState<Record<string, any[]>>({});
-  const [choferPorViaje, setChoferPorViaje]   = useState<Record<string, any>>({});
-  const [cargando, setCargando]         = useState(true);
-  const [viajeSeleccionado, setViajeSeleccionado] = useState<any>(null);
-  const [mostrarHistorial, setMostrarHistorial]   = useState(false);
-  const [alerta, setAlerta]             = useState<string | null>(null);
-  // Chat por viaje en la lista
-  const [chatListaViajeId, setChatListaViajeId]   = useState<string | null>(null);
-  const [tipoChatLista, setTipoChatLista]         = useState<"viaje" | "soporte_cliente">("viaje");
-  const chatListaViajeIdRef = useRef<string | null>(null);
-  const tipoChatListaRef    = useRef<"viaje" | "soporte_cliente">("viaje");
-  // No leídos por viaje
-  const [noLeidosPorViaje, setNoLeidosPorViaje]   = useState<Record<string, Record<string, number>>>({});
-  // Alerta de mensaje nuevo
-  const [alertaMensaje, setAlertaMensaje]         = useState<string | null>(null);
-  const alertaTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Silencio por sector
-  const [silenciarChatViaje, setSilenciarChatViaje]           = useState(false);
-  const [silenciarSoporteCliente, setSilenciarSoporteCliente] = useState(false);
-  const silenciarChatViajeRef      = useRef(false);
-  const silenciarSoporteClienteRef = useRef(false);
-  const viajesActivosIdsRef        = useRef<Set<string>>(new Set());
-  const noLeidosPorViajeRef        = useRef<Record<string, Record<string, number>>>({});
-
-  const audioRef       = useRef<HTMLAudioElement | null>(null);
-  const ultimoEstadoRef = useRef<Record<string, string>>({});
-
-  const usuario = useMemo(() => {
-    if (typeof window === "undefined") return null;
-    const u = localStorage.getItem("usuario");
-    return u ? JSON.parse(u) : null;
-  }, []);
-
-  const viajesActivos   = useMemo(() => viajes.filter(v => ESTADOS_ACTIVOS.includes(v.estado || "pendiente")), [viajes]);
-  const viajesHistorial = useMemo(() => viajes.filter(v => ESTADOS_HISTORIAL.includes(v.estado)), [viajes]);
-
-  const cargarViajes = async () => {
-    if (!usuario?.id) return;
-    const res = await fetch("/api/cargas/historial-cliente", {
-      headers: { "x-user-id": String(usuario.id) },
-    });
-    if (!res.ok) return;
-    const { cargas: todos = [] } = await res.json() as { cargas: any[] };
-    setViajes(todos);
-
-    // Detectar cambios de estado para alerta sonora
-    todos.forEach(v => {
-      const estadoPrev = ultimoEstadoRef.current[String(v.id)];
-      const estadoActual = v.estado || "pendiente";
-      if (estadoPrev && estadoPrev !== estadoActual) {
-        setAlerta(estadoActual);
-        audioRef.current?.play().catch(() => {});
-        setTimeout(() => setAlerta(null), 4000);
-      }
-      ultimoEstadoRef.current[String(v.id)] = estadoActual;
-    });
-
-    // Cargar paradas de viajes activos
-    const ids = todos.map(v => v.id);
-    if (ids.length > 0) {
-      const { data: dp } = await supabase.from("paradas_viaje").select("*").in("carga_id", ids).order("orden", { ascending: true });
-      if (dp) {
-        const agrup: Record<string, any[]> = {};
-        dp.forEach(p => {
-          const k = String(p.carga_id);
-          if (!agrup[k]) agrup[k] = [];
-          agrup[k].push(p);
-        });
-        setParadasPorViaje(agrup);
-      }
-
-      // Cargar info choferes
-      const choferIds = [...new Set(todos.filter(v => v.chofer_id && String(v.chofer_id).length > 10).map(v => String(v.chofer_id)))];
-      if (choferIds.length > 0) {
-        const { data: dc } = await supabase.from("usuarios").select("id, nombre, vehiculo, telefono, bateria_nivel, bateria_cargando, ultima_senal_at, online").in("id", choferIds);
-        if (dc) {
-          const map: Record<string, any> = {};
-          todos.forEach(v => {
-            if (v.chofer_id) {
-              const c = dc.find(ch => ch.id === v.chofer_id);
-              if (c) map[String(v.id)] = c;
-            }
-          });
-          setChoferPorViaje(map);
-        }
-      }
-    }
-    setCargando(false);
-  };
-
-  useEffect(() => {
-    cargarViajes();
-    if (!usuario?.id) return;
-
-    const canal = supabase.channel(`panel-cliente-${usuario.id}`)
-      .on("postgres_changes", { event: "*", schema: "public", table: "cargas", filter: `cliente_id=eq.${usuario.id}` }, () => cargarViajes())
-      .on("postgres_changes", { event: "*", schema: "public", table: "paradas_viaje" }, () => cargarViajes())
-      .subscribe();
-
-    const intervalo = setInterval(cargarViajes, 5000);
-    return () => { supabase.removeChannel(canal); clearInterval(intervalo); };
-  }, [usuario?.id]);
-
-  // Sincronizar refs con estados actuales
-  useEffect(() => { chatListaViajeIdRef.current     = chatListaViajeId; },        [chatListaViajeId]);
-  useEffect(() => { tipoChatListaRef.current        = tipoChatLista; },           [tipoChatLista]);
-  useEffect(() => { silenciarChatViajeRef.current   = silenciarChatViaje; },      [silenciarChatViaje]);
-  useEffect(() => { silenciarSoporteClienteRef.current = silenciarSoporteCliente; }, [silenciarSoporteCliente]);
-  useEffect(() => {
-    viajesActivosIdsRef.current = new Set(viajesActivos.map(v => String(v.id)));
-  }, [viajesActivos]);
-
-  // ── Carga inicial de no leídos (re-ejecuta con viajesActivos) ──────────────
-  useEffect(() => {
-    if (!usuario?.id || viajesActivos.length === 0) return;
-    const uid = usuario.id;
-    const cargarTodosNoLeidos = async () => {
-      const nuevoConteo: Record<string, Record<string, number>> = {};
-      await Promise.all(viajesActivos.map(async (v) => {
-        const vid = String(v.id);
-        const headers = { "x-user-id": uid };
-        const [resViaje, resSoporte] = await Promise.all([
-          fetch(`/api/chat/no-leidos?viaje_id=${v.id}&tipo_chat=viaje`,           { headers }).then(r => r.ok ? r.json() : { count: 0 }),
-          fetch(`/api/chat/no-leidos?viaje_id=${v.id}&tipo_chat=soporte_cliente`, { headers }).then(r => r.ok ? r.json() : { count: 0 }),
-        ]);
-        nuevoConteo[vid] = { viaje: resViaje.count ?? 0, soporte_cliente: resSoporte.count ?? 0 };
-      }));
-      setNoLeidosPorViaje(nuevoConteo);
-    };
-    cargarTodosNoLeidos();
-  }, [viajesActivos]);
-
-  // Mantener ref sincronizado para Realtime sin stale closure
-  useEffect(() => {
-    noLeidosPorViajeRef.current = noLeidosPorViaje;
-  }, [noLeidosPorViaje]);
-
-  // ── Listener externo de mensajes (siempre activo, sin stale closure) ───────
-  useEffect(() => {
-    if (!usuario?.id) return;
-    const uid = usuario.id;
-
-    // Con RLS ON payload.new llega vacío → usamos el evento como trigger y pedimos la API
-    const actualizarNoLeidos = async () => {
-      const ids = Array.from(viajesActivosIdsRef.current);
-      if (ids.length === 0) return;
-      const headers = { "x-user-id": uid };
-      const nuevoConteo: Record<string, Record<string, number>> = {};
-      await Promise.all(ids.map(async (vid) => {
-        const [resViaje, resSoporte] = await Promise.all([
-          fetch(`/api/chat/no-leidos?viaje_id=${vid}&tipo_chat=viaje`,           { headers }).then(r => r.ok ? r.json() : { count: 0 }),
-          fetch(`/api/chat/no-leidos?viaje_id=${vid}&tipo_chat=soporte_cliente`, { headers }).then(r => r.ok ? r.json() : { count: 0 }),
-        ]);
-        nuevoConteo[vid] = { viaje: resViaje.count ?? 0, soporte_cliente: resSoporte.count ?? 0 };
-      }));
-
-      for (const vid of ids) {
-        const prevViaje   = noLeidosPorViajeRef.current[vid]?.viaje          ?? 0;
-        const prevSoporte = noLeidosPorViajeRef.current[vid]?.soporte_cliente ?? 0;
-        const nuevoViaje   = nuevoConteo[vid]?.viaje          ?? 0;
-        const nuevoSoporte = nuevoConteo[vid]?.soporte_cliente ?? 0;
-
-        if (nuevoViaje > prevViaje && !(chatListaViajeIdRef.current === vid && tipoChatListaRef.current === "viaje")) {
-          if (alertaTimerRef.current) clearTimeout(alertaTimerRef.current);
-          setAlertaMensaje("🚛 Chofer · Nuevo mensaje");
-          alertaTimerRef.current = setTimeout(() => setAlertaMensaje(null), 4000);
-          if (!silenciarChatViajeRef.current) playChatSound();
-        }
-        if (nuevoSoporte > prevSoporte && !(chatListaViajeIdRef.current === vid && tipoChatListaRef.current === "soporte_cliente")) {
-          if (alertaTimerRef.current) clearTimeout(alertaTimerRef.current);
-          setAlertaMensaje("🛟 Soporte TILA · Nuevo mensaje");
-          alertaTimerRef.current = setTimeout(() => setAlertaMensaje(null), 4000);
-          if (!silenciarSoporteClienteRef.current) playChatSound();
-        }
-      }
-
-      setNoLeidosPorViaje(nuevoConteo);
-    };
-
-    const canalMensajes = supabase
-      .channel(`registro-cliente-mensajes-${uid}`)
-      .on("postgres_changes", { event: "INSERT", schema: "public", table: "mensajes_viaje" },
-        (_payload) => {
-          console.log("CHAT ALERT trigger (RLS-safe)");
-          actualizarNoLeidos();
-        })
-      .subscribe((status) => {
-        console.log("CHAT ALERT realtime status", status);
+    setLoading(true);
+    try {
+      const res = await fetch("/api/usuarios/registro-cliente", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ nombre, email, password, telefono, acepta_terminos: true }),
       });
 
-    // Polling fallback por si Realtime no dispara con RLS sin SELECT policy
-    const polling = setInterval(() => actualizarNoLeidos(), 4000);
+      const data = await res.json();
 
-    return () => {
-      clearInterval(polling);
-      supabase.removeChannel(canalMensajes);
-      if (alertaTimerRef.current) clearTimeout(alertaTimerRef.current);
-    };
-  }, [usuario?.id]);
+      if (!res.ok) {
+        setError(data.error ?? "Error al crear la cuenta");
+        return;
+      }
 
-  // Sincronizar viaje seleccionado con datos frescos
-  useEffect(() => {
-    if (!viajeSeleccionado) return;
-    const actualizado = viajes.find(v => v.id === viajeSeleccionado.id);
-    if (actualizado) setViajeSeleccionado(actualizado);
-  }, [viajes]);
+      // Guardar solo datos seguros en localStorage (sin password)
+      localStorage.setItem("usuario", JSON.stringify(data.usuario));
+      router.push("/panel-cliente");
 
-  if (!autorizado) return null;
-
-  // Mostrar seguimiento de viaje seleccionado
-  if (viajeSeleccionado) {
-    return (
-      <SeguimientoViaje
-        viaje={viajeSeleccionado}
-        paradas={paradasPorViaje[String(viajeSeleccionado.id)] || []}
-        choferInfo={choferPorViaje[String(viajeSeleccionado.id)]}
-        usuarioId={usuario?.id || ""}
-        usuarioNombre={usuario?.nombre || "Cliente"}
-        onCerrar={() => setViajeSeleccionado(null)}
-      />
-    );
-  }
+    } catch {
+      setError("Error de conexión. Intentá de nuevo.");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   return (
-    <main className="min-h-screen bg-black text-white p-4 md:p-6">
-      <audio ref={audioRef} src="/sounds/alerta-viaje.mp3" preload="auto" />
+    <main className="min-h-screen bg-black text-white flex flex-col items-center justify-center px-4 py-8">
+      <section className="w-full max-w-md flex flex-col items-center">
 
-      {/* ── TOAST MENSAJE NUEVO ──────────────────────────────────────────── */}
-      <ChatToast texto={alertaMensaje} />
+        <img
+          src="/logo-tila.png"
+          alt="TILA"
+          className="w-full max-w-[320px] max-h-[30vh] object-contain mb-8 animate-pulse drop-shadow-[0_0_40px_rgba(250,204,21,0.45)]"
+        />
 
-      {/* Alerta cambio de estado */}
-      {alerta && (
-        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-6 pointer-events-none">
-          <div className="bg-yellow-400 text-black rounded-3xl p-8 text-center animate-pulse shadow-2xl max-w-sm w-full">
-            <p className="text-lg font-black mb-1">🚨 ACTUALIZACIÓN</p>
-            <h2 className="text-3xl font-black">{alerta}</h2>
-          </div>
-        </div>
-      )}
+        <h1 className="text-3xl font-black text-yellow-400 mb-1">Crear cuenta</h1>
+        <p className="text-zinc-500 text-sm mb-8">Registrate como cliente para publicar cargas</p>
 
-      {/* Header */}
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="text-3xl md:text-4xl font-black text-yellow-400">Mis viajes</h1>
-          <p className="text-zinc-500 text-sm">{viajesActivos.length > 0 ? `${viajesActivos.length} activo${viajesActivos.length !== 1 ? "s" : ""}` : "Sin viajes activos"}</p>
-        </div>
-        <div className="flex items-center gap-3">
-          <Link href="/publicar" className="bg-yellow-400 text-black font-black px-4 py-2 rounded-xl text-sm">+ Nuevo</Link>
-          <BotonCerrarSesion />
-        </div>
-      </div>
+        <div className="w-full space-y-4">
+          <input
+            type="text"
+            placeholder="Nombre completo"
+            value={nombre}
+            onChange={(e) => setNombre(e.target.value)}
+            className="w-full bg-zinc-900 border border-zinc-700 text-white p-4 rounded-2xl outline-none focus:border-yellow-400"
+          />
+          <input
+            type="email"
+            placeholder="Email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            className="w-full bg-zinc-900 border border-zinc-700 text-white p-4 rounded-2xl outline-none focus:border-yellow-400"
+          />
+          <input
+            type="tel"
+            placeholder="Teléfono (opcional)"
+            value={telefono}
+            onChange={(e) => setTelefono(e.target.value)}
+            className="w-full bg-zinc-900 border border-zinc-700 text-white p-4 rounded-2xl outline-none focus:border-yellow-400"
+          />
+          <input
+            type="password"
+            placeholder="Contraseña (mínimo 6 caracteres)"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            className="w-full bg-zinc-900 border border-zinc-700 text-white p-4 rounded-2xl outline-none focus:border-yellow-400"
+          />
+          <input
+            type="password"
+            placeholder="Confirmar contraseña"
+            value={confirmar}
+            onChange={(e) => setConfirmar(e.target.value)}
+            className="w-full bg-zinc-900 border border-zinc-700 text-white p-4 rounded-2xl outline-none focus:border-yellow-400"
+          />
 
-      {/* Soporte */}
-      <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-3 mb-5 flex items-center gap-2 flex-wrap">
-        <p className="text-zinc-400 text-xs font-black flex-1">🆘 Soporte TILA</p>
-        <a href={`https://wa.me/${SOPORTE_WHATSAPP}`} target="_blank" rel="noreferrer"
-          className="bg-green-600 text-white font-black px-3 py-1.5 rounded-xl text-xs">💬 WhatsApp</a>
-        <a href={`mailto:${SOPORTE_EMAIL}`}
-          className="bg-zinc-700 text-white font-black px-3 py-1.5 rounded-xl text-xs">📧 Email</a>
-        <button type="button" onClick={() => setSilenciarChatViaje(v => !v)}
-          title={silenciarChatViaje ? "Activar sonido chat chofer" : "Silenciar chat chofer"}
-          className={`px-3 py-1.5 rounded-xl text-xs font-black transition ${silenciarChatViaje ? "bg-zinc-700 text-zinc-500" : "bg-zinc-800 text-zinc-300 hover:bg-zinc-700"}`}>
-          {silenciarChatViaje ? "💬🔕" : "💬🔔"}
-        </button>
-        <button type="button" onClick={() => setSilenciarSoporteCliente(v => !v)}
-          title={silenciarSoporteCliente ? "Activar sonido soporte TILA" : "Silenciar soporte TILA"}
-          className={`px-3 py-1.5 rounded-xl text-xs font-black transition ${silenciarSoporteCliente ? "bg-zinc-700 text-zinc-500" : "bg-zinc-800 text-zinc-300 hover:bg-zinc-700"}`}>
-          {silenciarSoporteCliente ? "🛟🔕" : "🛟🔔"}
-        </button>
-      </div>
+          <label className="flex items-start gap-3 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={aceptaTerminos}
+              onChange={(e) => setAceptaTerminos(e.target.checked)}
+              className="mt-1 accent-yellow-400 w-4 h-4 flex-shrink-0"
+            />
+            <span className="text-zinc-400 text-sm">
+              Acepto los{" "}
+              <Link href="/terminos" target="_blank" className="text-yellow-400 hover:underline">Términos y Condiciones</Link>
+              {" "}y la{" "}
+              <Link href="/privacidad" target="_blank" className="text-yellow-400 hover:underline">Política de Privacidad</Link>
+            </span>
+          </label>
 
-      {cargando ? (
-        <div className="text-center py-12"><p className="text-yellow-400 font-black animate-pulse">Cargando viajes...</p></div>
-      ) : viajesActivos.length === 0 ? (
-        <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-10 text-center mb-6">
-          <h2 className="text-2xl font-black mb-2">Sin viajes activos</h2>
-          <p className="text-zinc-500 mb-6">Publicá una carga para comenzar.</p>
-          <Link href="/publicar" className="inline-block bg-yellow-400 text-black font-black px-8 py-4 rounded-2xl">Publicar carga</Link>
-        </div>
-      ) : (
-        <div className="space-y-3 mb-6">
-          {viajesActivos.map(viaje => {
-            const chofer   = choferPorViaje[String(viaje.id)];
-            const paradas  = paradasPorViaje[String(viaje.id)] || [];
-            const finalizado = viaje.estado === "Viaje finalizado";
-            return (
-              <div key={viaje.id} className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4">
-                {/* Código + estado */}
-                <div className="flex items-center justify-between mb-2">
-                  <p className="text-zinc-500 text-xs font-black">VIAJE #{viaje.id}</p>
-                  <span className={`text-xs font-black px-2 py-1 rounded-lg ${colorEstado(viaje.estado || "pendiente")}`}>
-                    {viaje.estado || "Pendiente"}
-                  </span>
-                </div>
-
-                {/* Ruta */}
-                <p className="text-yellow-400 font-black text-base mb-1 truncate">{viaje.origen} → {viaje.destino}</p>
-                <p className="text-zinc-500 text-xs mb-3">{formatearFecha(viaje.created_at)}{viaje.km_estimados ? ` · ${viaje.km_estimados} km` : ""}</p>
-
-                {/* Chofer */}
-                {chofer && (
-                  <div className="flex items-center gap-2 mb-3 text-xs text-zinc-400">
-                    <span className={`w-2 h-2 rounded-full flex-shrink-0 ${chofer.online ? "bg-green-500" : "bg-zinc-600"}`} />
-                    <span>🚛 {chofer.nombre}</span>
-                    {viaje.velocidad_kmh != null && <span className="text-yellow-400">{viaje.velocidad_kmh} km/h</span>}
-                    <span>{tiempoRelativo(chofer.ultima_senal_at)}</span>
-                  </div>
-                )}
-
-                {/* Paradas mini */}
-                {paradas.length > 0 && (
-                  <div className="flex gap-1 mb-3 overflow-x-auto">
-                    {paradas.map((p, i) => (
-                      <span key={p.id} className={`flex-shrink-0 text-xs px-2 py-1 rounded-lg font-black ${
-                        p.estado === "completada" ? "bg-green-900/50 text-green-400" :
-                        p.estado === "en_curso"   ? "bg-yellow-400/20 text-yellow-400" :
-                        "bg-zinc-800 text-zinc-500"
-                      }`}>{String.fromCharCode(65+i)}</span>
-                    ))}
-                  </div>
-                )}
-
-                {/* Botones de chat por viaje */}
-                {viaje.estado && !["pendiente", "pendiente_pago"].includes(viaje.estado) && usuario?.id && (
-                  <div className="flex gap-2">
-                    <button type="button"
-                      onClick={() => {
-                        const id = String(viaje.id);
-                        if (chatListaViajeId === id && tipoChatLista === "viaje") { setChatListaViajeId(null); }
-                        else {
-                          setChatListaViajeId(id); setTipoChatLista("viaje");
-                          setNoLeidosPorViaje(prev => ({ ...prev, [id]: { ...(prev[id] ?? {}), viaje: 0 } }));
-                          setAlertaMensaje(null);
-                          if (alertaTimerRef.current) clearTimeout(alertaTimerRef.current);
-                        }
-                      }}
-                      className={`relative flex-1 py-2 rounded-xl text-xs font-black transition ${chatListaViajeId === String(viaje.id) && tipoChatLista === "viaje" ? "bg-blue-600 text-white" : (noLeidosPorViaje[String(viaje.id)]?.viaje ?? 0) > 0 ? "bg-blue-900 border border-blue-500 text-blue-300" : "bg-zinc-800 text-zinc-300 hover:bg-zinc-700"}`}>
-                      💬 Chat con chofer
-                      {(noLeidosPorViaje[String(viaje.id)]?.viaje ?? 0) > 0 && !(chatListaViajeId === String(viaje.id) && tipoChatLista === "viaje") && (
-                        <span className="absolute -top-1.5 -right-1.5 bg-red-500 text-white text-xs font-black rounded-full min-w-5 h-5 flex items-center justify-center px-1 animate-pulse">
-                          {noLeidosPorViaje[String(viaje.id)].viaje}
-                        </span>
-                      )}
-                    </button>
-                    <button type="button"
-                      onClick={() => {
-                        const id = String(viaje.id);
-                        if (chatListaViajeId === id && tipoChatLista === "soporte_cliente") { setChatListaViajeId(null); }
-                        else {
-                          setChatListaViajeId(id); setTipoChatLista("soporte_cliente");
-                          setNoLeidosPorViaje(prev => ({ ...prev, [id]: { ...(prev[id] ?? {}), soporte_cliente: 0 } }));
-                          setAlertaMensaje(null);
-                          if (alertaTimerRef.current) clearTimeout(alertaTimerRef.current);
-                        }
-                      }}
-                      className={`relative flex-1 py-2 rounded-xl text-xs font-black transition ${chatListaViajeId === String(viaje.id) && tipoChatLista === "soporte_cliente" ? "bg-orange-600 text-white" : (noLeidosPorViaje[String(viaje.id)]?.soporte_cliente ?? 0) > 0 ? "bg-orange-900 border border-orange-500 text-orange-300" : "bg-zinc-800 text-zinc-300 hover:bg-zinc-700"}`}>
-                      🛟 Soporte TILA
-                      {(noLeidosPorViaje[String(viaje.id)]?.soporte_cliente ?? 0) > 0 && !(chatListaViajeId === String(viaje.id) && tipoChatLista === "soporte_cliente") && (
-                        <span className="absolute -top-1.5 -right-1.5 bg-red-500 text-white text-xs font-black rounded-full min-w-5 h-5 flex items-center justify-center px-1 animate-pulse">
-                          {noLeidosPorViaje[String(viaje.id)].soporte_cliente}
-                        </span>
-                      )}
-                    </button>
-                  </div>
-                )}
-
-                {/* Panel chat inline */}
-                {chatListaViajeId === String(viaje.id) && usuario?.id && (
-                  <div className="mt-1 border border-zinc-700 rounded-3xl overflow-hidden flex flex-col" style={{ height: 400 }}>
-                    <div className="flex-shrink-0 flex gap-2 px-3 pt-2 pb-2 bg-zinc-800 border-b border-zinc-700">
-                      <button type="button"
-                        onClick={() => { setTipoChatLista("viaje"); setNoLeidosPorViaje(prev => ({ ...prev, [String(viaje.id)]: { ...(prev[String(viaje.id)] ?? {}), viaje: 0 } })); }}
-                        className={`px-3 py-1 rounded-xl text-xs font-black transition ${tipoChatLista === "viaje" ? "bg-blue-600 text-white" : "bg-zinc-700 text-zinc-400"}`}>
-                        💬 Con chofer
-                      </button>
-                      <button type="button"
-                        onClick={() => { setTipoChatLista("soporte_cliente"); setNoLeidosPorViaje(prev => ({ ...prev, [String(viaje.id)]: { ...(prev[String(viaje.id)] ?? {}), soporte_cliente: 0 } })); }}
-                        className={`px-3 py-1 rounded-xl text-xs font-black transition ${tipoChatLista === "soporte_cliente" ? "bg-orange-600 text-white" : "bg-zinc-700 text-zinc-400"}`}>
-                        🛟 Soporte TILA
-                      </button>
-                      <button type="button" onClick={() => setChatListaViajeId(null)} className="ml-auto text-zinc-500 font-black px-2">✕</button>
-                    </div>
-                    <div className="flex-1 min-h-0">
-                      <ChatAsistencia
-                        viajeId={String(viaje.id)}
-                        usuarioId={usuario.id}
-                        usuarioRol="cliente"
-                        usuarioNombre={usuario.nombre || "Cliente"}
-                        tipoChat={tipoChatLista}
-                        modoInline
-                      />
-                    </div>
-                  </div>
-                )}
-
-                {/* Botón */}
-                <button
-                  type="button"
-                  onClick={() => setViajeSeleccionado(viaje)}
-                  className="w-full py-3 rounded-xl font-black text-sm bg-yellow-400 text-black hover:bg-yellow-300 transition"
-                >
-                  {viaje.lat && viaje.lng ? "📡 Ver ubicación en vivo" : "👁️ Ver seguimiento"}
-                </button>
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      {/* Historial colapsable */}
-      {viajesHistorial.length > 0 && (
-        <div className="mb-6">
-          <button type="button" onClick={() => setMostrarHistorial(v => !v)}
-            className="w-full flex items-center justify-between bg-zinc-900 border border-zinc-800 rounded-2xl px-4 py-3 text-sm font-black text-zinc-400 mb-2">
-            <span>📋 Historial ({viajesHistorial.length} viaje{viajesHistorial.length !== 1 ? "s" : ""})</span>
-            <span>{mostrarHistorial ? "▲" : "▼"}</span>
-          </button>
-          {mostrarHistorial && (
-            <div className="space-y-2">
-              {viajesHistorial.map(viaje => (
-                <div key={viaje.id} className="bg-zinc-900/60 border border-zinc-800 rounded-xl p-3">
-                  <div className="flex items-center justify-between mb-1">
-                    <p className="text-zinc-500 text-xs">VIAJE #{viaje.id}</p>
-                    <span className={`text-xs font-black px-2 py-0.5 rounded-lg ${colorEstado(viaje.estado)}`}>{viaje.estado}</span>
-                  </div>
-                  <p className="text-zinc-300 text-sm font-black truncate">{viaje.origen} → {viaje.destino}</p>
-                  <p className="text-zinc-600 text-xs mt-1">{formatearFecha(viaje.hora_finalizacion || viaje.created_at)}</p>
-                  {viaje.precio_cliente > 0 && (
-                    <p className="text-green-400 text-xs font-black mt-1">${Number(viaje.precio_cliente).toLocaleString()}</p>
-                  )}
-                </div>
-              ))}
+          {error && (
+            <div className="bg-red-900/50 border border-red-700 text-red-300 text-sm rounded-2xl px-4 py-3">
+              {error}
             </div>
           )}
+
+          <button
+            onClick={registrar}
+            disabled={loading}
+            className={`w-full font-black text-xl py-5 rounded-3xl transition ${
+              loading
+                ? "bg-zinc-700 text-zinc-400 cursor-not-allowed"
+                : "bg-yellow-400 hover:bg-yellow-500 text-black hover:scale-105"
+            }`}
+          >
+            {loading ? "CREANDO CUENTA..." : "CREAR CUENTA"}
+          </button>
         </div>
-      )}
+
+        <p className="text-zinc-600 text-sm mt-8">
+          ¿Ya tenés cuenta?{" "}
+          <Link href="/login" className="text-yellow-400 hover:underline">Ingresá acá</Link>
+        </p>
+
+      </section>
     </main>
   );
 }

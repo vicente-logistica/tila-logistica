@@ -16,7 +16,6 @@ import {
   FOTOS_VEHICULO,
   TIPOS_VEHICULO_CHOFER,
   subirDocChofer,
-  actualizarCampoVehiculo,
 } from "@/app/lib/vehiculos";
 
 
@@ -105,7 +104,8 @@ export default function RegistroChoferPage() {
 
 
 
-  const [aceptaTerminos, setAceptaTerminos] = useState(false);
+  const [aceptaTerminos,   setAceptaTerminos]   = useState(false);
+  const [aceptaContrato,   setAceptaContrato]   = useState(false);
 
   const [archivos, setArchivos] = useState<Record<string, File>>({});
 
@@ -213,7 +213,12 @@ export default function RegistroChoferPage() {
     }
 
     if (!aceptaTerminos) {
-      alert("Debés aceptar los Términos y Condiciones, la Política de Privacidad y el Contrato de Transportista para continuar.");
+      alert("Debés aceptar los Términos y Condiciones y la Política de Privacidad para continuar.");
+      return;
+    }
+
+    if (!aceptaContrato) {
+      alert("Debés aceptar el Contrato de Transportista Independiente para continuar.");
       return;
     }
 
@@ -229,52 +234,35 @@ export default function RegistroChoferPage() {
 
 
 
-    const { data: nuevoUsuario, error } = await supabase.from("usuarios").insert([{
+    // INSERT de usuario via API server-side (hashea la contraseña)
+    const resUsuario = await fetch("/api/usuarios/registro-chofer-usuario", {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        nombre, email, password, telefono,
+        dni, cuit_cuil: cuitCuil,
+        licencia, cnrt_ruta: cnrtRuta,
+        patente: patente.trim().toUpperCase(),
+        tipo_vehiculo: tipoVehiculo,
+        tipo_carroceria: tipoCarroceria,
+        categoria_legal: categoriaLegal,
+        zona_operativa: zonaOperativa,
+        capacidad_carga: capacidadCarga,
+        seguro_carga: seguroCarga,
+        metodo_cobro: metodoCobro,
+        alias_cbu_cvu: aliasCbuCvu,
+        titular_cuenta: titularCuenta,
+        banco_billetera: bancoBilletera,
+        acepta_terminos: true,
+        acepta_contrato: aceptaContrato,
+        fecha_aceptacion_terminos: new Date().toISOString(),
+      }),
+    });
 
-      nombre, email, password, telefono,
+    const dataUsuario = await resUsuario.json();
+    if (!resUsuario.ok) { alert("Error: " + (dataUsuario.error ?? "Error al crear cuenta")); setLoading(false); return; }
 
-      rol: "chofer",
-
-      acepta_terminos: true,
-      fecha_aceptacion_terminos: new Date().toISOString(),
-
-      dni, cuit_cuil: cuitCuil,
-
-      licencia, cnrt_ruta: cnrtRuta,
-
-      patente: patente.trim().toUpperCase(),
-
-      vehiculo: tipoVehiculo,
-
-      categoria_legal: categoriaLegal,
-
-      tipo_vehiculo: tipoVehiculo,
-
-      tipo_carroceria: tipoCarroceria,
-
-      zona_operativa: zonaOperativa,
-
-      capacidad_carga: capacidadCarga,
-
-      seguro_carga: seguroCarga,
-
-      metodo_cobro: metodoCobro,
-
-      alias_cbu_cvu: aliasCbuCvu,
-
-      titular_cuenta: titularCuenta,
-
-      banco_billetera: bancoBilletera,
-
-      estado_validacion: "pendiente",
-
-      estado_aprobacion: "pendiente",
-
-    }]).select().single();
-
-
-
-    if (error) { alert("Error: " + error.message); setLoading(false); return; }
+    const nuevoUsuario = dataUsuario.usuario;
 
 
 
@@ -282,49 +270,31 @@ export default function RegistroChoferPage() {
 
 
 
-    const { data: nuevoVehiculo, error: errorVehiculo } = await supabase.from("vehiculos").insert([{
+    // Crear vehículo vía API — fuerza chofer_id y estado_validacion server-side
+    // También setea usuarios.vehiculo_activo_id si es el primero
+    const resVehiculo = await fetch("/api/chofer/vehiculos", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-user-id": choferIdNuevo },
+      body: JSON.stringify({
+        marca: marca.trim(),
+        modelo: modelo.trim(),
+        anio: Number(anio),
+        patente: patente.trim().toUpperCase(),
+        tipo_vehiculo: tipoVehiculo,
+        capacidad_kg: capacidadKg,
+        seguro_vencimiento: seguroVenc,
+        vtv_rto_vencimiento: vtvVenc,
+      }),
+    });
 
-      chofer_id: choferIdNuevo,
-
-      marca: marca.trim(),
-
-      modelo: modelo.trim(),
-
-      anio: Number(anio),
-
-      patente: patente.trim().toUpperCase(),
-
-      tipo_vehiculo: tipoVehiculo,
-
-      capacidad_kg: capacidadKg,
-
-      seguro_vencimiento: seguroVenc,
-
-      vtv_rto_vencimiento: vtvVenc,
-
-      activo: true,
-
-      estado_validacion: "pendiente",
-
-    }]).select().single();
-
-
-
-    if (errorVehiculo) {
-
-      alert("Error al registrar vehículo: " + errorVehiculo.message);
-
+    const dataVehiculo = await resVehiculo.json();
+    if (!resVehiculo.ok) {
+      alert("Error al registrar vehículo: " + (dataVehiculo.error ?? "Error desconocido"));
       setLoading(false);
-
       return;
-
     }
 
-
-
-    await supabase.from("usuarios").update({ vehiculo_activo_id: nuevoVehiculo.id }).eq("id", choferIdNuevo);
-
-
+    const nuevoVehiculoId = dataVehiculo.vehiculo?.id;
 
     for (const [tipo, archivo] of Object.entries(archivos)) {
 
@@ -332,31 +302,31 @@ export default function RegistroChoferPage() {
 
       if (!docInfo) continue;
 
-
-
+      // Upload a Storage + UPSERT en documentacion_chofer (ya migrado a server-side en subirDocChofer)
       const url = await subirDocChofer(supabase, choferIdNuevo, tipo, docInfo.bucket, archivo);
 
       if (!url) continue;
 
-
-
+      // Si el tipo corresponde a un campo de URL del vehículo, actualizar vía API
       const campoVehiculo = MAP_DOC_VEHICULO[tipo];
 
-      if (campoVehiculo) {
-
-        await actualizarCampoVehiculo(supabase, nuevoVehiculo.id, campoVehiculo, url);
-
+      if (campoVehiculo && nuevoVehiculoId) {
+        await fetch(`/api/chofer/vehiculos/${nuevoVehiculoId}/docs`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json", "x-user-id": choferIdNuevo },
+          body: JSON.stringify({ [campoVehiculo]: url }),
+        });
       }
 
     }
 
-
-
-    // Guardar código de antecedentes
+    // Guardar código de antecedentes vía API — nunca directo a documentacion_chofer
     if (codigoAntecedentes.trim()) {
-      await supabase
-        .from("documentacion_chofer")
-        .upsert([{ chofer_id: choferIdNuevo, tipo: "antecedentes_codigo", url: codigoAntecedentes.trim() }], { onConflict: "chofer_id,tipo" });
+      await fetch("/api/chofer/documentacion", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-user-id": choferIdNuevo },
+        body: JSON.stringify({ tipo: "antecedentes_codigo", url: codigoAntecedentes.trim() }),
+      });
     }
 
     setLoading(false);
@@ -668,7 +638,7 @@ export default function RegistroChoferPage() {
 
 
 
-          {/* Aceptación de términos */}
+          {/* Aceptación de términos y privacidad */}
           <label className={`flex items-start gap-3 cursor-pointer rounded-2xl border p-4 transition ${aceptaTerminos ? "border-yellow-400 bg-zinc-800" : "border-zinc-700 bg-zinc-900"}`}>
             <input
               type="checkbox"
@@ -678,18 +648,31 @@ export default function RegistroChoferPage() {
             />
             <span className="text-sm text-zinc-300 leading-relaxed">
               He leído y acepto los{" "}
-              <a href="/terminos" target="_blank" rel="noreferrer" className="text-yellow-400 hover:underline font-black">Términos y Condiciones</a>,
-              la{" "}
+              <a href="/terminos" target="_blank" rel="noreferrer" className="text-yellow-400 hover:underline font-black">Términos y Condiciones</a>
+              {" "}y la{" "}
               <a href="/privacidad" target="_blank" rel="noreferrer" className="text-yellow-400 hover:underline font-black">Política de Privacidad</a>
-              {" "}y el{" "}
+              {" "}de TILA. *
+            </span>
+          </label>
+
+          {/* Aceptación explícita del Contrato de Transportista */}
+          <label className={`flex items-start gap-3 cursor-pointer rounded-2xl border p-4 transition ${aceptaContrato ? "border-yellow-400 bg-zinc-800" : "border-zinc-700 bg-zinc-900"}`}>
+            <input
+              type="checkbox"
+              checked={aceptaContrato}
+              onChange={e => setAceptaContrato(e.target.checked)}
+              className="mt-0.5 w-5 h-5 accent-yellow-400 flex-shrink-0"
+            />
+            <span className="text-sm text-zinc-300 leading-relaxed">
+              He leído y acepto el{" "}
               <a href="/contrato-transportista" target="_blank" rel="noreferrer" className="text-yellow-400 hover:underline font-black">Contrato de Transportista Independiente</a>
               {" "}de TILA. *
             </span>
           </label>
 
-          <button type="button" onClick={registrarChofer} disabled={loading || !aceptaTerminos}
+          <button type="button" onClick={registrarChofer} disabled={loading || !aceptaTerminos || !aceptaContrato}
 
-            className={`w-full font-black text-xl py-4 rounded-2xl transition ${!aceptaTerminos ? "bg-zinc-700 text-zinc-500 cursor-not-allowed" : "bg-yellow-400 hover:bg-yellow-500 text-black"}`}>
+            className={`w-full font-black text-xl py-4 rounded-2xl transition ${(!aceptaTerminos || !aceptaContrato) ? "bg-zinc-700 text-zinc-500 cursor-not-allowed" : "bg-yellow-400 hover:bg-yellow-500 text-black"}`}>
 
             {loading ? "Enviando y subiendo archivos..." : "Enviar solicitud de validación"}
 

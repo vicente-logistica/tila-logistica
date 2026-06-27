@@ -120,9 +120,18 @@ const TarjetaUsuario = ({
       updateData.tipo_carroceria = tipoCarroceria;
       if (tipoVehiculo) updateData.vehiculo = tipoVehiculo;
     }
-    const { error } = await supabase.from("usuarios").update(updateData).eq("id", usuario.id);
-    if (error) { alert("Error al guardar: " + error.message); return; }
-    setEditando(false);
+    try {
+      const res = await fetch(`/api/admin/usuarios/${usuario.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", "x-user-id": usuarioActualId },
+        body: JSON.stringify(updateData),
+      });
+      const data = await res.json();
+      if (!res.ok) { alert("Error al guardar: " + (data.error ?? "Error desconocido")); return; }
+      setEditando(false);
+    } catch {
+      alert("Error de conexión al guardar cambios.");
+    }
   };
 
   const estaEliminado = usuario.eliminado === true;
@@ -1164,12 +1173,23 @@ export default function AdminPage() {
   }, []);
 
   const cargarUsuarios = useCallback(async () => {
-    const { data, error } = await supabase.from("usuarios").select("*").order("created_at", { ascending: false });
-    if (error) { console.error("Error cargando usuarios:", error); return; }
-    const todos = data || [];
-    setTodosUsuarios(todos);
-    setChoferes(todos.filter((u: any) => u.rol === "chofer" && !u.eliminado));
-    setClientes(todos.filter((u: any) => u.rol === "cliente" && !u.eliminado));
+    const uid = typeof window !== "undefined"
+      ? (JSON.parse(localStorage.getItem("usuario") || "{}")).id
+      : null;
+    if (!uid) return;
+    try {
+      const res = await fetch("/api/admin/usuarios", {
+        headers: { "x-user-id": uid },
+      });
+      if (!res.ok) { console.error("Error cargando usuarios:", res.status); return; }
+      const { usuarios: data } = await res.json();
+      const todos = data || [];
+      setTodosUsuarios(todos);
+      setChoferes(todos.filter((u: any) => u.rol === "chofer" && !u.eliminado));
+      setClientes(todos.filter((u: any) => u.rol === "cliente" && !u.eliminado));
+    } catch (err) {
+      console.error("Error cargando usuarios:", err);
+    }
   }, []);
 
   // Sincronizar refs de silencio (sin stale closure en callbacks)
@@ -1268,34 +1288,99 @@ export default function AdminPage() {
   }, [todosUsuarios, busqueda, filtroRol, mostrarEliminados]);
 
   const actualizarCampoUsuario = async (id: string, campo: string, valor: string) => {
-    const { error } = await supabase.from("usuarios").update({ [campo]: valor }).eq("id", id);
-    if (error) { alert("Error: " + error.message); return; }
-    await cargarUsuarios();
+    const uid = typeof window !== "undefined"
+      ? (JSON.parse(localStorage.getItem("usuario") || "{}")).id
+      : null;
+    if (!uid) return;
+    // estado_aprobacion va por el endpoint de acciones de estado
+    const accionPorValor: Record<string, string> = {
+      aprobado:   "aprobar",
+      rechazado:  "rechazar",
+      suspendido: "suspender",
+      pendiente:  "reactivar",
+    };
+    if (campo === "estado_aprobacion" && accionPorValor[valor]) {
+      try {
+        const res = await fetch(`/api/admin/usuarios/${id}/estado`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json", "x-user-id": uid },
+          body: JSON.stringify({ accion: accionPorValor[valor] }),
+        });
+        const data = await res.json();
+        if (!res.ok) { alert("Error: " + (data.error ?? "Error desconocido")); return; }
+        await cargarUsuarios();
+      } catch { alert("Error de conexión."); }
+      return;
+    }
+    // Otros campos van por el endpoint de edición
+    try {
+      const res = await fetch(`/api/admin/usuarios/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", "x-user-id": uid },
+        body: JSON.stringify({ [campo]: valor }),
+      });
+      const data = await res.json();
+      if (!res.ok) { alert("Error: " + (data.error ?? "Error desconocido")); return; }
+      await cargarUsuarios();
+    } catch { alert("Error de conexión."); }
   };
 
   const resetearPassword = async (id: string, nombre: string) => {
-    const nuevaPassword = generarPasswordTemporal();
-    const ok = confirm(`¿Resetear contraseña de ${nombre}?\n\nLa nueva contraseña temporal será:\n${nuevaPassword}\n\nAnotala antes de confirmar.`);
+    const ok = confirm(`¿Resetear contraseña de ${nombre}?\n\nSe generará una contraseña temporal. Anotala cuando aparezca.`);
     if (!ok) return;
-    const { error } = await supabase.from("usuarios").update({ password: nuevaPassword }).eq("id", id);
-    if (error) { alert("Error al resetear: " + error.message); return; }
-    alert(`✅ Contraseña reseteada correctamente.\n\nNueva contraseña temporal:\n${nuevaPassword}\n\nCompartila con el usuario.`);
-    await cargarUsuarios();
+    try {
+      const res = await fetch("/api/admin/reset-password", {
+        method:  "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-user-id":    usuarioActual?.id || "",
+        },
+        body: JSON.stringify({ userId: id }),
+      });
+      const data = await res.json();
+      if (!res.ok) { alert("Error al resetear: " + (data.error ?? "Error desconocido")); return; }
+      alert(`✅ Contraseña reseteada correctamente.\n\nNueva contraseña temporal:\n${data.passwordTemporal}\n\nCompartila con el usuario.`);
+      await cargarUsuarios();
+    } catch {
+      alert("Error de conexión al resetear contraseña.");
+    }
   };
 
   const marcarEliminado = async (id: string, nombre: string, esAdmin: boolean) => {
     if (esAdmin && adminCount <= 1) { alert("No podés eliminar al único administrador."); return; }
     const ok = confirm(`¿Marcar como eliminado a "${nombre}"?\n\nEl usuario no podrá ingresar al sistema. Esta acción se puede revertir desde Admin.`);
     if (!ok) return;
-    const { error } = await supabase.from("usuarios").update({ eliminado: true }).eq("id", id);
-    if (error) { alert("Error: " + error.message); return; }
-    await cargarUsuarios();
+    const uid = typeof window !== "undefined"
+      ? (JSON.parse(localStorage.getItem("usuario") || "{}")).id
+      : null;
+    if (!uid) return;
+    try {
+      const res = await fetch(`/api/admin/usuarios/${id}/estado`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", "x-user-id": uid },
+        body: JSON.stringify({ accion: "eliminar" }),
+      });
+      const data = await res.json();
+      if (!res.ok) { alert("Error: " + (data.error ?? "Error desconocido")); return; }
+      await cargarUsuarios();
+    } catch { alert("Error de conexión."); }
   };
 
   const restaurarUsuario = async (id: string) => {
-    const { error } = await supabase.from("usuarios").update({ eliminado: false }).eq("id", id);
-    if (error) { alert("Error: " + error.message); return; }
-    await cargarUsuarios();
+    const uid = typeof window !== "undefined"
+      ? (JSON.parse(localStorage.getItem("usuario") || "{}")).id
+      : null;
+    if (!uid) return;
+    try {
+      const res = await fetch(`/api/admin/usuarios/${id}/estado`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", "x-user-id": uid },
+        body: JSON.stringify({ accion: "restaurar" }),
+      });
+      const data = await res.json();
+      if (!res.ok) { alert("Error: " + (data.error ?? "Error desconocido")); return; }
+      await cargarUsuarios();
+    } catch { alert("Error de conexión."); }
   };
 
   const actualizarAprobacionChofer = async (id: string, estado: string) => {

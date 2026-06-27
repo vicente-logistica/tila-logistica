@@ -64,17 +64,30 @@ export default function GestionVehiculosChofer({ choferId, categoriaLegal, onAct
 
   const seleccionarVehiculo = async (vehiculoId: string) => {
     setGuardando(true);
-    await supabase.from("vehiculos").update({ activo: false }).eq("chofer_id", choferId);
-    await supabase.from("vehiculos").update({ activo: true }).eq("id", vehiculoId);
-    await supabase.from("usuarios").update({ vehiculo_activo_id: vehiculoId }).eq("id", choferId);
-    const u = localStorage.getItem("usuario");
-    if (u) {
-      const parsed = JSON.parse(u);
-      parsed.vehiculo_activo_id = vehiculoId;
-      localStorage.setItem("usuario", JSON.stringify(parsed));
+    try {
+      const res = await fetch(`/api/chofer/vehiculos/${vehiculoId}/activo`, {
+        method: "PATCH",
+        headers: { "x-user-id": choferId },
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        alert(data?.error ?? "Error al seleccionar vehículo");
+        setGuardando(false);
+        return;
+      }
+      // Actualizar localStorage para que el panel no tenga que recargar perfil
+      const u = localStorage.getItem("usuario");
+      if (u) {
+        const parsed = JSON.parse(u);
+        parsed.vehiculo_activo_id = vehiculoId;
+        localStorage.setItem("usuario", JSON.stringify(parsed));
+      }
+      setVehiculoActivoId(vehiculoId);
+    } catch {
+      alert("Error de conexión al seleccionar vehículo");
+    } finally {
+      setGuardando(false);
     }
-    setVehiculoActivoId(vehiculoId);
-    setGuardando(false);
     await cargar();
     onActualizado?.();
   };
@@ -89,22 +102,35 @@ export default function GestionVehiculosChofer({ choferId, categoriaLegal, onAct
       return;
     }
     setGuardando(true);
-    const { data: nuevo, error } = await supabase.from("vehiculos").insert([{
-      chofer_id: choferId,
-      marca: marca.trim(),
-      modelo: modelo.trim(),
-      anio: Number(anio),
-      patente: patente.trim().toUpperCase(),
-      tipo_vehiculo: tipoVehiculo,
-      seguro_vencimiento: seguroVenc,
-      vtv_rto_vencimiento: vtvVenc,
-      activo: vehiculos.length === 0,
-      estado_validacion: "pendiente",
-    }]).select().single();
-    if (error) { alert("Error: " + error.message); setGuardando(false); return; }
-    if (vehiculos.length === 0) {
-      await supabase.from("usuarios").update({ vehiculo_activo_id: nuevo.id }).eq("id", choferId);
-      setVehiculoActivoId(nuevo.id);
+    try {
+      const res = await fetch("/api/chofer/vehiculos", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-user-id": choferId },
+        body: JSON.stringify({
+          marca: marca.trim(),
+          modelo: modelo.trim(),
+          anio: Number(anio),
+          patente: patente.trim().toUpperCase(),
+          tipo_vehiculo: tipoVehiculo,
+          seguro_vencimiento: seguroVenc,
+          vtv_rto_vencimiento: vtvVenc,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) { alert("Error: " + (data?.error ?? "Error desconocido")); setGuardando(false); return; }
+      if (vehiculos.length === 0 && data.vehiculo?.id) {
+        setVehiculoActivoId(data.vehiculo.id);
+        const u = localStorage.getItem("usuario");
+        if (u) {
+          const parsed = JSON.parse(u);
+          parsed.vehiculo_activo_id = data.vehiculo.id;
+          localStorage.setItem("usuario", JSON.stringify(parsed));
+        }
+      }
+    } catch {
+      alert("Error de conexión al crear vehículo");
+      setGuardando(false);
+      return;
     }
     setMarca(""); setModelo(""); setAnio(""); setPatente(""); setTipoVehiculo("");
     setSeguroVenc(""); setVtvVenc("");
@@ -117,28 +143,46 @@ export default function GestionVehiculosChofer({ choferId, categoriaLegal, onAct
   const guardarDatosVehiculo = async () => {
     if (!vehiculoActivo) return;
     setGuardando(true);
-    await supabase.from("vehiculos").update({
-      marca: marca.trim() || vehiculoActivo.marca,
-      modelo: modelo.trim() || vehiculoActivo.modelo,
-      anio: anio ? Number(anio) : vehiculoActivo.anio,
-      patente: (patente.trim() || vehiculoActivo.patente || "").toUpperCase(),
-      tipo_vehiculo: tipoVehiculo || vehiculoActivo.tipo_vehiculo,
-      seguro_vencimiento: seguroVenc || vehiculoActivo.seguro_vencimiento,
-      vtv_rto_vencimiento: vtvVenc || vehiculoActivo.vtv_rto_vencimiento,
-      updated_at: new Date().toISOString(),
-    }).eq("id", vehiculoActivo.id);
-    setGuardando(false);
+    try {
+      const res = await fetch(`/api/chofer/vehiculos/${vehiculoActivo.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", "x-user-id": choferId },
+        body: JSON.stringify({
+          marca:               marca.trim() || vehiculoActivo.marca,
+          modelo:              modelo.trim() || vehiculoActivo.modelo,
+          anio:                anio ? Number(anio) : vehiculoActivo.anio,
+          patente:             (patente.trim() || vehiculoActivo.patente || "").toUpperCase(),
+          tipo_vehiculo:       tipoVehiculo || vehiculoActivo.tipo_vehiculo,
+          seguro_vencimiento:  seguroVenc || vehiculoActivo.seguro_vencimiento,
+          vtv_rto_vencimiento: vtvVenc || vehiculoActivo.vtv_rto_vencimiento,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) alert(data?.error ?? "Error al guardar vehículo");
+    } catch {
+      alert("Error de conexión al guardar vehículo");
+    } finally {
+      setGuardando(false);
+    }
     await cargar();
     onActualizado?.();
   };
 
   const guardarCodigoAntecedentes = async () => {
     setGuardandoCodigo(true);
-    const { error } = await supabase
-      .from("documentacion_chofer")
-      .upsert([{ chofer_id: choferId, tipo: "antecedentes_codigo", url: codigoAntecedentes.trim() }], { onConflict: "chofer_id,tipo" });
-    setGuardandoCodigo(false);
-    if (error) alert(error.message);
+    try {
+      const res = await fetch("/api/chofer/documentacion", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-user-id": choferId },
+        body: JSON.stringify({ tipo: "antecedentes_codigo", url: codigoAntecedentes.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) alert(data?.error ?? "Error al guardar código");
+    } catch {
+      alert("Error de conexión al guardar código de antecedentes");
+    } finally {
+      setGuardandoCodigo(false);
+    }
   };
 
   const subirDocPersonal = async (tipo: string, bucket: string, archivo: File) => {
@@ -161,18 +205,26 @@ export default function GestionVehiculosChofer({ choferId, categoriaLegal, onAct
       archivo: { name: archivo.name, size: archivo.size, type: archivo.type },
     });
     setSubiendo(tipo);
+    // Upload a Storage + UPSERT en documentacion_chofer — ambos ya migrados a server-side en subirDocChofer
     const url = await subirDocChofer(supabase, choferId, tipo, bucket, archivo);
     console.log("[TILA-DOC] subirDocVehiculo post subirDocChofer", { tipo, urlOk: !!url, url });
     if (url) {
-      const { error: errVehiculo } = await supabase
-        .from("vehiculos")
-        .update({ [campo]: url, updated_at: new Date().toISOString() })
-        .eq("id", vehiculoActivo.id);
-      console.log("[TILA-DOC] update vehiculos campo", {
-        campo, url, ok: !errVehiculo,
-        error: errVehiculo ? { message: errVehiculo.message, code: errVehiculo.code } : null,
-      });
-      if (errVehiculo) alert(errVehiculo.message);
+      // UPDATE del campo URL en vehiculos vía API server-side
+      try {
+        const res = await fetch(`/api/chofer/vehiculos/${vehiculoActivo.id}/docs`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json", "x-user-id": choferId },
+          body: JSON.stringify({ [campo]: url }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          console.error("[TILA-DOC] error actualizando campo vehiculo vía API:", data?.error);
+          alert(data?.error ?? "Error al guardar URL del documento en el vehículo");
+        }
+      } catch (e: any) {
+        console.error("[TILA-DOC] excepción actualizando campo vehiculo:", e?.message);
+        alert("Error de conexión al guardar documento del vehículo");
+      }
     }
     setSubiendo(null);
     await cargar();

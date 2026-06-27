@@ -1,6 +1,14 @@
 /**
- * Helper para registrar evidencias automáticas de viaje en la tabla viaje_evidencias.
- * Si falla, solo loguea — nunca bloquea el flujo operativo.
+ * Helper para registrar evidencias de viaje.
+ *
+ * registrarEvidenciaApi  — vía API server-side (POST /api/cargas/evidencia).
+ *   Úsalo desde componentes client-side en reemplazo del acceso directo a Supabase.
+ *   No bloqueante: si falla, solo loguea — nunca interrumpe el flujo operativo.
+ *
+ * PENDIENTE ALTO: subirFotoEvidencia en viaje-activo/page.tsx sigue usando
+ * supabase.storage con anon key directamente desde el browser. El bucket
+ * "documentacion-choferes" no valida que el chofer pertenezca al viaje.
+ * Debe migrarse a un endpoint server-side o protegerse con Storage policies.
  */
 
 export type EventoEvidencia =
@@ -26,43 +34,53 @@ export interface DatosEvidencia {
   recibioNombre?: string;  // quién recibió (evento descarga_completada)
 }
 
-export async function registrarEvidencia(
-  supabase: any,
+/**
+ * Registra una evidencia vía API server-side.
+ * No bloqueante: si falla, solo loguea.
+ */
+export async function registrarEvidenciaApi(
   cargaId: number | string,
   evento: EventoEvidencia | string,
   datos: DatosEvidencia = {},
+  userId?: string,
 ): Promise<void> {
   try {
-    const payload: Record<string, any> = {
-      carga_id:     Number(cargaId),
+    const body: Record<string, any> = {
+      carga_id:    Number(cargaId),
       evento,
-      rol_usuario:  "chofer",
       estado_viaje: datos.estadoViaje ?? null,
       lat:          datos.lat ?? null,
       lng:          datos.lng ?? null,
     };
 
-    if (datos.usuarioId)      payload.usuario_id      = datos.usuarioId;
-    if (datos.nombreReceptor) payload.nombre_receptor = datos.nombreReceptor;
-    if (datos.recibioNombre)  payload.recibio_nombre  = datos.recibioNombre;
-    if (datos.entregaNombre)  payload.entrego_nombre  = datos.entregaNombre;
-    if (datos.tipoOperacion)  payload.tipo_operacion  = datos.tipoOperacion;
-    if (datos.tipoCarga)      payload.tipo_carga      = datos.tipoCarga;
-    if (datos.observacion)    payload.observacion     = datos.observacion;
-    if (datos.fotoUrl)        payload.foto_url        = datos.fotoUrl;
+    if (datos.nombreReceptor) body.nombre_receptor = datos.nombreReceptor;
+    if (datos.recibioNombre)  body.recibio_nombre  = datos.recibioNombre;
+    if (datos.entregaNombre)  body.entrego_nombre  = datos.entregaNombre;
+    if (datos.tipoOperacion)  body.tipo_operacion  = datos.tipoOperacion;
+    if (datos.tipoCarga)      body.tipo_carga      = datos.tipoCarga;
+    if (datos.observacion)    body.observacion     = datos.observacion;
+    if (datos.fotoUrl)        body.foto_url        = datos.fotoUrl;
 
-    console.log("[EVIDENCIA] Payload a insertar:", JSON.stringify(payload));
-    const { error } = await supabase.from("viaje_evidencias").insert([payload]);
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (userId) headers["x-user-id"] = userId;
 
-    if (error) {
-      console.warn("[EVIDENCIA] Error al registrar evidencia:", evento, error.message);
+    const res = await fetch("/api/cargas/evidencia", {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body),
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      console.warn("[EVIDENCIA] API rechazó evidencia:", evento, err?.error ?? res.status);
     } else {
-      console.log("[EVIDENCIA] Registrada OK:", evento, "carga:", cargaId);
+      console.log("[EVIDENCIA] Registrada OK vía API:", evento, "carga:", cargaId);
     }
   } catch (err: any) {
-    console.warn("[EVIDENCIA] Excepción al registrar evidencia:", evento, err?.message ?? err);
+    console.warn("[EVIDENCIA] Excepción al registrar evidencia vía API:", evento, err?.message ?? err);
   }
 }
+
 
 /** Mapea nombre de estado del viaje al evento de evidencia correspondiente */
 export function estadoAEvento(estado: string): EventoEvidencia | null {

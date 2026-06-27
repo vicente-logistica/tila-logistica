@@ -81,11 +81,19 @@ export default function SubirDocumentacion({ choferIdExterno, soloLectura = fals
   const guardarCodigoAntecedentes = async () => {
     if (!choferId) return;
     setGuardandoCodigo(true);
-    const { error } = await supabase
-      .from("documentacion_chofer")
-      .upsert([{ chofer_id: choferId, tipo: "antecedentes_codigo", url: codigoAntecedentes.trim() }], { onConflict: "chofer_id,tipo" });
-    setGuardandoCodigo(false);
-    if (error) alert(error.message);
+    try {
+      const res = await fetch("/api/chofer/documentacion", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-user-id": choferId },
+        body: JSON.stringify({ tipo: "antecedentes_codigo", url: codigoAntecedentes.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) alert(data?.error ?? "Error al guardar código");
+    } catch {
+      alert("Error de conexión al guardar código de antecedentes");
+    } finally {
+      setGuardandoCodigo(false);
+    }
   };
 
   const subirArchivo = async (tipo: string, bucket: string, archivo: File) => {

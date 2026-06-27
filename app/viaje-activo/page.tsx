@@ -7,7 +7,7 @@ import { useProtegerRuta } from "../hooks/useProtegerRuta";
 import MapaTILA, { ParadaMapa } from "../components/MapaTILA";
 import ChatAsistencia from "../components/ChatAsistencia";
 import ChatToast from "../components/ChatToast";
-import { registrarEvidencia, estadoAEvento } from "../lib/evidencias";
+import { registrarEvidenciaApi, estadoAEvento } from "../lib/evidencias";
 import { playChatSound } from "../utils/chatSound";
 
 // ─── Estados y flujo ──────────────────────────────────────────────────────────
@@ -512,12 +512,11 @@ export default function ViajeActivoPage() {
     if (!skipEvidencia) {
       const evento = estadoAEvento(nuevoEstado);
       if (evento) {
-        registrarEvidencia(supabase, viaje.id, evento, {
-          usuarioId:   usuarioRef.current?.id,
+        registrarEvidenciaApi(viaje.id, evento, {
           estadoViaje: nuevoEstado,
           lat:         viaje.lat ?? null,
           lng:         viaje.lng ?? null,
-        });
+        }, usuarioRef.current?.id);
       }
     }
 
@@ -563,8 +562,7 @@ export default function ViajeActivoPage() {
     setCargaSubiendo(true);
     const fotoUrl = cargaFoto ? await subirFotoEvidencia(cargaFoto, "carga") : undefined;
 
-    await registrarEvidencia(supabase, viaje.id, "carga_retirada", {
-      usuarioId:     usuarioRef.current?.id,
+    await registrarEvidenciaApi(viaje.id, "carga_retirada", {
       estadoViaje:   "Carga retirada",
       lat:           viaje.lat ?? null,
       lng:           viaje.lng ?? null,
@@ -573,7 +571,7 @@ export default function ViajeActivoPage() {
       entregaNombre: cargaEntrego.trim() || undefined,
       observacion:   cargaObsv.trim() || undefined,
       fotoUrl,
-    });
+    }, usuarioRef.current?.id);
 
     setCargaSubiendo(false);
     setModalCarga(false);
@@ -586,8 +584,7 @@ export default function ViajeActivoPage() {
     setEntregaSubiendo(true);
     const fotoUrl = entregaFoto ? await subirFotoEvidencia(entregaFoto, "descarga") : undefined;
 
-    await registrarEvidencia(supabase, viaje.id, "descarga_completada", {
-      usuarioId:      usuarioRef.current?.id,
+    await registrarEvidenciaApi(viaje.id, "descarga_completada", {
       estadoViaje:    "Descarga completada",
       lat:            viaje.lat ?? null,
       lng:            viaje.lng ?? null,
@@ -596,7 +593,7 @@ export default function ViajeActivoPage() {
       recibioNombre:  entregaReceptor.trim() || undefined,
       observacion:    entregaObservacion.trim() || undefined,
       fotoUrl,
-    });
+    }, usuarioRef.current?.id);
 
     setEntregaSubiendo(false);
     setModalEntrega(false);
@@ -1034,10 +1031,10 @@ export default function ViajeActivoPage() {
               <button type="button" disabled={cargaSubiendo}
                 onClick={() => {
                   setModalCarga(false);
-                  registrarEvidencia(supabase, viaje.id, "carga_retirada", {
-                    usuarioId: usuarioRef.current?.id, estadoViaje: "Carga retirada",
+                  registrarEvidenciaApi(viaje.id, "carga_retirada", {
+                    estadoViaje: "Carga retirada",
                     lat: viaje.lat ?? null, lng: viaje.lng ?? null, tipoOperacion: "carga",
-                  });
+                  }, usuarioRef.current?.id);
                   actualizarEstado("Carga retirada", true);
                 }}
                 className="py-3 rounded-2xl font-black text-sm bg-zinc-700 text-zinc-300 hover:bg-zinc-600 transition">
@@ -1100,10 +1097,10 @@ export default function ViajeActivoPage() {
               <button type="button" disabled={entregaSubiendo}
                 onClick={() => {
                   setModalEntrega(false);
-                  registrarEvidencia(supabase, viaje.id, "descarga_completada", {
-                    usuarioId: usuarioRef.current?.id, estadoViaje: "Descarga completada",
+                  registrarEvidenciaApi(viaje.id, "descarga_completada", {
+                    estadoViaje: "Descarga completada",
                     lat: viaje.lat ?? null, lng: viaje.lng ?? null, tipoOperacion: "descarga",
-                  });
+                  }, usuarioRef.current?.id);
                   actualizarEstado("Descarga completada", true);
                 }}
                 className="py-3 rounded-2xl font-black text-sm bg-zinc-700 text-zinc-300 hover:bg-zinc-600 transition">

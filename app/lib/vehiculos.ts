@@ -110,24 +110,22 @@ export async function subirDocChofer(
       url,
     });
 
-    const payload = { chofer_id: choferId, tipo, url };
-    const { data: dataUpsert, error: errorUpsert } = await supabase
-      .from("documentacion_chofer")
-      .upsert([payload], { onConflict: "chofer_id,tipo" });
-
-    console.log("[TILA-DOC] PASO 4 — upsert documentacion_chofer", {
-      payload,
-      ok: !errorUpsert,
-      dataUpsert,
-      errorUpsert: errorUpsert
-        ? { message: errorUpsert.message, code: errorUpsert.code, details: errorUpsert.details, hint: errorUpsert.hint }
-        : null,
+    // UPSERT en documentacion_chofer vía API server-side — nunca directo con anon key
+    console.log("[TILA-DOC] PASO 4 — UPSERT vía /api/chofer/documentacion", { tipo, url });
+    const apiRes = await fetch("/api/chofer/documentacion", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-user-id": choferId },
+      body: JSON.stringify({ tipo, url }),
     });
 
-    if (errorUpsert) {
-      alert(errorUpsert.message);
+    if (!apiRes.ok) {
+      const err = await apiRes.json().catch(() => ({}));
+      console.error("[TILA-DOC] PASO 4 — error API", err);
+      alert(err?.error ?? "Error al guardar documentación");
       return null;
     }
+
+    console.log("[TILA-DOC] PASO 4 — OK vía API");
 
     console.log("[TILA-DOC] OK — subida completa", { tipo, url });
     return url;
@@ -138,11 +136,3 @@ export async function subirDocChofer(
   }
 }
 
-export async function actualizarCampoVehiculo(
-  supabase: any,
-  vehiculoId: string,
-  campo: keyof VehiculoRow,
-  valor: string,
-) {
-  await supabase.from("vehiculos").update({ [campo]: valor, updated_at: new Date().toISOString() }).eq("id", vehiculoId);
-}
