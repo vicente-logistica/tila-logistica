@@ -467,8 +467,19 @@ export default function ViajeActivoPage() {
     return `https://www.google.com/maps/dir/?api=1&destination=${enc}&travelmode=driving`;
   };
 
-  const abrirNavegador = (navId: string, dest: string) => {
-    window.open(buildNavUrl(navId, dest), `_nav_${Date.now()}`);
+  const abrirNavegador = async (navId: string, dest: string) => {
+    const url = buildNavUrl(navId, dest);
+    try {
+      const { Capacitor } = await import("@capacitor/core");
+      if (Capacitor.isNativePlatform()) {
+        const { Browser } = await import("@capacitor/browser");
+        await Browser.open({ url });
+      } else {
+        window.open(url, `_nav_${Date.now()}`);
+      }
+    } catch {
+      window.open(url, `_nav_${Date.now()}`);
+    }
     setMostrarNavSel(false);
     setDestNavPendiente(null);
   };

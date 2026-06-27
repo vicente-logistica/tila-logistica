@@ -60,5 +60,9 @@
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>TILA necesita acceso a fotos para adjuntar evidencias del servicio.</string>
 
+	<!-- Guardar fotos — evidencias de retiro y entrega -->
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>TILA guarda evidencias de retiro y entrega en tu galería.</string>
+
 </dict>
 </plist>

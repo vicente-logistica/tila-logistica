@@ -737,8 +737,15 @@ export default function PanelClientePage() {
                       }),
                     });
                     const d = await res.json();
-                    if (d.init_point) { window.location.href = d.init_point; }
-                    else { alert("Error al iniciar el pago. Intentá desde la tarjeta del viaje."); }
+                    if (d.init_point) {
+                      const { Capacitor } = await import("@capacitor/core");
+                      if (Capacitor.isNativePlatform()) {
+                        const { Browser } = await import("@capacitor/browser");
+                        await Browser.open({ url: d.init_point });
+                      } else {
+                        window.location.href = d.init_point;
+                      }
+                    } else { alert("Error al iniciar el pago. Intentá desde la tarjeta del viaje."); }
                   } catch { alert("Error de red al iniciar el pago."); }
                   finally { setPagandoBanner(false); }
                 }}
@@ -1087,8 +1094,15 @@ export default function PanelClientePage() {
                                   body: JSON.stringify(payload),
                                 });
                                 const d = await res.json();
-                                if (d.init_point) { window.location.href = d.init_point; }
-                                else { alert("Error al iniciar el pago. Intentá de nuevo."); }
+                                if (d.init_point) {
+                                  const { Capacitor } = await import("@capacitor/core");
+                                  if (Capacitor.isNativePlatform()) {
+                                    const { Browser } = await import("@capacitor/browser");
+                                    await Browser.open({ url: d.init_point });
+                                  } else {
+                                    window.location.href = d.init_point;
+                                  }
+                                } else { alert("Error al iniciar el pago. Intentá de nuevo."); }
                               } catch { alert("Error de red al iniciar el pago."); }
                             }}
                           >
@@ -1117,7 +1131,13 @@ export default function PanelClientePage() {
                               });
                               const d = await res.json();
                               if (d.init_point) {
-                                window.location.href = d.init_point;
+                                const { Capacitor } = await import("@capacitor/core");
+                                if (Capacitor.isNativePlatform()) {
+                                  const { Browser } = await import("@capacitor/browser");
+                                  await Browser.open({ url: d.init_point });
+                                } else {
+                                  window.location.href = d.init_point;
+                                }
                               } else {
                                 alert("Error al iniciar el pago. Intentá de nuevo.");
                               }

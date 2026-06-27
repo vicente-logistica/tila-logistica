@@ -29,10 +29,12 @@ function verificarFirmaMP(req: Request, rawBody: string, dataId: string): boolea
   const secret = process.env.MERCADOPAGO_WEBHOOK_SECRET;
 
   if (!secret) {
-    // PENDIENTE: configurar MERCADOPAGO_WEBHOOK_SECRET en Vercel para habilitar
-    // la verificación de firma. Sin esto, cualquier POST al webhook es aceptado.
-    console.warn("[MP-WEBHOOK] ⚠️  MERCADOPAGO_WEBHOOK_SECRET no configurado — firma no verificada");
-    return true;
+    if (process.env.NODE_ENV === "development") {
+      console.warn("[MP-WEBHOOK] ⚠️  MERCADOPAGO_WEBHOOK_SECRET no configurado — firma omitida en desarrollo");
+      return true;
+    }
+    console.error("[MP-WEBHOOK] ❌ MERCADOPAGO_WEBHOOK_SECRET no configurado en producción — request rechazado");
+    return false;
   }
 
   const xSignature  = req.headers.get("x-signature") ?? "";
