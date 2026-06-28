@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
-import { MercadoPagoConfig, Payment } from "mercadopago";
+import { MercadoPagoConfig, Payment, WebhookSignatureValidator, InvalidWebhookSignatureError } from "mercadopago";
 import { createClient } from "@supabase/supabase-js";
-import crypto from "crypto";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -14,55 +13,6 @@ if (!_webhookServiceRoleKey) throw new Error("Falta SUPABASE_SERVICE_ROLE_KEY en
 
 const supabaseAdmin = createClient(_webhookSupabaseUrl, _webhookServiceRoleKey);
 
-/**
- * Verifica la firma x-signature de MercadoPago.
- *
- * Algoritmo oficial MP (https://www.mercadopago.com.ar/developers/es/docs/your-integrations/notifications/webhooks):
- *   manifest = "id:<data.id>;request-id:<x-request-id>;ts:<timestamp>;"
- *   hash     = HMAC-SHA256(manifest, MERCADOPAGO_WEBHOOK_SECRET)
- *   header   = "ts=<timestamp>,v1=<hash>"
- *
- * Si MERCADOPAGO_WEBHOOK_SECRET no está configurado, se omite la verificación
- * y se registra una advertencia. Configurar la variable en Vercel para activarla.
- */
-function verificarFirmaMP(req: Request, rawBody: string, dataId: string): boolean {
-  const secret = process.env.MERCADOPAGO_WEBHOOK_SECRET;
-
-  if (!secret) {
-    if (process.env.NODE_ENV === "development") {
-      console.warn("[MP-WEBHOOK] ⚠️  MERCADOPAGO_WEBHOOK_SECRET no configurado — firma omitida en desarrollo");
-      return true;
-    }
-    console.error("[MP-WEBHOOK] ❌ MERCADOPAGO_WEBHOOK_SECRET no configurado en producción — request rechazado");
-    return false;
-  }
-
-  const xSignature  = req.headers.get("x-signature") ?? "";
-  const xRequestId  = req.headers.get("x-request-id") ?? "";
-
-  // Extraer ts y v1 del header "ts=...,v1=..."
-  const parts: Record<string, string> = {};
-  for (const part of xSignature.split(",")) {
-    const [k, v] = part.split("=", 2);
-    if (k && v) parts[k.trim()] = v.trim();
-  }
-  const ts = parts["ts"];
-  const v1 = parts["v1"];
-
-  if (!ts || !v1) {
-    console.error("[MP-WEBHOOK] ❌ x-signature malformado:", xSignature);
-    return false;
-  }
-
-  const manifest = `id:${dataId};request-id:${xRequestId};ts:${ts};`;
-  const expected = crypto.createHmac("sha256", secret).update(manifest).digest("hex");
-
-  const valid = crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(v1));
-  if (!valid) {
-    console.error("[MP-WEBHOOK] ❌ Firma inválida — manifest:", manifest);
-  }
-  return valid;
-}
 
 export async function POST(req: Request) {
   // Leer body como texto primero para poder verificar firma antes de parsear
@@ -84,10 +34,32 @@ export async function POST(req: Request) {
       return NextResponse.json({ ok: true });
     }
 
-    // ── 1. Verificar firma x-signature (si el secret está configurado) ────────
-    const firmaOk = verificarFirmaMP(req, rawBody, String(body.data.id));
-    if (!firmaOk) {
-      return NextResponse.json({ ok: false }, { status: 401 });
+    // ── 1. Verificar firma x-signature ───────────────────────────────────────
+    // data.id viene del query string (no del body) — es el valor que MP firma.
+    const dataId = new URL(req.url).searchParams.get("data.id") ?? String(body.data.id);
+    const webhookSecret = process.env.MERCADOPAGO_WEBHOOK_SECRET;
+    if (!webhookSecret) {
+      if (process.env.NODE_ENV === "development") {
+        console.warn("[MP-WEBHOOK] ⚠️  MERCADOPAGO_WEBHOOK_SECRET no configurado — firma omitida en desarrollo");
+      } else {
+        console.error("[MP-WEBHOOK] ❌ MERCADOPAGO_WEBHOOK_SECRET no configurado en producción — request rechazado");
+        return NextResponse.json({ ok: false }, { status: 401 });
+      }
+    } else {
+      try {
+        WebhookSignatureValidator.validate({
+          xSignature: req.headers.get("x-signature") ?? undefined,
+          xRequestId: req.headers.get("x-request-id") ?? undefined,
+          dataId,
+          secret: webhookSecret,
+        });
+      } catch (e) {
+        if (e instanceof InvalidWebhookSignatureError) {
+          console.error("[MP-WEBHOOK] ❌ Firma inválida:", e.reason, "| request-id:", e.requestId);
+          return NextResponse.json({ ok: false }, { status: 401 });
+        }
+        throw e;
+      }
     }
 
     const accessToken = process.env.MERCADOPAGO_ACCESS_TOKEN;
