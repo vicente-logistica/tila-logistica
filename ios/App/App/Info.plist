@@ -2,12 +2,16 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CAPACITOR_DEBUG</key>
+	<key>CAPACITOR_DEBUG</key>
 	<string>$(CAPACITOR_DEBUG)</string>
+
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
+
+	<!-- Nombre visible en la pantalla de inicio del iPhone -->
 	<key>CFBundleDisplayName</key>
-        <string>TILA Logística</string>
+	<string>TILA</string>
+
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -22,22 +26,34 @@
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
+
+	<!-- Evita el cuestionario de cifrado en exportación — TILA usa solo HTTPS estándar -->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UIMainStoryboardFile</key>
 	<string>Main</string>
+
+	<!-- arm64 requerido por App Store (todos los iPhones desde 5s) -->
 	<key>UIRequiredDeviceCapabilities</key>
 	<array>
-		<string>armv7</string>
+		<string>arm64</string>
 	</array>
+
+	<!-- iPhone: Portrait principal, Landscape permitido para mapas -->
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+
+	<!-- iPad: todas las orientaciones -->
 	<key>UISupportedInterfaceOrientations~ipad</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
@@ -45,6 +61,7 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+
 	<key>UIViewControllerBasedStatusBarAppearance</key>
 	<true/>
 
@@ -56,7 +73,7 @@
 	<key>NSCameraUsageDescription</key>
 	<string>TILA necesita la cámara para registrar evidencias de carga y entrega.</string>
 
-	<!-- Fotos — adjuntar evidencias del servicio -->
+	<!-- Fotos — adjuntar evidencias desde la galería -->
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>TILA necesita acceso a fotos para adjuntar evidencias del servicio.</string>
 
