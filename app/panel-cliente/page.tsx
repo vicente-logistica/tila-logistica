@@ -356,8 +356,10 @@ export default function PanelClientePage() {
   // Silencio por sector — refs para callbacks
   const [silenciarChatViaje, setSilenciarChatViaje]           = useState(false);
   const [silenciarSoporteCliente, setSilenciarSoporteCliente] = useState(false);
+  const [silenciarAlertas, setSilenciarAlertas]               = useState(false);
   const silenciarChatViajeRef     = useRef(false);
   const silenciarSoporteClienteRef = useRef(false);
+  const silenciarAlertasRef        = useRef(false);
   // IDs de viajes activos en ref para callbacks (evita stale + evita re-subscribe)
   const viajesActivosIdsRef    = useRef<Set<string>>(new Set());
   const noLeidosPorViajeRef    = useRef<Record<string, Record<string, number>>>({});
@@ -422,8 +424,9 @@ export default function PanelClientePage() {
   // Sincronizar refs con estados actuales (para que callbacks de Realtime lean sin stale closure)
   useEffect(() => { chatListaViajeIdRef.current     = chatListaViajeId; },     [chatListaViajeId]);
   useEffect(() => { tipoChatListaRef.current        = tipoChatLista; },        [tipoChatLista]);
-  useEffect(() => { silenciarChatViajeRef.current   = silenciarChatViaje; },   [silenciarChatViaje]);
+  useEffect(() => { silenciarChatViajeRef.current      = silenciarChatViaje; },      [silenciarChatViaje]);
   useEffect(() => { silenciarSoporteClienteRef.current = silenciarSoporteCliente; }, [silenciarSoporteCliente]);
+  useEffect(() => { silenciarAlertasRef.current        = silenciarAlertas; },        [silenciarAlertas]);
   // Actualizar el set de IDs activos cada vez que cambie la lista de viajes activos
   useEffect(() => {
     viajesActivosIdsRef.current = new Set(viajesActivos.map(v => String(v.id)));
@@ -452,7 +455,7 @@ export default function PanelClientePage() {
         if (actual === "Viaje finalizado" && !festejoClienteRef.current.has(String(v.id))) {
           festejoClienteRef.current.add(String(v.id));
           setFestejoViaje(v);
-          if (audioDesbloquedoRef.current) {
+          if (audioDesbloquedoRef.current && !silenciarAlertasRef.current) {
             const a = new Audio("/sounds/alerta-viaje.mp3");
             a.volume = 1;
             a.play().catch(() => {});
@@ -460,7 +463,7 @@ export default function PanelClientePage() {
           setTimeout(() => setFestejoViaje(null), 7000);
         } else {
           setAlerta(actual);
-          if (audioDesbloquedoRef.current) {
+          if (audioDesbloquedoRef.current && !silenciarAlertasRef.current) {
             const a = new Audio("/sounds/alerta-viaje.mp3");
             a.volume = 1;
             a.play().catch(() => {});
@@ -486,7 +489,7 @@ export default function PanelClientePage() {
     const choferIds = [...new Set(todos.filter(v => v.chofer_id && String(v.chofer_id).length > 10).map(v => String(v.chofer_id)))];
     if (choferIds.length > 0) {
       const { data: dc } = await supabase.from("usuarios")
-        .select("id, nombre, vehiculo, telefono, bateria_nivel, ultima_senal_at, online, vehiculo_activo_id").in("id", choferIds);
+        .select("id, nombre, vehiculo, telefono, bateria_nivel, bateria_cargando, ultima_senal_at, online, vehiculo_activo_id").in("id", choferIds);
       if (dc) {
         const map: Record<string, any> = {};
         todos.forEach(v => { if (v.chofer_id) { const c = dc.find(ch => ch.id === v.chofer_id); if (c) map[String(v.id)] = c; } });
@@ -818,6 +821,11 @@ export default function PanelClientePage() {
           className={`px-3 py-1.5 rounded-xl text-xs font-black transition ${silenciarSoporteCliente ? "bg-zinc-700 text-zinc-500" : "bg-zinc-800 text-zinc-300 hover:bg-zinc-700"}`}>
           {silenciarSoporteCliente ? "🛟🔕" : "🛟🔔"}
         </button>
+        <button type="button" onClick={() => setSilenciarAlertas(v => !v)}
+          title={silenciarAlertas ? "Activar alertas de viaje" : "Silenciar alertas de viaje"}
+          className={`px-3 py-1.5 rounded-xl text-xs font-black transition ${silenciarAlertas ? "bg-zinc-700 text-zinc-500" : "bg-zinc-800 text-zinc-300 hover:bg-zinc-700"}`}>
+          {silenciarAlertas ? "🔔🔕" : "🔔"}
+        </button>
       </div>
 
       {/* Viajes activos */}
@@ -932,6 +940,9 @@ export default function PanelClientePage() {
                         <div className="flex items-center gap-3 text-xs">
                           {tieneGps && viaje.velocidad_kmh != null && (
                             <span className="text-yellow-400 font-black">📍 {viaje.velocidad_kmh} km/h</span>
+                          )}
+                          {chofer.bateria_nivel != null && (
+                            <span className="text-green-400">🔋 {chofer.bateria_nivel}%{chofer.bateria_cargando ? " ⚡" : ""}</span>
                           )}
                           <span className="text-zinc-500">🕒 {relativo(chofer.ultima_senal_at)}</span>
                         </div>

@@ -37,7 +37,7 @@ export async function POST(req: Request) {
   // ── 2. Verificar usuario en BD ────────────────────────────────────────────
   const { data: usuario, error: userError } = await supabaseAdmin
     .from("usuarios")
-    .select("id, rol")
+    .select("id, rol, eliminado, estado_aprobacion")
     .eq("id", userId)
     .single();
 
@@ -45,9 +45,17 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "No autorizado: usuario no encontrado" }, { status: 401 });
   }
 
-  // ── 3. Validar rol cliente ────────────────────────────────────────────────
+  // ── 3. Validar estado del usuario ─────────────────────────────────────────
+  if (usuario.eliminado) {
+    return NextResponse.json({ error: "Esta cuenta ha sido eliminada." }, { status: 403 });
+  }
+
   if (usuario.rol !== "cliente") {
     return NextResponse.json({ error: "Prohibido: solo clientes pueden publicar viajes" }, { status: 403 });
+  }
+
+  if (usuario.estado_aprobacion === "suspendido") {
+    return NextResponse.json({ error: "Tu cuenta está suspendida. Contactá al administrador para reactivarla." }, { status: 403 });
   }
 
   // ── 4. Leer body ──────────────────────────────────────────────────────────

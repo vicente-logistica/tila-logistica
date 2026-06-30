@@ -17,11 +17,15 @@ export async function POST(req: Request) {
   if (!userId) return NextResponse.json({ error: "No autorizado: falta x-user-id" }, { status: 401 });
 
   const { data: usuario, error: userError } = await supabaseAdmin
-    .from("usuarios").select("id, rol").eq("id", userId).single();
+    .from("usuarios").select("id, rol, eliminado, estado_aprobacion").eq("id", userId).single();
   if (userError || !usuario)
     return NextResponse.json({ error: "No autorizado: usuario no encontrado" }, { status: 401 });
+  if (usuario.eliminado)
+    return NextResponse.json({ error: "Esta cuenta ha sido eliminada." }, { status: 403 });
   if (usuario.rol !== "cliente")
     return NextResponse.json({ error: "Prohibido: solo clientes pueden republicar" }, { status: 403 });
+  if (usuario.estado_aprobacion === "suspendido")
+    return NextResponse.json({ error: "Tu cuenta está suspendida. Contactá al administrador para reactivarla." }, { status: 403 });
 
   let carga_id: unknown;
   try { ({ carga_id } = await req.json()); } catch {

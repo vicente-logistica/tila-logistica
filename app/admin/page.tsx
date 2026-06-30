@@ -217,7 +217,7 @@ const TarjetaUsuario = ({
           </>}
 
           {usuario.rol === "cliente" && <>
-            <button onClick={() => onActualizar(usuario.id, "estado_aprobacion", "activo")} className="bg-green-700 text-white font-black py-2 rounded-xl text-xs">✅ Activar</button>
+            <button onClick={() => onActualizar(usuario.id, "estado_aprobacion", "pendiente")} className="bg-green-700 text-white font-black py-2 rounded-xl text-xs">✅ Activar</button>
             <button onClick={() => onActualizar(usuario.id, "estado_aprobacion", "suspendido")} className="bg-orange-600 text-white font-black py-2 rounded-xl text-xs">⛔ Suspender</button>
           </>}
 

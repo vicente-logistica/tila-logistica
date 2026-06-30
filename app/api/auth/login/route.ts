@@ -89,7 +89,12 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Email o contraseña incorrectos" }, { status: 401 });
     }
 
-    // ── 3. Validaciones de estado según rol ───────────────────────────────────
+    // ── 3. Bloquear cuentas eliminadas ────────────────────────────────────────
+    if (usuario.eliminado) {
+      return NextResponse.json({ error: "Esta cuenta ha sido eliminada." }, { status: 403 });
+    }
+
+    // ── 4. Validaciones de estado según rol ───────────────────────────────────
     if (usuario.rol === "chofer") {
       const aprobacion = usuario.estado_aprobacion || "pendiente";
       if (aprobacion === "pendiente") {
