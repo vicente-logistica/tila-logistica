@@ -24,7 +24,7 @@ const ACCION_A_UPDATE: Record<Accion, Record<string, unknown>> = {
   aprobar:   { estado_aprobacion: "aprobado" },
   rechazar:  { estado_aprobacion: "rechazado" },
   suspender: { estado_aprobacion: "suspendido" },
-  reactivar: { estado_aprobacion: "pendiente" },
+  reactivar: { estado_aprobacion: "aprobado" },
 };
 
 export async function PATCH(

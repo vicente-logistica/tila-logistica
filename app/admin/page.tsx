@@ -216,10 +216,20 @@ const TarjetaUsuario = ({
             <button onClick={() => cambiarEstadoChofer("pendiente")} className="bg-zinc-600 text-white font-black py-2 rounded-xl text-xs">🔄 Reactivar</button>
           </>}
 
-          {usuario.rol === "cliente" && <>
-            <button onClick={() => onActualizar(usuario.id, "estado_aprobacion", "pendiente")} className="bg-green-700 text-white font-black py-2 rounded-xl text-xs">✅ Activar</button>
-            <button onClick={() => onActualizar(usuario.id, "estado_aprobacion", "suspendido")} className="bg-orange-600 text-white font-black py-2 rounded-xl text-xs">⛔ Suspender</button>
-          </>}
+          {usuario.rol === "cliente" && (() => {
+            const est = usuario.estado_aprobacion || "pendiente";
+            return <>
+              {(est === "pendiente" || est === "rechazado") && (
+                <button onClick={() => onActualizar(usuario.id, "estado_aprobacion", "aprobado")} className="bg-green-700 text-white font-black py-2 rounded-xl text-xs col-span-2">✅ Aprobar</button>
+              )}
+              {(est === "aprobado" || est === "activo") && (
+                <button onClick={() => onActualizar(usuario.id, "estado_aprobacion", "suspendido")} className="bg-orange-600 text-white font-black py-2 rounded-xl text-xs col-span-2">⛔ Suspender</button>
+              )}
+              {est === "suspendido" && (
+                <button onClick={() => onActualizar(usuario.id, "estado_aprobacion", "aprobado")} className="bg-green-700 text-white font-black py-2 rounded-xl text-xs col-span-2">🔄 Reactivar</button>
+              )}
+            </>;
+          })()}
 
           {/* Reset password — todos */}
           <button onClick={() => onResetPassword(usuario.id, usuario.nombre || "usuario")} className="bg-blue-700 text-white font-black py-2 rounded-xl text-xs col-span-2">🔑 Resetear contraseña</button>
