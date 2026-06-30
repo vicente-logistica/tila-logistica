@@ -71,6 +71,7 @@ export async function POST(req: Request) {
         password:                  hash,
         telefono:                  telefono?.trim() ?? null,
         rol:                       "cliente",   // siempre forzado server-side
+        estado_doc:                "pendiente_actualizacion",
         acepta_terminos:           true,
         fecha_aceptacion_terminos: new Date().toISOString(),
       }])

@@ -97,6 +97,7 @@ export async function POST(req: Request) {
         banco_billetera:           banco_billetera ?? null,
         estado_validacion:         "pendiente",
         estado_aprobacion:         "pendiente",
+        estado_doc:                "pendiente_actualizacion",
       }])
       .select("id, nombre, email, rol")
       .single();

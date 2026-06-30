@@ -33,7 +33,7 @@ export async function GET(req: Request) {
   const { data, error } = await supabaseAdmin
     .from("usuarios")
     .select(
-      "id, nombre, email, telefono, dni, vehiculo, rol, estado_aprobacion, eliminado, " +
+      "id, nombre, email, telefono, dni, vehiculo, rol, estado_aprobacion, estado_doc, eliminado, " +
       "categoria_legal, tipo_vehiculo, tipo_carroceria, online, " +
       "bateria_nivel, bateria_cargando, ultima_senal_at, created_at"
     )

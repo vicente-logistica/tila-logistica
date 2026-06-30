@@ -39,6 +39,32 @@ const colorAprobacion = (estado: string) => {
   }
 };
 
+const labelAprobacion = (estado: string) => {
+  switch (estado) {
+    case "aprobado": return "ACTIVO";
+    case "activo":   return "ACTIVO";
+    default:         return estado.toUpperCase();
+  }
+};
+
+const colorEstadoDoc = (doc: string | null | undefined) => {
+  switch (doc) {
+    case "completa":               return "bg-green-800 text-green-200";
+    case "vencida":                return "bg-red-800 text-red-200";
+    case "pendiente_actualizacion":
+    default:                       return "bg-yellow-700 text-yellow-100";
+  }
+};
+
+const labelEstadoDoc = (doc: string | null | undefined) => {
+  switch (doc) {
+    case "completa":               return "📄 DOC COMPLETA";
+    case "vencida":                return "📄 DOC VENCIDA";
+    case "pendiente_actualizacion":
+    default:                       return "📄 DOC PENDIENTE";
+  }
+};
+
 const getTipoParadaLabel = (tipo: string) => {
   if (tipo === "retiro") return "📦 Carga / Retiro";
   if (tipo === "entrega") return "🏁 Descarga / Entrega final";
@@ -152,8 +178,13 @@ const TarjetaUsuario = ({
             "bg-zinc-600 text-white"
           }`}>{usuario.rol?.toUpperCase()}</span>
           <span className={`px-2 py-1 rounded-lg text-xs font-black ${colorAprobacion(usuario.estado_aprobacion || "pendiente")}`}>
-            {(usuario.estado_aprobacion || "pendiente").toUpperCase()}
+            {labelAprobacion(usuario.estado_aprobacion || "pendiente")}
           </span>
+          {!estaEliminado && (
+            <span className={`px-2 py-1 rounded-lg text-xs font-black ${colorEstadoDoc(usuario.estado_doc)}`}>
+              {labelEstadoDoc(usuario.estado_doc)}
+            </span>
+          )}
           {estaEliminado && <span className="px-2 py-1 rounded-lg text-xs font-black bg-red-700 text-white">ELIMINADO</span>}
         </div>
         <button onClick={() => setEditando(!editando)} className="text-xs text-zinc-400 hover:text-yellow-400 font-black">
@@ -231,6 +262,25 @@ const TarjetaUsuario = ({
             </>;
           })()}
 
+          {/* Estado documental — independiente del estado de cuenta */}
+          <div className="col-span-2 border-t border-zinc-800 pt-2 mt-1">
+            <p className="text-zinc-500 text-[10px] font-black mb-1.5">DOCUMENTACIÓN</p>
+            <div className="grid grid-cols-3 gap-1">
+              <button onClick={() => onActualizar(usuario.id, "estado_doc", "doc_completa")}
+                className={`py-1.5 rounded-xl text-[10px] font-black transition ${usuario.estado_doc === "completa" ? "bg-green-700 text-white ring-1 ring-green-400" : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700"}`}>
+                🟢 Completa
+              </button>
+              <button onClick={() => onActualizar(usuario.id, "estado_doc", "doc_pendiente")}
+                className={`py-1.5 rounded-xl text-[10px] font-black transition ${usuario.estado_doc === "pendiente_actualizacion" ? "bg-yellow-600 text-white ring-1 ring-yellow-400" : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700"}`}>
+                🟡 Pendiente
+              </button>
+              <button onClick={() => onActualizar(usuario.id, "estado_doc", "doc_vencida")}
+                className={`py-1.5 rounded-xl text-[10px] font-black transition ${usuario.estado_doc === "vencida" ? "bg-red-700 text-white ring-1 ring-red-400" : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700"}`}>
+                🔴 Vencida
+              </button>
+            </div>
+          </div>
+
           {/* Reset password — todos */}
           <button onClick={() => onResetPassword(usuario.id, usuario.nombre || "usuario")} className="bg-blue-700 text-white font-black py-2 rounded-xl text-xs col-span-2">🔑 Resetear contraseña</button>
 
@@ -303,7 +353,10 @@ const TarjetaChofer = ({ chofer, onActualizarAprobacion }: { chofer: any; onActu
           {chofer.online ? "ONLINE" : "OFFLINE"}
         </span>
         <span className={`px-3 py-1 rounded-xl text-sm font-black ${colorAprobacion(chofer.estado_aprobacion || "pendiente")}`}>
-          {(chofer.estado_aprobacion || "pendiente").toUpperCase()}
+          {labelAprobacion(chofer.estado_aprobacion || "pendiente")}
+        </span>
+        <span className={`px-2 py-1 rounded-xl text-xs font-black ${colorEstadoDoc(chofer.estado_doc)}`}>
+          {labelEstadoDoc(chofer.estado_doc)}
         </span>
       </div>
     </div>
@@ -1302,14 +1355,19 @@ export default function AdminPage() {
       ? (JSON.parse(localStorage.getItem("usuario") || "{}")).id
       : null;
     if (!uid) return;
-    // estado_aprobacion va por el endpoint de acciones de estado
+    // estado_aprobacion y estado_doc van por el endpoint de acciones de estado
     const accionPorValor: Record<string, string> = {
+      // cuenta
       aprobado:   "aprobar",
       rechazado:  "rechazar",
       suspendido: "suspender",
       pendiente:  "reactivar",
+      // documental
+      doc_completa:  "doc_completa",
+      doc_pendiente: "doc_pendiente",
+      doc_vencida:   "doc_vencida",
     };
-    if (campo === "estado_aprobacion" && accionPorValor[valor]) {
+    if ((campo === "estado_aprobacion" || campo === "estado_doc") && accionPorValor[valor]) {
       try {
         const res = await fetch(`/api/admin/usuarios/${id}/estado`, {
           method: "PATCH",

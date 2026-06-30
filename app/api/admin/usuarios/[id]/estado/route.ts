@@ -12,19 +12,29 @@ if (!_roleKey) throw new Error("Falta SUPABASE_SERVICE_ROLE_KEY (admin/usuarios/
 
 const supabaseAdmin = createClient(_url, _roleKey);
 
-type Accion = "eliminar" | "restaurar" | "aprobar" | "rechazar" | "suspender" | "reactivar";
+type Accion =
+  | "eliminar" | "restaurar"
+  | "aprobar" | "rechazar" | "suspender" | "reactivar"
+  | "doc_completa" | "doc_pendiente" | "doc_vencida";
 
 const ACCIONES_PERMITIDAS: Accion[] = [
-  "eliminar", "restaurar", "aprobar", "rechazar", "suspender", "reactivar",
+  "eliminar", "restaurar",
+  "aprobar", "rechazar", "suspender", "reactivar",
+  "doc_completa", "doc_pendiente", "doc_vencida",
 ];
 
 const ACCION_A_UPDATE: Record<Accion, Record<string, unknown>> = {
-  eliminar:  { eliminado: true },
-  restaurar: { eliminado: false },
-  aprobar:   { estado_aprobacion: "aprobado" },
-  rechazar:  { estado_aprobacion: "rechazado" },
-  suspender: { estado_aprobacion: "suspendido" },
-  reactivar: { estado_aprobacion: "aprobado" },
+  // ── Estado de cuenta ──────────────────────────────────────────────────────
+  eliminar:      { eliminado: true },
+  restaurar:     { eliminado: false },
+  aprobar:       { estado_aprobacion: "aprobado" },
+  rechazar:      { estado_aprobacion: "rechazado" },
+  suspender:     { estado_aprobacion: "suspendido" },
+  reactivar:     { estado_aprobacion: "aprobado" },
+  // ── Estado documental (independiente del estado de cuenta) ────────────────
+  doc_completa:  { estado_doc: "completa" },
+  doc_pendiente: { estado_doc: "pendiente_actualizacion" },
+  doc_vencida:   { estado_doc: "vencida" },
 };
 
 export async function PATCH(
