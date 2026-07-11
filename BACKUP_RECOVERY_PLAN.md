@@ -1,7 +1,8 @@
 # TILA Logística — BACKUP & RECOVERY PLAN
 > Generado: 2026-06-12  
 > Repositorio: https://github.com/vicente-logistica/tila-logistica  
-> Producción: https://tila-logistica.vercel.app  
+> Producción (aplicación operativa — este proyecto, `logistica-app`): https://tila-logistica.vercel.app  
+> Nota: la web institucional (`https://www.tilalogistica.com`) es un proyecto separado (`tila-web`) y no está cubierta por este documento.  
 > Último commit: `b78575d` — panel-cliente: botón seguimiento independiente de estado y pago_estado
 
 ---
