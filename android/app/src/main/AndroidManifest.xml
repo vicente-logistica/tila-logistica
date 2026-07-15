@@ -35,6 +35,15 @@
         </provider>
     </application>
 
+    <!-- Requerido por @capacitor/app-launcher (Android 11+) para poder
+         detectar si Waze está instalada antes de abrirla -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="waze" />
+        </intent>
+    </queries>
+
     <!-- Permissions -->
 
     <uses-permission android:name="android.permission.INTERNET" />

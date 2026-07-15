@@ -467,13 +467,30 @@ export default function ViajeActivoPage() {
     return `https://www.google.com/maps/dir/?api=1&destination=${enc}&travelmode=driving`;
   };
 
+  const buildWazeAppUrl = (dest: string): string => {
+    const enc = encodeURIComponent(dest + ", Argentina");
+    return `waze://?q=${enc}&navigate=yes`;
+  };
+
   const abrirNavegador = async (navId: string, dest: string) => {
     const url = buildNavUrl(navId, dest);
     try {
       const { Capacitor } = await import("@capacitor/core");
       if (Capacitor.isNativePlatform()) {
-        const { Browser } = await import("@capacitor/browser");
-        await Browser.open({ url });
+        if (navId === "waze") {
+          const { AppLauncher } = await import("@capacitor/app-launcher");
+          const wazeUrl = buildWazeAppUrl(dest);
+          const { value: instalada } = await AppLauncher.canOpenUrl({ url: wazeUrl });
+          if (instalada) {
+            await AppLauncher.openUrl({ url: wazeUrl });
+          } else {
+            const { Browser } = await import("@capacitor/browser");
+            await Browser.open({ url });
+          }
+        } else {
+          const { Browser } = await import("@capacitor/browser");
+          await Browser.open({ url });
+        }
       } else {
         window.open(url, `_nav_${Date.now()}`);
       }
