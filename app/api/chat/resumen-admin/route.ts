@@ -38,7 +38,7 @@ export async function GET(req: Request) {
   // ── 5. SELECT global mensajes no leídos ──────────────────────────────────────
   const { data, error: selectError } = await supabaseAdmin
     .from("mensajes_viaje")
-    .select("viaje_id, leido, remitente_id, tipo_chat")
+    .select("id, viaje_id, leido, remitente_id, tipo_chat")
     .eq("leido", false);
 
   if (selectError) {
@@ -56,5 +56,13 @@ export async function GET(req: Request) {
     if (tipo in resumen[vkey]) resumen[vkey][tipo]++;
   });
 
-  return NextResponse.json({ resumen });
+  // ── 7. IDs de mensajes no leídos, para que el cliente pueda deduplicar por ID ──
+  const mensajes = (data ?? []).map((m: any) => ({
+    id: m.id,
+    viaje_id: m.viaje_id,
+    remitente_id: m.remitente_id,
+    tipo_chat: m.tipo_chat,
+  }));
+
+  return NextResponse.json({ resumen, mensajes });
 }

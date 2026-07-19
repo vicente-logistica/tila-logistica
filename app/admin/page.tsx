@@ -6,7 +6,7 @@ import BotonCerrarSesion from "../components/BotonCerrarSesion";
 import { useProtegerRuta } from "../hooks/useProtegerRuta";
 import ChatAsistencia from "../components/ChatAsistencia";
 import ChatToast from "../components/ChatToast";
-import { playChatSound } from "../utils/chatSound";
+import { markChatMessagesAsKnown, notifyChatMessage } from "../utils/chatSound";
 
 const ESTADOS_VIAJE = [
   "Chofer asignado", "En camino", "Carga retirada",
@@ -1150,6 +1150,8 @@ export default function AdminPage() {
   // Alerta de mensaje nuevo en admin
   const [alertaMensajeAdmin, setAlertaMensajeAdmin] = useState<string | null>(null);
   const alertaAdminTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // true después de la primera carga exitosa del resumen — evita sonar por mensajes ya existentes
+  const resumenCargadoRef = useRef(false);
   // Silencio por sector — refs para que el callback Realtime lea siempre el valor actual
   const [silenciarChatOperativo, setSilenciarChatOperativo]       = useState(false);
   const [silenciarSoporteCliente, setSilenciarSoporteCliente]     = useState(false);
@@ -1173,8 +1175,50 @@ export default function AdminPage() {
         console.error("[cargarResumenMensajes] error API:", res.status);
         return;
       }
-      const { resumen } = await res.json();
+      const { resumen, mensajes } = await res.json();
       if (resumen) setMensajesResumen(resumen);
+
+      const listaMensajes = (mensajes ?? []) as {
+        id: string | number;
+        viaje_id: string | number;
+        remitente_id: string;
+        tipo_chat: string;
+      }[];
+
+      if (!resumenCargadoRef.current) {
+        // Primera carga: baseline — registrar todo lo ya existente, sin sonido
+        resumenCargadoRef.current = true;
+        markChatMessagesAsKnown(listaMensajes.map((m) => m.id));
+        return;
+      }
+
+      const textos: Record<string, string> = {
+        viaje:           "🚛 Chofer · Nuevo mensaje operativo",
+        soporte_cliente: "📦 Cliente · Nuevo mensaje",
+        soporte_chofer:  "🚛 Chofer · Nuevo mensaje",
+      };
+
+      for (const m of listaMensajes) {
+        const esPropio = String(m.remitente_id) === String(uid);
+        if (esPropio) continue;
+
+        const silenciado =
+          m.tipo_chat === "viaje"           ? silenciarChatOperativoRef.current :
+          m.tipo_chat === "soporte_cliente" ? silenciarSoporteClienteRef.current :
+                                               silenciarSoporteChoferRef.current;
+
+        // notifyChatMessage deduplica por ID y reproduce el sonido internamente
+        // (a través del coordinador de chatSound.ts) cuando no está silenciado.
+        const esNuevo = notifyChatMessage(m.id, { silenciado });
+        if (!esNuevo) continue;
+
+        const texto = textos[m.tipo_chat];
+        if (!texto) continue;
+
+        if (alertaAdminTimerRef.current) clearTimeout(alertaAdminTimerRef.current);
+        setAlertaMensajeAdmin(texto);
+        alertaAdminTimerRef.current = setTimeout(() => setAlertaMensajeAdmin(null), 4000);
+      }
     } catch (err) {
       console.error("[cargarResumenMensajes] error de red:", err);
     }
@@ -1277,53 +1321,11 @@ export default function AdminPage() {
       .on("postgres_changes", { event: "*", schema: "public", table: "mensajes_viaje" }, () => cargarResumenMensajes())
       .subscribe();
 
-    const intervalo = setInterval(() => { cargarViajes(); cargarUsuarios(); cargarResumenMensajes(); }, 5000);
+    const intervalo = setInterval(() => {
+      cargarViajes(); cargarUsuarios(); cargarResumenMensajes();
+    }, 5000);
     return () => { supabase.removeChannel(channel); clearInterval(intervalo); };
   }, [cargarViajes, cargarUsuarios, cargarResumenMensajes]);
-
-  // ── Canal dedicado para alertas de chat (siempre activo, deps=[]) ────────────
-  // Canal separado del principal para que no se vea afectado por cambios de callbacks
-  useEffect(() => {
-    const alertChannel = supabase
-      .channel("admin-chat-alerts")
-      .on(
-        "postgres_changes",
-        { event: "INSERT", schema: "public", table: "mensajes_viaje" },
-        (payload) => {
-          console.log("CHAT ALERT payload", payload.new);
-          const msg = payload.new as any;
-          if (!msg) return;
-          const uid = typeof window !== "undefined"
-            ? (JSON.parse(localStorage.getItem("usuario") || "{}")).id
-            : null;
-          if (msg.remitente_id === uid) return;
-
-          const textos: Record<string, string> = {
-            viaje:           "🚛 Chofer · Nuevo mensaje operativo",
-            soporte_cliente: "📦 Cliente · Nuevo mensaje",
-            soporte_chofer:  "🚛 Chofer · Nuevo mensaje",
-          };
-          const texto = textos[msg.tipo_chat as string];
-          if (!texto) return;
-
-          if (alertaAdminTimerRef.current) clearTimeout(alertaAdminTimerRef.current);
-          setAlertaMensajeAdmin(texto);
-          alertaAdminTimerRef.current = setTimeout(() => setAlertaMensajeAdmin(null), 4000);
-
-          // Silencio por sector via refs — sin stale closure
-          const silenciado =
-            msg.tipo_chat === "viaje"           ? silenciarChatOperativoRef.current :
-            msg.tipo_chat === "soporte_cliente" ? silenciarSoporteClienteRef.current :
-                                                  silenciarSoporteChoferRef.current;
-          if (!silenciado) playChatSound();
-        },
-      )
-      .subscribe((status) => {
-        console.log("CHAT ALERT realtime status", status);
-      });
-
-    return () => { supabase.removeChannel(alertChannel); };
-  }, []);
 
   const pendientes = useMemo(() => cargas.filter((c) => !c.estado || c.estado.toLowerCase() === "pendiente"), [cargas]);
   const activos = useMemo(() => cargas.filter((c) => ESTADOS_ACTIVOS.includes(c.estado)), [cargas]);
@@ -1618,7 +1620,7 @@ export default function AdminPage() {
             <button type="button" onClick={() => setSilenciarChatOperativo(v => !v)}
               title={silenciarChatOperativo ? "Activar chat operativo" : "Silenciar chat operativo"}
               className={`px-2 py-1 rounded-lg text-[11px] font-black transition ${silenciarChatOperativo ? "bg-zinc-700 text-zinc-500" : "bg-zinc-800 text-zinc-300 hover:bg-zinc-700"}`}>
-              {silenciarChatOperativo ? "🚛🔕" : "🚛🔔"}
+              {silenciarChatOperativo ? "💬🔕" : "💬🔔"}
             </button>
             <button type="button" onClick={() => setSilenciarSoporteCliente(v => !v)}
               title={silenciarSoporteCliente ? "Activar soporte cliente" : "Silenciar soporte cliente"}
@@ -1628,7 +1630,7 @@ export default function AdminPage() {
             <button type="button" onClick={() => setSilenciarSoporteChofer(v => !v)}
               title={silenciarSoporteChofer ? "Activar soporte chofer" : "Silenciar soporte chofer"}
               className={`px-2 py-1 rounded-lg text-[11px] font-black transition ${silenciarSoporteChofer ? "bg-zinc-700 text-zinc-500" : "bg-zinc-800 text-zinc-300 hover:bg-zinc-700"}`}>
-              {silenciarSoporteChofer ? "🛟🔕" : "🛟🔔"}
+              {silenciarSoporteChofer ? "🚛🔕" : "🚛🔔"}
             </button>
           </div>
         </div>

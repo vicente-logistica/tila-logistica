@@ -87,6 +87,14 @@ export default function MapaTILA({
   const geocoderRef          = useRef<google.maps.Geocoder | null>(null);
   const directionsServiceRef = useRef<google.maps.DirectionsService | null>(null);
 
+  // ─── Control de cámara en modoNavegacion ──────────────────────────────────
+  // siguiendoChoferRef: true = la cámara sigue centrándose sola en cada GPS (comportamiento
+  // por defecto). Pasa a false apenas el usuario arrastra o hace zoom manualmente.
+  // programaticoRef: true mientras el propio componente mueve la cámara por código, para no
+  // confundir esos movimientos con una interacción real del usuario en zoom_changed.
+  const siguiendoChoferRef = useRef(true);
+  const programaticoRef    = useRef(false);
+
   const [origenCoords,  setOrigenCoords]  = useState<google.maps.LatLngLiteral | null>(null);
   const [destinoCoords, setDestinoCoords] = useState<google.maps.LatLngLiteral | null>(null);
   const [paradasCoords, setParadasCoords] = useState<(google.maps.LatLngLiteral | null)[]>([]);
@@ -125,6 +133,14 @@ export default function MapaTILA({
     const bounds = new google.maps.LatLngBounds();
     puntos.forEach(p => bounds.extend(p));
     mapRef.current.fitBounds(bounds, { top: 60, right: 40, bottom: 60, left: 40 });
+  }, []);
+
+  // ─── Ejecutar un movimiento de cámara propio sin que zoom_changed lo confunda ──
+  // con una interacción manual del usuario (que desactivaría el auto-seguimiento).
+  const moverCamaraProgramatico = useCallback((mover: () => void) => {
+    programaticoRef.current = true;
+    mover();
+    setTimeout(() => { programaticoRef.current = false; }, 0);
   }, []);
 
   // ─── Aplicar polyline fallback con los puntos disponibles ─────────────────
@@ -393,7 +409,18 @@ export default function MapaTILA({
   const onMapLoad = useCallback((mapa: google.maps.Map) => {
     mapRef.current = mapa;
     if (!modoMultiChofer) actualizarMarcadorChofer(mapa);
-  }, [actualizarMarcadorChofer, modoMultiChofer]);
+
+    // Solo en modoNavegacion (Viaje Activo) el usuario puede "tomar control" de la cámara.
+    // Panel Chofer nunca pasa modoNavegacion=true, así que este bloque no le afecta.
+    if (modoNavegacion) {
+      mapa.addListener("dragstart", () => {
+        siguiendoChoferRef.current = false;
+      });
+      mapa.addListener("zoom_changed", () => {
+        if (!programaticoRef.current) siguiendoChoferRef.current = false;
+      });
+    }
+  }, [actualizarMarcadorChofer, modoMultiChofer, modoNavegacion]);
 
   const onMapLoadMulti = useCallback((mapa: google.maps.Map) => {
     mapRef.current = mapa;
@@ -410,15 +437,41 @@ export default function MapaTILA({
 
   useEffect(() => {
     if (!mapRef.current || !lat || !lng || modoMultiChofer) return;
+    // El marcador del chofer SIEMPRE se actualiza — el seguimiento de posición nunca se pierde,
+    // se desacopla únicamente el movimiento de la cámara.
     actualizarMarcadorChofer(mapRef.current);
     if (modoNavegacion) {
+      // Si el usuario ya tomó control manual del mapa (arrastró o hizo zoom), no recentrar.
+      if (!siguiendoChoferRef.current) return;
       // Navegación: setCenter instantáneo sin animación, zoom fijo 15
-      mapRef.current.setCenter({ lat, lng });
-      if (mapRef.current.getZoom() !== 15) mapRef.current.setZoom(15);
+      moverCamaraProgramatico(() => {
+        mapRef.current!.setCenter({ lat, lng });
+        if (mapRef.current!.getZoom() !== 15) mapRef.current!.setZoom(15);
+      });
     } else {
       mapRef.current.panTo({ lat, lng });
     }
-  }, [lat, lng, actualizarMarcadorChofer, modoMultiChofer, modoNavegacion]);
+  }, [lat, lng, actualizarMarcadorChofer, modoMultiChofer, modoNavegacion, moverCamaraProgramatico]);
+
+  // ─── Botones de control manual de cámara (solo modoNavegacion) ────────────
+  const verRecorridoCompleto = useCallback(() => {
+    siguiendoChoferRef.current = false;
+    const puntos: google.maps.LatLngLiteral[] = [];
+    if (lat && lng) puntos.push({ lat, lng });
+    paradasCoords.forEach(p => { if (p) puntos.push(p); });
+    if (destinoCoords) puntos.push(destinoCoords);
+    if (puntos.length === 0) return;
+    moverCamaraProgramatico(() => ajustarZoom(puntos));
+  }, [lat, lng, paradasCoords, destinoCoords, ajustarZoom, moverCamaraProgramatico]);
+
+  const volverAMiUbicacion = useCallback(() => {
+    if (!mapRef.current || !lat || !lng) return;
+    siguiendoChoferRef.current = true;
+    moverCamaraProgramatico(() => {
+      mapRef.current!.setCenter({ lat, lng });
+      mapRef.current!.setZoom(15);
+    });
+  }, [lat, lng, moverCamaraProgramatico]);
 
   // ─── Color parada ─────────────────────────────────────────────────────────
   const colorPorEstado = (estado: string) => {
@@ -457,7 +510,7 @@ export default function MapaTILA({
   );
 
   return (
-    <div style={{ width: "100%" }}>
+    <div style={{ width: "100%", position: "relative" }}>
       <GoogleMap
         mapContainerStyle={contenedorEstilo}
         center={centroInicial()}
@@ -557,6 +610,33 @@ export default function MapaTILA({
           />
         )}
       </GoogleMap>
+
+      {/* Controles manuales de cámara — solo en modoNavegacion (Viaje Activo) */}
+      {modoNavegacion && (
+        <div
+          className="absolute right-3 z-20 flex flex-col gap-2"
+          style={{ top: "50%", transform: "translateY(-50%)" }}
+        >
+          <button
+            type="button"
+            onClick={verRecorridoCompleto}
+            title="Ver recorrido completo"
+            aria-label="Ver recorrido completo"
+            className="w-11 h-11 rounded-full bg-black/85 border border-yellow-400 text-yellow-400 flex items-center justify-center text-lg shadow-lg active:scale-95 transition"
+          >
+            🗺️
+          </button>
+          <button
+            type="button"
+            onClick={volverAMiUbicacion}
+            title="Volver a mi ubicación"
+            aria-label="Volver a mi ubicación"
+            className="w-11 h-11 rounded-full bg-black/85 border border-yellow-400 text-yellow-400 flex items-center justify-center text-lg shadow-lg active:scale-95 transition"
+          >
+            📍
+          </button>
+        </div>
+      )}
 
       {/* ── Diagnóstico visible — solo cuando mostrarDiagnostico=true ──────── */}
       {mostrarDiagnostico && (
