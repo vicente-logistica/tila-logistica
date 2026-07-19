@@ -8,7 +8,7 @@ import MapaTILA from "../components/MapaTILA";
 import ChatAsistencia from "../components/ChatAsistencia";
 import ChatToast from "../components/ChatToast";
 import BotonCerrarSesion from "../components/BotonCerrarSesion";
-import { playChatSound } from "../utils/chatSound";
+import { markChatMessagesAsKnown, notifyChatMessage } from "../utils/chatSound";
 import { labelVehiculo, VehiculoRow } from "../lib/vehiculos";
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
@@ -16,6 +16,18 @@ type ParadaMapa = {
   direccion: string;
   tipo: "retiro" | "entrega" | "parada";
   estado: "pendiente" | "en_curso" | "completada";
+};
+
+type MensajeChat = {
+  id: number;
+  viaje_id: number;
+  tipo_chat: "viaje" | "soporte_cliente" | "soporte_chofer";
+  remitente_id: string;
+  remitente_rol: string;
+  remitente_nombre: string;
+  mensaje: string;
+  leido: boolean;
+  created_at: string;
 };
 
 // "pendiente_pago" se muestra al cliente mientras espera confirmación del pago
@@ -362,7 +374,13 @@ export default function PanelClientePage() {
   const silenciarAlertasRef        = useRef(false);
   // IDs de viajes activos en ref para callbacks (evita stale + evita re-subscribe)
   const viajesActivosIdsRef    = useRef<Set<string>>(new Set());
-  const noLeidosPorViajeRef    = useRef<Record<string, Record<string, number>>>({});
+  // Corte por viaje: server_now del primer fetch exitoso de /api/chat/mensajes
+  // para ese viaje. Se fija una sola vez (gateado por baselineHechoRef) y nunca
+  // se vuelve a modificar — todo mensaje con created_at posterior es candidato a sonar.
+  const corteRef         = useRef<Record<string, string>>({});
+  // Viajes que ya recibieron su baseline (mensajes existentes registrados sin
+  // sonido, vía markChatMessagesAsKnown). Se marca UNA sola vez por viaje.
+  const baselineHechoRef = useRef<Record<string, boolean>>({});
 
   // Leer params de la URL al montar (sin useSearchParams para evitar Suspense)
   useEffect(() => {
@@ -529,87 +547,105 @@ export default function PanelClientePage() {
     return () => { supabase.removeChannel(canal); clearInterval(tick); };
   }, [usuario?.id]);
 
-  // ── Carga inicial de no leídos (se re-ejecuta cada vez que cambian los viajes activos) ──
-  useEffect(() => {
-    if (!usuario?.id || viajesActivos.length === 0) return;
-    const uid = usuario.id;
-    const cargarTodosNoLeidos = async () => {
-      const nuevoConteo: Record<string, Record<string, number>> = {};
-      await Promise.all(viajesActivos.map(async (v) => {
-        const vid = String(v.id);
-        const headers = { "x-user-id": uid };
-        const [resViaje, resSoporte] = await Promise.all([
-          fetch(`/api/chat/no-leidos?viaje_id=${v.id}&tipo_chat=viaje`,           { headers }).then(r => r.ok ? r.json() : { count: 0 }),
-          fetch(`/api/chat/no-leidos?viaje_id=${v.id}&tipo_chat=soporte_cliente`, { headers }).then(r => r.ok ? r.json() : { count: 0 }),
-        ]);
-        nuevoConteo[vid] = { viaje: resViaje.count ?? 0, soporte_cliente: resSoporte.count ?? 0 };
-      }));
-      setNoLeidosPorViaje(nuevoConteo);
-    };
-    cargarTodosNoLeidos();
-  }, [viajesActivos]);
-
-  // Mantener ref sincronizado para Realtime sin stale closure
-  useEffect(() => {
-    noLeidosPorViajeRef.current = noLeidosPorViaje;
-  }, [noLeidosPorViaje]);
-
-  // ── Listener externo de mensajes (siempre activo, sin stale closure) ──────
+  // ── No leídos: un único detector por viaje, sin efecto separado de "carga inicial" ──
+  // (fusiona los dos efectos previos — evita la carrera entre "baseline" y "sonido"
+  // que se disparaba cada vez que `viajesActivos` cambiaba de referencia, por ej.
+  // en cada ping de GPS del chofer sobre la tabla `cargas`).
   useEffect(() => {
     if (!usuario?.id) return;
     const uid = usuario.id;
 
-    // Con RLS ON payload.new llega vacío → usamos el evento como trigger y pedimos la API
-    const actualizarNoLeidos = async () => {
+    const headers = { "x-user-id": uid };
+
+    // ── Badges: EXCLUSIVAMENTE /api/chat/no-leidos. Ninguna decisión de sonido
+    // ni de "es nuevo" se toma acá — solo cuenta lo que sigue sin leer ahora mismo.
+    const actualizarBadges = async () => {
       const ids = Array.from(viajesActivosIdsRef.current);
       if (ids.length === 0) return;
-      const headers = { "x-user-id": uid };
+      const res = await fetch(`/api/chat/no-leidos?viaje_id=${ids.join(",")}&tipo_chat=viaje,soporte_cliente`, { headers });
+      if (!res.ok) return;
+      const { porViaje = {} } = await res.json();
+
       const nuevoConteo: Record<string, Record<string, number>> = {};
-      await Promise.all(ids.map(async (vid) => {
-        const [resViaje, resSoporte] = await Promise.all([
-          fetch(`/api/chat/no-leidos?viaje_id=${vid}&tipo_chat=viaje`,           { headers }).then(r => r.ok ? r.json() : { count: 0 }),
-          fetch(`/api/chat/no-leidos?viaje_id=${vid}&tipo_chat=soporte_cliente`, { headers }).then(r => r.ok ? r.json() : { count: 0 }),
-        ]);
-        nuevoConteo[vid] = { viaje: resViaje.count ?? 0, soporte_cliente: resSoporte.count ?? 0 };
-      }));
-
-      // Comparar con ref para detectar mensajes nuevos y disparar alerta/sonido
       for (const vid of ids) {
-        const prevViaje   = noLeidosPorViajeRef.current[vid]?.viaje          ?? 0;
-        const prevSoporte = noLeidosPorViajeRef.current[vid]?.soporte_cliente ?? 0;
-        const nuevoViaje   = nuevoConteo[vid]?.viaje          ?? 0;
-        const nuevoSoporte = nuevoConteo[vid]?.soporte_cliente ?? 0;
-
-        if (nuevoViaje > prevViaje && !(chatListaViajeIdRef.current === vid && tipoChatListaRef.current === "viaje")) {
-          if (alertaTimerRef.current) clearTimeout(alertaTimerRef.current);
-          setAlertaMensaje("🚛 Chofer · Nuevo mensaje");
-          alertaTimerRef.current = setTimeout(() => setAlertaMensaje(null), 4000);
-          if (audioDesbloquedoRef.current && !silenciarChatViajeRef.current) playChatSound();
-        }
-        if (nuevoSoporte > prevSoporte && !(chatListaViajeIdRef.current === vid && tipoChatListaRef.current === "soporte_cliente")) {
-          if (alertaTimerRef.current) clearTimeout(alertaTimerRef.current);
-          setAlertaMensaje("🛟 Soporte TILA · Nuevo mensaje");
-          alertaTimerRef.current = setTimeout(() => setAlertaMensaje(null), 4000);
-          if (audioDesbloquedoRef.current && !silenciarSoporteClienteRef.current) playChatSound();
-        }
+        nuevoConteo[vid] = {
+          viaje: porViaje[vid]?.viaje?.count ?? 0,
+          soporte_cliente: porViaje[vid]?.soporte_cliente?.count ?? 0,
+        };
       }
-
       setNoLeidosPorViaje(nuevoConteo);
     };
+
+    // ── Detección: EXCLUSIVAMENTE /api/chat/mensajes (nunca filtra por leído).
+    // Es la única función que decide sonido/alerta, vía notifyChatMessage.
+    const detectarNuevos = async () => {
+      const ids = Array.from(viajesActivosIdsRef.current);
+      if (ids.length === 0) return;
+      const res = await fetch(`/api/chat/mensajes?viaje_id=${ids.join(",")}&tipo_chat=viaje,soporte_cliente`, { headers });
+      if (!res.ok) return;
+      const { porViaje = {}, server_now } = await res.json();
+
+      for (const vid of ids) {
+        const mensajesViaje   = porViaje[vid]?.viaje            ?? [];
+        const mensajesSoporte = porViaje[vid]?.soporte_cliente   ?? [];
+
+        // Primera vez que vemos este viaje en la sesión: se fija el corte
+        // (server_now, nunca más se modifica) y se registra el baseline UNA
+        // sola vez — sin sonido.
+        if (!baselineHechoRef.current[vid]) {
+          corteRef.current[vid] = server_now;
+          baselineHechoRef.current[vid] = true;
+          const idsBaseline = [...mensajesViaje, ...mensajesSoporte].map((m) => m.id);
+          if (idsBaseline.length > 0) markChatMessagesAsKnown(idsBaseline);
+          continue;
+        }
+
+        const corte = corteRef.current[vid];
+
+        const procesarTipo = (
+          mensajes: MensajeChat[],
+          tipo: "viaje" | "soporte_cliente",
+          silenciarRef: React.MutableRefObject<boolean>,
+          textoAlerta: string,
+        ) => {
+          const nuevos = mensajes.filter(
+            (m) => String(m.remitente_id) !== String(uid) && m.created_at > corte,
+          );
+          let sono = false;
+          for (const m of nuevos) {
+            if (notifyChatMessage(m.id, { silenciado: silenciarRef.current })) sono = true;
+          }
+          if (sono) {
+            const chatAbierto = chatListaViajeIdRef.current === vid && tipoChatListaRef.current === tipo;
+            if (!chatAbierto) {
+              if (alertaTimerRef.current) clearTimeout(alertaTimerRef.current);
+              setAlertaMensaje(textoAlerta);
+              alertaTimerRef.current = setTimeout(() => setAlertaMensaje(null), 4000);
+            }
+          }
+        };
+
+        procesarTipo(mensajesViaje, "viaje", silenciarChatViajeRef, "🚛 Chofer · Nuevo mensaje");
+        procesarTipo(mensajesSoporte, "soporte_cliente", silenciarSoporteClienteRef, "🛟 Soporte TILA · Nuevo mensaje");
+      }
+    };
+
+    const tick = () => { actualizarBadges(); detectarNuevos(); };
 
     const canalMensajes = supabase
       .channel(`cliente-mensajes-${uid}`)
       .on("postgres_changes", { event: "INSERT", schema: "public", table: "mensajes_viaje" },
         (_payload) => {
           console.log("CHAT ALERT trigger (RLS-safe)");
-          actualizarNoLeidos();
+          tick();
         })
       .subscribe((status) => {
         console.log("CHAT ALERT realtime status", status);
       });
 
     // Polling fallback por si Realtime no dispara con RLS sin SELECT policy
-    const polling = setInterval(() => actualizarNoLeidos(), 4000);
+    const polling = setInterval(tick, 4000);
+    tick();
 
     return () => {
       clearInterval(polling);
