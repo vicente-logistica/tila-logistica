@@ -301,11 +301,10 @@ export default function ViajeActivoPage() {
     // Pequeño delay para que usuarioRef esté cargado
     const t = setTimeout(cargarNoLeidos, 500);
 
-    const dispararAlerta = (texto: string, silenciado: boolean) => {
+    const dispararAlerta = (texto: string) => {
       if (alertaTimerRef.current) clearTimeout(alertaTimerRef.current);
       setAlertaMensaje(texto);
       alertaTimerRef.current = setTimeout(() => setAlertaMensaje(null), 4000);
-      if (!silenciado) playChatSound();
     };
 
     // Con RLS ON payload.new llega vacío → usamos el evento como trigger y pedimos la API
@@ -320,11 +319,13 @@ export default function ViajeActivoPage() {
       const nuevoViaje   = resViaje.count   ?? 0;
       const nuevoSoporte = resSoporte.count ?? 0;
 
-      if (nuevoViaje > noLeidosViajeRef.current && !mostrarChatRef.current) {
-        dispararAlerta("📦 Cliente · Nuevo mensaje", silenciarChatViajeRef.current);
+      if (nuevoViaje > noLeidosViajeRef.current) {
+        if (!mostrarChatRef.current) dispararAlerta("📦 Cliente · Nuevo mensaje");
+        if (!silenciarChatViajeRef.current) playChatSound();
       }
-      if (nuevoSoporte > noLeidosSoporteRef.current && !mostrarSoporteRef.current) {
-        dispararAlerta("🛟 Soporte TILA · Nuevo mensaje", silenciarSoporteChoferRef.current);
+      if (nuevoSoporte > noLeidosSoporteRef.current) {
+        if (!mostrarSoporteRef.current) dispararAlerta("🛟 Soporte TILA · Nuevo mensaje");
+        if (!silenciarSoporteChoferRef.current) playChatSound();
       }
 
       setNoLeidosViaje(nuevoViaje);

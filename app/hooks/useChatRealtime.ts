@@ -2,7 +2,10 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { supabase } from "../lib/supabase";
-import { playChatSound } from "../utils/chatSound";
+import {
+  markChatMessagesAsKnown,
+  notifyChatMessage,
+} from "../utils/chatSound";
 
 export type TipoChat = "viaje" | "soporte_cliente" | "soporte_chofer";
 
@@ -46,7 +49,6 @@ export function useChatRealtime({
   const [noLeidos, setNoLeidos] = useState(0);
   const [alerta, setAlerta]     = useState<string | null>(null);
   const alertaTimerRef          = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const idsVistos               = useRef<Set<string | number>>(new Set());
   // Ref always-current de cargarMensajes para que el callback Realtime (con deps=[]) no quede stale
   const cargarMensajesRef = useRef<(dispararNotif?: boolean) => Promise<void>>(async () => {});
 
@@ -101,41 +103,68 @@ export function useChatRealtime({
       const { data } = await res.json();
       if (!data) return;
 
-      // Detectar mensajes nuevos de otros antes de actualizar idsVistos
       if (dispararNotif) {
         const nuevosDeOtros = (data as any[]).filter(
-          (m) => !idsVistos.current.has(m.id) && String(m.remitente_id) !== String(usuarioId),
+          (m) => String(m.remitente_id) !== String(usuarioId),
         );
-        if (nuevosDeOtros.length > 0) {
+
+        const realmenteNuevos = nuevosDeOtros.filter((m) =>
+          notifyChatMessage(m.id, {
+            silenciado: silenciadoRef.current,
+          }),
+        );
+
+        if (realmenteNuevos.length > 0) {
           onNuevoMensaje?.();
+
           if (chatVisibleRef?.current) {
-            // Chat abierto — auto-marcar leído, sin badge ni alerta
             fetch("/api/chat/marcar-leidos", {
-              method:  "POST",
-              headers: { "Content-Type": "application/json", "x-user-id": usuarioId },
-              body:    JSON.stringify({ viaje_id: viajeId, tipo_chat: tipoChat }),
-            }).catch((err) => console.error("[marcarLeidos-realtime] error:", err));
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "x-user-id": usuarioId,
+              },
+              body: JSON.stringify({
+                viaje_id: viajeId,
+                tipo_chat: tipoChat,
+              }),
+            }).catch((err) =>
+              console.error("[marcarLeidos-realtime] error:", err),
+            );
+
             setNoLeidos(0);
             onNoLeidosChange?.(0);
           } else {
-            // Chat cerrado — badge + alerta + sonido
-            const nl = data.filter((m: any) => !m.leido && String(m.remitente_id) !== String(usuarioId)).length;
+            const nl = data.filter(
+              (m: any) =>
+                !m.leido &&
+                String(m.remitente_id) !== String(usuarioId),
+            ).length;
+
             setNoLeidos(nl);
             onNoLeidosChange?.(nl);
+
             if (textoAlerta) {
-              if (alertaTimerRef.current) clearTimeout(alertaTimerRef.current);
+              if (alertaTimerRef.current) {
+                clearTimeout(alertaTimerRef.current);
+              }
+
               setAlerta(textoAlerta);
-              alertaTimerRef.current = setTimeout(() => setAlerta(null), 3500);
+              alertaTimerRef.current = setTimeout(
+                () => setAlerta(null),
+                3500,
+              );
             }
-            if (!silenciadoRef.current) playChatSound();
           }
         }
       }
 
-      data.forEach((m: any) => idsVistos.current.add(m.id));
       setMensajes(data);
       if (!dispararNotif) {
-        // carga inicial: calcular no-leídos sin notificar sonido
+        // carga inicial: registrar todos los IDs como conocidos, sin sonido
+        markChatMessagesAsKnown(
+          data.map((m: any) => m.id),
+        );
         const nl = data.filter((m: any) => !m.leido && String(m.remitente_id) !== String(usuarioId)).length;
         setNoLeidos(nl);
         onNoLeidosChange?.(nl);
