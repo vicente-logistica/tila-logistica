@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 
 const SOPORTE_WHATSAPP = "5491158689383";
-const SOPORTE_EMAIL = "logisticatila@gmail.com";
+const SOPORTE_EMAIL = "contacto@tilalogistica.com";
 
 export default function LoginPage() {
   const router = useRouter();

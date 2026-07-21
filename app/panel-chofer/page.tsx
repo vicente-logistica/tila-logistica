@@ -12,7 +12,7 @@ import { evaluarChoferOnline } from "../lib/validacion-chofer";
 
 const LABELS = ["A", "B", "C", "D", "E", "F"];
 const SOPORTE_WHATSAPP = "5491158689383";
-const SOPORTE_EMAIL    = "logisticatila@gmail.com";
+const SOPORTE_EMAIL    = "contacto@tilalogistica.com";
 
 const ESTADOS_ACTIVOS = [
   "Chofer asignado", "En camino", "Carga retirada", "En ruta", "Descarga completada",

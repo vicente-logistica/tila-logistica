@@ -36,7 +36,7 @@ const ESTADOS_ACTIVOS   = ["pendiente_pago", "pendiente", "Chofer asignado", "En
 const ESTADOS_HISTORIAL = ["Viaje finalizado", "cancelado", "Cancelado por cliente"];
 
 const SOPORTE_WHATSAPP = "5491158689383";
-const SOPORTE_EMAIL    = "logisticatila@gmail.com";
+const SOPORTE_EMAIL    = "contacto@tilalogistica.com";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 const colorEstado = (estado: string) => {

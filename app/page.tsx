@@ -61,7 +61,7 @@ export default function Home() {
           <Link href="/terminos" className="hover:text-yellow-400 transition">Términos y Condiciones</Link>
           <Link href="/privacidad" className="hover:text-yellow-400 transition">Política de Privacidad</Link>
           <Link href="/contrato-transportista" className="hover:text-yellow-400 transition">Contrato Transportista</Link>
-          <a href="mailto:logisticatila@gmail.com" className="hover:text-yellow-400 transition">Contacto</a>
+          <a href="mailto:contacto@tilalogistica.com" className="hover:text-yellow-400 transition">Contacto</a>
         </div>
 
       </section>

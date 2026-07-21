@@ -90,7 +90,7 @@ export default function PrivacidadPage() {
             <li><strong className="text-white">Cancelación:</strong> solicitar la eliminación de datos cuando ya no sean necesarios.</li>
             <li><strong className="text-white">Oposición:</strong> oponerse al tratamiento de sus datos en determinadas circunstancias.</li>
           </ul>
-          <p className="mt-2">Para ejercer estos derechos, enviar una solicitud escrita a: <a href="mailto:logisticatila@gmail.com" className="text-yellow-400 hover:underline font-black">logisticatila@gmail.com</a> indicando nombre completo, DNI y el derecho que desea ejercer. La solicitud será respondida dentro del plazo legal vigente.</p>
+          <p className="mt-2">Para ejercer estos derechos, enviar una solicitud escrita a: <a href="mailto:legal@tilalogistica.com" className="text-yellow-400 hover:underline font-black">legal@tilalogistica.com</a> indicando nombre completo, DNI y el derecho que desea ejercer. La solicitud será respondida dentro del plazo legal vigente.</p>
           <p className="mt-2 text-zinc-500 text-xs">La Dirección Nacional de Protección de Datos Personales (DNPDP) es el organismo de control en la materia.</p>
         </Section>
 
@@ -103,7 +103,7 @@ export default function PrivacidadPage() {
         </Section>
 
         <Section titulo="13. Contacto">
-          <p>Para consultas sobre privacidad y protección de datos personales: <a href="mailto:logisticatila@gmail.com" className="text-yellow-400 hover:underline font-black">logisticatila@gmail.com</a></p>
+          <p>Para consultas sobre privacidad y protección de datos personales: <a href="mailto:legal@tilalogistica.com" className="text-yellow-400 hover:underline font-black">legal@tilalogistica.com</a></p>
           <p className="mt-2">Jurisdicción: República Argentina.</p>
         </Section>
 

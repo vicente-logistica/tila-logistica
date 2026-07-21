@@ -12,7 +12,7 @@ import {
 } from "../lib/tarifas";
 
 const SOPORTE_WHATSAPP = "5491158689383";
-const SOPORTE_EMAIL = "logisticatila@gmail.com";
+const SOPORTE_EMAIL = "contacto@tilalogistica.com";
 
 const CATEGORIAS_LEGALES = ["N1", "N2", "N3"];
 
