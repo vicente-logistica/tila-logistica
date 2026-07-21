@@ -2,6 +2,7 @@
 
 import { useEffect } from "react";
 import { useRouter, usePathname } from "next/navigation";
+import { ejecutarBackButtonInterceptor } from "../utils/backButtonInterceptor";
 
 export default function CapacitorBackHandler() {
   const router = useRouter();
@@ -20,6 +21,10 @@ export default function CapacitorBackHandler() {
         const { App } = await import("@capacitor/app");
 
         const listener = await App.addListener("backButton", ({ canGoBack }) => {
+          // Una pantalla con overlay propio (ej. seguimiento de viaje del cliente)
+          // puede reclamar este evento — si lo maneja, no aplicar navegación por defecto.
+          if (ejecutarBackButtonInterceptor()) return;
+
           const currentPath = window.location.pathname;
           const viajeActivoId = localStorage.getItem("viajeActivoId");
 
@@ -39,7 +44,13 @@ export default function CapacitorBackHandler() {
             return;
           }
 
-          // Hay viaje activo en cualquier pantalla: si no hay historial, retomar viaje
+          // Raíz de rol: Atrás no hace nada acá — la única salida voluntaria es
+          // "Cerrar sesión" (con confirmación). No navega, no cierra la app, no toca sesión.
+          if (currentPath === "/panel-cliente" || currentPath === "/panel-chofer" || currentPath === "/admin") {
+            return;
+          }
+
+          // Hay viaje activo en cualquier otra pantalla: si no hay historial, retomar viaje
           if (viajeActivoId && !canGoBack) {
             router.push("/viaje-activo");
             return;

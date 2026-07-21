@@ -32,9 +32,9 @@ export default function LoginPage() {
       localStorage.setItem("usuario", JSON.stringify(data.usuario));
 
       const rol = data.usuario?.rol;
-      if (rol === "cliente")      router.push("/panel-cliente");
-      else if (rol === "chofer")  router.push("/panel-chofer");
-      else if (rol === "admin")   router.push("/admin");
+      if (rol === "cliente")      router.replace("/panel-cliente");
+      else if (rol === "chofer")  router.replace("/panel-chofer");
+      else if (rol === "admin")   router.replace("/admin");
       else alert("Rol inválido");
 
     } catch {

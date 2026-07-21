@@ -9,6 +9,7 @@ import ChatAsistencia from "../components/ChatAsistencia";
 import ChatToast from "../components/ChatToast";
 import BotonCerrarSesion from "../components/BotonCerrarSesion";
 import { markChatMessagesAsKnown, notifyChatMessage } from "../utils/chatSound";
+import { registrarBackButtonInterceptor } from "../utils/backButtonInterceptor";
 import { labelVehiculo, VehiculoRow } from "../lib/vehiculos";
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
@@ -85,6 +86,29 @@ function SeguimientoViaje({
   const [mostrarChat, setMostrarChat]           = useState(false);
   const [tipoChatCliente, setTipoChatCliente]   = useState<"viaje" | "soporte_cliente">("viaje");
   const [mostrarDetalles, setMostrarDetalles]   = useState(false);
+  const [mostrarConfirmacionSalir, setMostrarConfirmacionSalir] = useState(false);
+  // Ref sincronizado con el estado del modal — la función registrada como
+  // interceptor del botón Atrás debe quedar estable (no recrearse en cada
+  // render), así que lee el valor vigente acá en vez de cerrar sobre el estado.
+  const mostrarConfirmacionSalirRef = useRef(false);
+  useEffect(() => {
+    mostrarConfirmacionSalirRef.current = mostrarConfirmacionSalir;
+  }, [mostrarConfirmacionSalir]);
+
+  // Atrás con el modal abierto → cerrar solo el modal. Atrás con el modal
+  // cerrado → abrirlo. Nunca confirma la salida por sí solo.
+  const alPresionarAtras = useCallback(() => {
+    if (mostrarConfirmacionSalirRef.current) {
+      setMostrarConfirmacionSalir(false);
+    } else {
+      setMostrarConfirmacionSalir(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    const desregistrar = registrarBackButtonInterceptor(alPresionarAtras);
+    return desregistrar;
+  }, [alPresionarAtras]);
 
   const tieneGps = viaje?.lat != null && viaje?.lng != null;
   const precio   = viaje?.precio_cliente ? Number(viaje.precio_cliente) : null;
@@ -105,7 +129,7 @@ function SeguimientoViaje({
       {/* ── HEADER ─────────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800 bg-zinc-900 flex-shrink-0" style={{ height: 56 }}>
         <div className="flex items-center gap-3 min-w-0">
-          <button type="button" onClick={onCerrar}
+          <button type="button" onClick={() => setMostrarConfirmacionSalir(true)}
             className="text-zinc-400 hover:text-yellow-400 font-black text-sm flex-shrink-0">
             ← Viajes
           </button>
@@ -203,7 +227,7 @@ function SeguimientoViaje({
             className={`flex-1 py-2.5 rounded-xl text-xs font-black transition ${mostrarDetalles ? "bg-zinc-600 text-white" : "bg-zinc-800 text-zinc-300 hover:bg-zinc-700"}`}>
             📋 Detalles
           </button>
-          <button type="button" onClick={onCerrar}
+          <button type="button" onClick={() => setMostrarConfirmacionSalir(true)}
             className="flex-1 py-2.5 rounded-xl text-xs font-black bg-zinc-800 text-zinc-300 hover:bg-zinc-700 transition">
             🗺 Cerrar mapa
           </button>
@@ -332,6 +356,28 @@ function SeguimientoViaje({
               </div>
             </div>
 
+          </div>
+        </div>
+      )}
+
+      {/* ── MODAL CONFIRMACIÓN DE SALIDA — botones visibles y Atrás de Android ── */}
+      {mostrarConfirmacionSalir && (
+        <div className="fixed inset-0 z-[60] bg-black/80 flex items-center justify-center p-6">
+          <div className="bg-zinc-900 border border-yellow-400 rounded-3xl p-6 text-center shadow-2xl max-w-sm w-full">
+            <p className="text-yellow-400 font-black text-lg mb-2">¿Salir del seguimiento?</p>
+            <p className="text-zinc-400 text-sm mb-6">
+              Vas a dejar de ver el mapa en vivo de este viaje. Podés volver a entrar cuando quieras desde tus viajes.
+            </p>
+            <div className="flex gap-2">
+              <button type="button" onClick={() => setMostrarConfirmacionSalir(false)}
+                className="flex-1 py-2.5 rounded-xl font-black text-sm bg-zinc-800 text-zinc-300 hover:bg-zinc-700 transition">
+                Cancelar
+              </button>
+              <button type="button" onClick={onCerrar}
+                className="flex-1 py-2.5 rounded-xl font-black text-sm bg-yellow-400 text-black hover:bg-yellow-300 transition">
+                Salir
+              </button>
+            </div>
           </div>
         </div>
       )}
