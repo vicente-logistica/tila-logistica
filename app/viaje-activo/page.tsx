@@ -265,7 +265,23 @@ export default function ViajeActivoPage() {
     if (!viajeId) return;
     const canal = supabase.channel(`viaje-activo-rt-${viajeId}`)
       .on("postgres_changes", { event: "*", schema: "public", table: "cargas", filter: `id=eq.${viajeId}` },
-        (payload) => { if (payload.new) setViaje(payload.new); })
+        (payload) => {
+          const nuevo = payload.new as Record<string, unknown>;
+          if (!nuevo || Object.keys(nuevo).length === 0) return;
+          setViaje((prev: any) => {
+            if (!prev) return nuevo;
+            // El PATCH de GPS ya se aplicó de forma optimista en el efecto de watchPosition;
+            // si el realtime sólo trae ese mismo eco, evitamos un re-render redundante
+            // (cada tick de GPS generaba hasta 2 renders del mapa por esta duplicación).
+            const soloEcoGps =
+              prev.lat === nuevo.lat &&
+              prev.lng === nuevo.lng &&
+              prev.velocidad === nuevo.velocidad &&
+              prev.estado === nuevo.estado &&
+              prev.pago_estado === nuevo.pago_estado;
+            return soloEcoGps ? prev : nuevo;
+          });
+        })
       .on("postgres_changes", { event: "*", schema: "public", table: "paradas_viaje", filter: `carga_id=eq.${viajeId}` },
         () => {
           supabase.from("paradas_viaje").select("*").eq("carga_id", Number(viajeId)).order("orden", { ascending: true })

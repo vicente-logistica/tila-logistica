@@ -5,7 +5,7 @@ import { supabase } from "../lib/supabase";
 import { useProtegerRuta } from "../hooks/useProtegerRuta";
 import HistorialChofer from "../components/historial-chofer";
 import BotonCerrarSesion from "../components/BotonCerrarSesion";
-import MapaTILA, { ParadaMapa } from "../components/MapaTILA";
+import MapaTILA, { ParadaMapa, ResumenRuta } from "../components/MapaTILA";
 import GestionVehiculosChofer from "../components/GestionVehiculosChofer";
 import { labelVehiculo, VehiculoRow } from "../lib/vehiculos";
 import { evaluarChoferOnline } from "../lib/validacion-chofer";
@@ -37,6 +37,11 @@ export default function PanelChoferPage() {
   const [onlineCargado, setOnlineCargado]   = useState(false);
   const [mostrarMapa, setMostrarMapa]       = useState(false);
   const [mostrarHistorial, setMostrarHistorial] = useState(false);
+
+  // ─── Ubicación del chofer para la vista previa del mapa (antes de aceptar) ─
+  const [posicionChofer, setPosicionChofer] = useState<{ lat: number; lng: number } | null>(null);
+  const [posicionChoferEstado, setPosicionChoferEstado] = useState<"idle" | "buscando" | "ok" | "error">("idle");
+  const [resumenRuta, setResumenRuta] = useState<ResumenRuta | null>(null);
 
   const [viajeActivo, setViajeActivo]               = useState<any>(null);
   const [buscandoViajeActivo, setBuscandoViajeActivo] = useState(true);
@@ -401,7 +406,22 @@ export default function PanelChoferPage() {
   }, [online, onlineCargado, detenerAlarmaViaje]);
 
   // ─── Cerrar mapa al cambiar de viaje ─────────────────────────────────────
-  useEffect(() => { setMostrarMapa(false); }, [indice]);
+  useEffect(() => { setMostrarMapa(false); setResumenRuta(null); }, [indice]);
+
+  // ─── Ubicación del chofer al abrir la vista previa del mapa (una sola vez) ─
+  useEffect(() => {
+    if (!mostrarMapa || posicionChofer || posicionChoferEstado === "buscando") return;
+    if (!navigator.geolocation) { setPosicionChoferEstado("error"); return; }
+    setPosicionChoferEstado("buscando");
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setPosicionChofer({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+        setPosicionChoferEstado("ok");
+      },
+      () => setPosicionChoferEstado("error"),
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 }
+    );
+  }, [mostrarMapa, posicionChofer, posicionChoferEstado]);
 
   // ─── Rechazar ────────────────────────────────────────────────────────────
   const rechazarViaje = () => {
@@ -830,14 +850,37 @@ export default function PanelChoferPage() {
                 {mostrarMapa && (
                   <div className="rounded-2xl overflow-hidden border-2 border-yellow-400">
                     <MapaTILA
-                      lat={null}
-                      lng={null}
+                      lat={posicionChofer?.lat ?? null}
+                      lng={posicionChofer?.lng ?? null}
                       origen={cargaActual.origen}
                       destino={cargaActual.destino}
                       soloLectura={true}
                       altura="360px"
                       paradas={paradasParaMapa.length >= 2 ? paradasParaMapa : undefined}
+                      mostrarRutaDesdeChofer={paradasParaMapa.length < 2}
+                      onResumenRuta={setResumenRuta}
                     />
+                    {posicionChoferEstado === "error" && (
+                      <p className="text-xs text-zinc-500 px-3 py-2 bg-zinc-900">
+                        📍 No se pudo obtener tu ubicación — se muestra sólo el tramo retiro → entrega.
+                      </p>
+                    )}
+                    {paradasParaMapa.length < 2 && posicionChoferEstado === "ok" && (
+                      <div className="grid grid-cols-2 gap-px bg-zinc-800 text-xs font-black">
+                        <div className="bg-zinc-900 px-3 py-2">
+                          <p className="text-zinc-500">Hasta el retiro</p>
+                          <p className="text-yellow-400">{resumenRuta ? `${resumenRuta.hastaRetiro.distanciaTexto} · ${resumenRuta.hastaRetiro.duracionTexto}` : "Calculando..."}</p>
+                        </div>
+                        <div className="bg-zinc-900 px-3 py-2">
+                          <p className="text-zinc-500">Retiro → Entrega</p>
+                          <p className="text-yellow-400">{resumenRuta ? `${resumenRuta.retiroAEntrega.distanciaTexto} · ${resumenRuta.retiroAEntrega.duracionTexto}` : "Calculando..."}</p>
+                        </div>
+                        <div className="bg-zinc-900 px-3 py-2 col-span-2">
+                          <p className="text-zinc-500">Total del recorrido</p>
+                          <p className="text-yellow-400">{resumenRuta ? `${resumenRuta.total.distanciaTexto} · ${resumenRuta.total.duracionTexto}` : "Calculando..."}</p>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
