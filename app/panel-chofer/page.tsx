@@ -28,6 +28,7 @@ export default function PanelChoferPage() {
   const [online, setOnline]                 = useState(false);
   const [vehiculoChofer, setVehiculoChofer] = useState("");
   const [vehiculoActivo, setVehiculoActivo] = useState<VehiculoRow | null>(null);
+  const [vehiculoActivoResuelto, setVehiculoActivoResuelto] = useState(false);
   const [vehiculoActivoId, setVehiculoActivoId] = useState<string | null>(null);
   const [docsPersonales, setDocsPersonales] = useState<Record<string, string>>({});
   const [categoriaLegal, setCategoriaLegal] = useState("");
@@ -228,12 +229,14 @@ export default function PanelChoferPage() {
           vehiculo_activo_id: activoId,
           tipo_vehiculo: vehiculo.tipo_vehiculo,
         }));
+        setVehiculoActivoResuelto(true);
         return vehiculo as VehiculoRow;
       }
     }
 
     setVehiculoActivo(null);
     setVehiculoChofer(usuario?.tipo_vehiculo || usuario?.vehiculo || "Sin vehículo activo");
+    setVehiculoActivoResuelto(true);
     return null;
   }, []);
 
@@ -283,13 +286,26 @@ export default function PanelChoferPage() {
     console.log("DEBUG_CARGAR_CARGAS_START", { motivo, hora: new Date().toISOString() });
     const u = localStorage.getItem("usuario");
     const usuario = u ? JSON.parse(u) : null;
-    const tipoActivo = usuario?.tipo_vehiculo || "";
+
+    if (!usuario?.id) return;
+
+    // Única fuente válida de tipo de vehículo: vehiculoActivo, resuelto vía
+    // usuarios.vehiculo_activo_id en cargarPerfilChofer(). usuarios.tipo_vehiculo
+    // es un campo denormalizado que no se actualiza al cambiar de vehículo activo,
+    // por eso NO se usa como fallback. Si todavía no se resolvió, no filtramos ni
+    // tocamos "cargas": esta ejecución termina y la siguiente (poll/realtime,
+    // o cargarCargas re-creado cuando vehiculoActivo cambie) ya tendrá el dato correcto.
+    if (!vehiculoActivoResuelto) {
+      console.log("DEBUG_CARGAR_CARGAS_SKIP", { motivo, razon: "vehiculoActivo aún no resuelto" });
+      setCargando(false);
+      return;
+    }
+    const tipoActivo = vehiculoActivo?.tipo_vehiculo || "";
 
     console.log("USUARIO CHOFER", usuario);
     console.log("TIPO ACTIVO", JSON.stringify(tipoActivo), "len:", tipoActivo.length);
     console.log("CATEGORIA LEGAL", JSON.stringify(usuario?.categoria_legal));
 
-    if (!usuario?.id) return;
     const res = await fetch("/api/cargas/disponibles", {
       headers: { "x-user-id": String(usuario.id) },
     });
@@ -401,7 +417,7 @@ export default function PanelChoferPage() {
     }
 
     setCargando(false);
-  }, [iniciarAlarmaViaje]);
+  }, [iniciarAlarmaViaje, vehiculoActivo, vehiculoActivoResuelto]);
 
   // ─── Ref a cargarCargas — para usar en closures sin recrear suscripciones ─
   const cargarCargasRef = useRef(cargarCargas);
