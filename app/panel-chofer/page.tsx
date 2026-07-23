@@ -200,10 +200,11 @@ export default function PanelChoferPage() {
 
   // ─── Perfil chofer + vehículo activo ─────────────────────────────────────
   const cargarPerfilChofer = useCallback(async () => {
+    console.log("DEBUG_PERFIL_CHOFER_START", { hora: new Date().toISOString() });
     const u = localStorage.getItem("usuario");
-    if (!u) return null;
+    if (!u) { console.log("DEBUG_PERFIL_CHOFER_END", { motivo: "sin-usuario-localstorage" }); return null; }
     const usuario = JSON.parse(u);
-    if (!usuario?.id) return null;
+    if (!usuario?.id) { console.log("DEBUG_PERFIL_CHOFER_END", { motivo: "sin-usuario-id" }); return null; }
     setChoferId(usuario.id);
     setCategoriaLegal(usuario.categoria_legal || "");
 
@@ -218,9 +219,15 @@ export default function PanelChoferPage() {
 
     const activoId = perfil?.vehiculo_activo_id ?? usuario.vehiculo_activo_id ?? null;
     setVehiculoActivoId(activoId);
+    console.log("DEBUG_VEHICULO_ACTIVO_ID_USUARIOS", {
+      activoId,
+      perfilVehiculoActivoId: perfil?.vehiculo_activo_id ?? null,
+      usuarioLocalStorageVehiculoActivoId: usuario.vehiculo_activo_id ?? null,
+    });
 
     if (activoId) {
       const { data: vehiculo } = await supabase.from("vehiculos").select("*").eq("id", activoId).single();
+      console.log("DEBUG_VEHICULO_TABLA_RESPUESTA", vehiculo ? { id: vehiculo.id, tipo_vehiculo: vehiculo.tipo_vehiculo, activo: vehiculo.activo } : { vehiculo: null });
       if (vehiculo) {
         setVehiculoActivo(vehiculo);
         setVehiculoChofer(labelVehiculo(vehiculo));
@@ -230,6 +237,7 @@ export default function PanelChoferPage() {
           tipo_vehiculo: vehiculo.tipo_vehiculo,
         }));
         setVehiculoActivoResuelto(true);
+        console.log("DEBUG_PERFIL_CHOFER_END", { motivo: "con-vehiculo", id: vehiculo.id, tipo_vehiculo: vehiculo.tipo_vehiculo });
         return vehiculo as VehiculoRow;
       }
     }
@@ -237,8 +245,22 @@ export default function PanelChoferPage() {
     setVehiculoActivo(null);
     setVehiculoChofer(usuario?.tipo_vehiculo || usuario?.vehiculo || "Sin vehículo activo");
     setVehiculoActivoResuelto(true);
+    console.log("DEBUG_PERFIL_CHOFER_END", { motivo: "sin-vehiculo-activo", activoId });
     return null;
   }, []);
+
+  // ─── Logs temporales: rastrear cada cambio de vehiculoActivo / vehiculoActivoResuelto ──
+  useEffect(() => {
+    console.log("DEBUG_VEHICULO_ACTIVO_CAMBIO", {
+      id: vehiculoActivo?.id ?? null,
+      tipo_vehiculo: vehiculoActivo?.tipo_vehiculo ?? null,
+      activo: vehiculoActivo?.activo ?? null,
+    });
+  }, [vehiculoActivo]);
+
+  useEffect(() => {
+    console.log("DEBUG_VEHICULO_ACTIVO_RESUELTO_CAMBIO", { vehiculoActivoResuelto });
+  }, [vehiculoActivoResuelto]);
 
   // ─── Estado online inicial ────────────────────────────────────────────────
   useEffect(() => {
