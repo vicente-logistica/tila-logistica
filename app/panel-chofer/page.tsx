@@ -140,10 +140,15 @@ export default function PanelChoferPage() {
         const res = await fetch("/api/cargas/activa", {
           headers: { "x-user-id": String(usuario.id) },
         });
+        const bodyJson = res.ok ? await res.json() : null;
+        console.log("DEBUG_ACTIVA_RESPONSE (mount):", { ok: res.ok, status: res.status, body: bodyJson });
         if (res.ok) {
-          const { carga } = await res.json();
+          const { carga } = bodyJson;
           if (carga) {
-            setViajeActivo(carga);
+            setViajeActivo((prev: any) => {
+              console.log("DEBUG_SET_VIAJE_ACTIVO", { motivo: "mount:buscarViajeActivo", anterior: prev?.id ?? null, nuevo: carga?.id ?? null });
+              return carga;
+            });
             localStorage.setItem("viajeActivoId", String(carga.id));
           }
         }
@@ -165,9 +170,14 @@ export default function PanelChoferPage() {
         headers: { "x-user-id": String(uid) },
       });
       if (!res.ok) return;
-      const { carga } = await res.json();
+      const bodyJson = await res.json();
+      console.log("DEBUG_ACTIVA_RESPONSE (poll 10s):", { status: res.status, body: bodyJson });
+      const { carga } = bodyJson;
       if (!carga) {
-        setViajeActivo(null);
+        setViajeActivo((prev: any) => {
+          console.log("DEBUG_SET_VIAJE_ACTIVO", { motivo: "poll:sin-carga-del-servidor", anterior: prev?.id ?? null, nuevo: null });
+          return null;
+        });
         localStorage.removeItem("viajeActivoId");
         setCanceladoPorCliente(true);
         // Disparar sonido de alerta (audio ya desbloqueado por el usuario)
@@ -425,6 +435,7 @@ export default function PanelChoferPage() {
 
   // ─── Rechazar ────────────────────────────────────────────────────────────
   const rechazarViaje = () => {
+    console.log("DEBUG_RECHAZAR_ENTRY", { online, viajeActivoId: viajeActivo?.id ?? null, cargasLength: cargas.length, indice });
     detenerAlarmaViaje();
     setMostrarMapa(false);
     rechazosConsecutivosRef.current += 1;
@@ -449,6 +460,7 @@ export default function PanelChoferPage() {
       cargasHashRef.current = "";
       cargarCargasRef.current();
     }
+    console.log("DEBUG_RECHAZAR_EXIT", { online, viajeActivoId: viajeActivo?.id ?? null, cargasLength: cargas.length, indice });
   };
 
   // ─── Aceptar ─────────────────────────────────────────────────────────────
@@ -515,6 +527,15 @@ export default function PanelChoferPage() {
   const cargaActual    = online ? cargas[indice] : null;
   const paradasActuales = cargaActual ? (paradasPorCarga[String(cargaActual.id)] || []) : [];
 
+  console.log("DEBUG_RENDER", {
+    online,
+    viajeActivoId: viajeActivo?.id ?? null,
+    cargasLength: cargas.length,
+    indice,
+    cargaActualId: cargaActual?.id ?? null,
+    necesitaDesbloqueo,
+  });
+
   // Nota: no hay useEffect de alarma por cargaActual — la alarma se controla exclusivamente desde:
   // 1. cargarCargas() cuando detecta IDs nuevos no vistos antes
   // 2. intentarToggleOnline() al activarse ONLINE
@@ -549,7 +570,12 @@ export default function PanelChoferPage() {
 
   const intentarToggleOnline = async () => {
     await desbloquearAudio();
-    if (online) { setOnline(false); return; }
+    if (online) {
+      console.log("DEBUG_SET_ONLINE_ANTES", { online, viajeActivoId: viajeActivo?.id ?? null });
+      setOnline(false);
+      console.log("DEBUG_SET_ONLINE_DESPUES", { onlineSolicitado: false, viajeActivoId: viajeActivo?.id ?? null });
+      return;
+    }
     const validacion = await refrescarValidacion();
     if (!validacion.puedeOnline) {
       setMostrarGestion(true);
@@ -714,7 +740,10 @@ export default function PanelChoferPage() {
                       return;
                     }
                     localStorage.removeItem("viajeActivoId");
-                    setViajeActivo(null);
+                    setViajeActivo((prev: any) => {
+                      console.log("DEBUG_SET_VIAJE_ACTIVO", { motivo: "boton:cancelar-viaje", anterior: prev?.id ?? null, nuevo: null });
+                      return null;
+                    });
                   }}
                   className="w-full mt-3 py-4 rounded-2xl font-black text-base bg-red-950 border-2 border-red-500 text-red-300 hover:bg-red-900 active:scale-[0.98] transition"
                 >
