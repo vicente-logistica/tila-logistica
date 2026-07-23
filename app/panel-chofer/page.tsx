@@ -77,8 +77,9 @@ export default function PanelChoferPage() {
 
   /** Inicia la alarma de viaje disponible en loop continuo.
    *  No reinicia si ya está sonando. Loop se fuerza por JS para máxima compatibilidad. */
-  const iniciarAlarmaViaje = useCallback(() => {
+  const iniciarAlarmaViaje = useCallback((origen: string = "desconocido", ids?: string[]) => {
     const audio = audioRef.current;
+    console.log("DEBUG_ALARMA_INICIAR_LLAMADA", { origen, ids, tieneAudioRef: !!audio, yaSonando: sonandoRef.current });
     if (!audio) return;
     if (sonandoRef.current) return; // ya suena — no reiniciar
     console.log("🔊 Iniciando alarma viaje");
@@ -103,8 +104,9 @@ export default function PanelChoferPage() {
   }, []);
 
   /** Detiene la alarma de viaje. Llamar en aceptar, rechazar u offline. */
-  const detenerAlarmaViaje = useCallback(() => {
+  const detenerAlarmaViaje = useCallback((origen: string = "desconocido") => {
     const audio = audioRef.current;
+    console.log("DEBUG_ALARMA_DETENER_LLAMADA", { origen, tieneAudioRef: !!audio, estabaSonando: sonandoRef.current });
     if (!audio) return;
     console.log("🔇 Deteniendo alarma viaje");
     audio.pause();
@@ -277,7 +279,8 @@ export default function PanelChoferPage() {
   }, [cargarPerfilChofer]);
 
   // ─── cargarCargas con useCallback — referencia estable ───────────────────
-  const cargarCargas = useCallback(async () => {
+  const cargarCargas = useCallback(async (motivo: string = "desconocido") => {
+    console.log("DEBUG_CARGAR_CARGAS_START", { motivo, hora: new Date().toISOString() });
     const u = localStorage.getItem("usuario");
     const usuario = u ? JSON.parse(u) : null;
     const tipoActivo = usuario?.tipo_vehiculo || "";
@@ -290,9 +293,19 @@ export default function PanelChoferPage() {
     const res = await fetch("/api/cargas/disponibles", {
       headers: { "x-user-id": String(usuario.id) },
     });
-    if (!res.ok) return;
+    if (!res.ok) {
+      console.log("DEBUG_DISPONIBLES_RESPONSE", { motivo, status: res.status, ok: false });
+      return;
+    }
     const { cargas: data } = await res.json() as { cargas: any[] };
     const error = null;
+
+    console.log("DEBUG_DISPONIBLES_RESPONSE", {
+      motivo,
+      status: res.status,
+      count: data?.length ?? 0,
+      cargas: (data || []).map((c) => ({ id: c.id, estado: c.estado, chofer_id: c.chofer_id ?? "(no incluido en el select de esta API)" })),
+    });
 
     console.log("CARGAS RAW SUPABASE count:", data?.length, data?.map((c: any) => ({ id: c.id, tipo_vehiculo: JSON.stringify(c.tipo_vehiculo), categoria_legal: c.categoria_legal, estado: c.estado })));
 
@@ -325,7 +338,17 @@ export default function PanelChoferPage() {
     // ── Evitar re-render pesado si los ids no cambiaron, pero siempre actualizar cargando ──
     const nuevoHash = cargasFiltradas.map(c => c.id).join(",");
     if (nuevoHash === cargasHashRef.current) {
-      setCargas(cargasFiltradas);
+      setCargas(prev => {
+        const idsAnteriores = prev.map((c) => c.id);
+        const idsNuevos = cargasFiltradas.map((c) => c.id);
+        console.log("DEBUG_SET_CARGAS", {
+          motivo: `${motivo}:hash-igual`,
+          idsAnteriores,
+          idsNuevos,
+          reemplazaListaNoVaciaPorVacia: idsAnteriores.length > 0 && idsNuevos.length === 0,
+        });
+        return cargasFiltradas;
+      });
       setIndice(prev => (prev >= cargasFiltradas.length ? 0 : prev));
       setCargando(false);
       return;
@@ -340,14 +363,25 @@ export default function PanelChoferPage() {
         nuevos.forEach(c => viajesSonadosRef.current.add(String(c.id)));
         rechazosConsecutivosRef.current = 0; // viaje real nuevo → resetear contador
         console.log("[ALARMA] cargarCargas: nuevos viajes detectados", { n: nuevos.length });
-        iniciarAlarmaViaje();
+        iniciarAlarmaViaje(`cargarCargas:${motivo}`, nuevos.map((c) => String(c.id)));
       }
     } else if (onlineRef.current && silenciadoRef.current) {
       // Silenciado tras 3 rechazos — registrar IDs sin alarmar
+      console.log("DEBUG_VIAJES_SONADOS_ADD_SILENCIADO", { motivo, ids: cargasFiltradas.map((c) => c.id) });
       cargasFiltradas.forEach(c => viajesSonadosRef.current.add(String(c.id)));
     }
 
-    setCargas(cargasFiltradas);
+    setCargas(prev => {
+      const idsAnteriores = prev.map((c) => c.id);
+      const idsNuevos = cargasFiltradas.map((c) => c.id);
+      console.log("DEBUG_SET_CARGAS", {
+        motivo,
+        idsAnteriores,
+        idsNuevos,
+        reemplazaListaNoVaciaPorVacia: idsAnteriores.length > 0 && idsNuevos.length === 0,
+      });
+      return cargasFiltradas;
+    });
     // Mantener índice válido sin resetear si ya estábamos viendo un viaje
     setIndice(prev => (prev >= cargasFiltradas.length ? 0 : prev));
 
@@ -375,32 +409,47 @@ export default function PanelChoferPage() {
 
   // ─── Suscripción Supabase + polling — se monta UNA sola vez ──────────────
   useEffect(() => {
-    cargarCargasRef.current();
+    cargarCargasRef.current("mount");
 
     // Canal realtime — INSERT dispara alarma INMEDIATA antes de cargar datos
     canalRef.current = supabase
       .channel("panel-chofer-realtime")
-      .on("postgres_changes", { event: "INSERT", schema: "public", table: "cargas" }, () => {
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "cargas" }, (payload) => {
+        console.log("DEBUG_REALTIME_EVENT", { tipo: "INSERT", id: payload.new?.id, estado: (payload.new as Record<string, unknown>)?.estado, chofer_id: (payload.new as Record<string, unknown>)?.chofer_id, payload });
         // INSERT real → siempre resetear silencio y contador de rechazos
         silenciadoRef.current = false;
         rechazosConsecutivosRef.current = 0;
         // cargarCargas detectará el ID nuevo y disparará la alarma
-        cargarCargasRef.current();
+        cargarCargasRef.current("realtime:INSERT");
       })
-      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "cargas" }, () => {
-        cargarCargasRef.current();
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "cargas" }, (payload) => {
+        console.log("DEBUG_REALTIME_EVENT", {
+          tipo: "UPDATE",
+          id: payload.new?.id,
+          estadoAnterior: (payload.old as Record<string, unknown>)?.estado,
+          estadoNuevo: (payload.new as Record<string, unknown>)?.estado,
+          choferIdAnterior: (payload.old as Record<string, unknown>)?.chofer_id,
+          choferIdNuevo: (payload.new as Record<string, unknown>)?.chofer_id,
+          payload,
+        });
+        cargarCargasRef.current("realtime:UPDATE");
+      })
+      // DELETE: no existía este listener — se agrega SOLO para diagnóstico, no dispara ninguna acción.
+      .on("postgres_changes", { event: "DELETE", schema: "public", table: "cargas" }, (payload) => {
+        console.log("DEBUG_REALTIME_EVENT", { tipo: "DELETE", id: (payload.old as Record<string, unknown>)?.id, payload });
       })
       .subscribe();
 
     // Polling cada 10s como fallback — no fuente principal
     intervaloRef.current = setInterval(() => {
-      cargarCargasRef.current();
+      console.log("DEBUG_POLLING_TICK", { hora: new Date().toISOString() });
+      cargarCargasRef.current("polling:10s");
     }, 10000);
 
     return () => {
       if (canalRef.current)    supabase.removeChannel(canalRef.current);
       if (intervaloRef.current) clearInterval(intervaloRef.current);
-      detenerAlarmaViaje();
+      detenerAlarmaViaje("cleanup:efecto-suscripcion");
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // ← sin dependencias: se monta UNA vez, usa refs para todo
@@ -412,7 +461,7 @@ export default function PanelChoferPage() {
     if (!u) return;
     const usuario = JSON.parse(u);
     supabase.from("usuarios").update({ online }).eq("id", usuario.id).then(() => {});
-    if (!online) detenerAlarmaViaje();
+    if (!online) detenerAlarmaViaje("online:desactivado");
   }, [online, onlineCargado, detenerAlarmaViaje]);
 
   // ─── Cerrar mapa al cambiar de viaje ─────────────────────────────────────
@@ -435,8 +484,8 @@ export default function PanelChoferPage() {
 
   // ─── Rechazar ────────────────────────────────────────────────────────────
   const rechazarViaje = () => {
-    console.log("DEBUG_RECHAZAR_ENTRY", { online, viajeActivoId: viajeActivo?.id ?? null, cargasLength: cargas.length, indice });
-    detenerAlarmaViaje();
+    console.log("DEBUG_RECHAZAR_ENTRY", { online, viajeActivoId: viajeActivo?.id ?? null, cargaRechazadaId: cargas[indice]?.id ?? null, cargasLength: cargas.length, indice, idsActuales: cargas.map((c) => c.id) });
+    detenerAlarmaViaje("rechazarViaje:entrada");
     setMostrarMapa(false);
     rechazosConsecutivosRef.current += 1;
     const siguiente = indice + 1;
@@ -451,16 +500,16 @@ export default function PanelChoferPage() {
       // Hay más viajes disponibles y no llegamos al límite — alarmar para el siguiente
       console.log("[RECHAZAR] siguiente viaje:", siguiente);
       setIndice(siguiente);
-      setTimeout(() => iniciarAlarmaViaje(), 300);
+      setTimeout(() => iniciarAlarmaViaje("rechazar:siguiente-viaje", [String(cargas[siguiente]?.id)]), 300);
     } else {
       // Sin más viajes en la lista local — recargar
       console.log("[RECHAZAR] sin más viajes — limpiando y recargando");
       setIndice(0);
       viajesSonadosRef.current.clear();
       cargasHashRef.current = "";
-      cargarCargasRef.current();
+      cargarCargasRef.current("rechazar:sin-mas-viajes");
     }
-    console.log("DEBUG_RECHAZAR_EXIT", { online, viajeActivoId: viajeActivo?.id ?? null, cargasLength: cargas.length, indice });
+    console.log("DEBUG_RECHAZAR_EXIT", { online, viajeActivoId: viajeActivo?.id ?? null, cargasLength: cargas.length, indice, idsActuales: cargas.map((c) => c.id) });
   };
 
   // ─── Aceptar ─────────────────────────────────────────────────────────────
@@ -474,7 +523,7 @@ export default function PanelChoferPage() {
     }
     const carga = cargas[indice];
     if (!carga?.id) return;
-    detenerAlarmaViaje();
+    detenerAlarmaViaje("aceptarViaje:entrada");
     rechazosConsecutivosRef.current = 0;
     silenciadoRef.current = false;
     const u = localStorage.getItem("usuario");
@@ -485,7 +534,7 @@ export default function PanelChoferPage() {
       headers: { "Content-Type": "application/json", "x-user-id": usuario.id },
       body:    JSON.stringify({ carga_id: carga.id }),
     });
-    if (!res.ok) { alert("Este viaje ya fue tomado por otro chofer"); cargarCargasRef.current(); return; }
+    if (!res.ok) { alert("Este viaje ya fue tomado por otro chofer"); cargarCargasRef.current("aceptar:fallo-ya-tomado"); return; }
     const { viaje_id } = await res.json();
     localStorage.setItem("viajeActivoId", String(viaje_id));
     window.location.href = "/viaje-activo";
@@ -581,6 +630,7 @@ export default function PanelChoferPage() {
       setMostrarGestion(true);
       return;
     }
+    console.log("DEBUG_SET_ONLINE_ANTES", { online, viajeActivoId: viajeActivo?.id ?? null, motivo: "activar" });
     // Resetear estado de silencio y rechazos al activar online
     silenciadoRef.current = false;
     rechazosConsecutivosRef.current = 0;
@@ -588,8 +638,9 @@ export default function PanelChoferPage() {
     cargasHashRef.current = "";         // forzar re-evaluación completa en cargarCargas
     onlineRef.current = true;           // sincronizar antes de cargarCargas (la ref se actualiza en useEffect)
     setOnline(true);
+    console.log("DEBUG_SET_ONLINE_DESPUES", { onlineSolicitado: true, viajeActivoId: viajeActivo?.id ?? null });
     // cargarCargas detectará los viajes como "nuevos" (IDs no en viajesSonados) y alarmará si hay alguno
-    setTimeout(() => { cargarCargasRef.current(); }, 150);
+    setTimeout(() => { cargarCargasRef.current("online:activado"); }, 150);
   };
 
   const BloqueGestion = () => (
@@ -611,7 +662,7 @@ export default function PanelChoferPage() {
           <GestionVehiculosChofer
             choferId={choferId}
             categoriaLegal={categoriaLegal}
-            onActualizado={async () => { await refrescarValidacion(); cargarCargasRef.current(); }}
+            onActualizado={async () => { await refrescarValidacion(); cargarCargasRef.current("perfil:actualizado"); }}
           />
         </div>
       )}
@@ -667,7 +718,7 @@ export default function PanelChoferPage() {
               audioDesbloqueadoRef.current = false; // resetear para forzar re-unlock aunque ya se intentó
               await desbloquearAudio();
               setNecesitaDesbloqueo(false);
-              if (onlineRef.current) iniciarAlarmaViaje();
+              if (onlineRef.current) iniciarAlarmaViaje("overlay:desbloqueo-manual");
             }}
           >
             🔔 Tocar para activar<br />el sonido de alertas
