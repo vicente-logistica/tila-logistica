@@ -71,6 +71,10 @@ export default function PanelChoferPage() {
   // Control de rechazos consecutivos y silencio temporal
   const rechazosConsecutivosRef = useRef(0);
   const silenciadoRef           = useRef(false); // true tras 3 rechazos; se resetea en INSERT o al volver ONLINE
+  // Detección de gesto de scroll sobre el botón ONLINE/OFFLINE — evita que un
+  // toque que termina en desplazamiento dispare el toggle (ver TAREA-010).
+  const gestoOnlineInicioRef    = useRef<{ x: number; y: number } | null>(null);
+  const gestoOnlineEsScrollRef  = useRef(false);
 
   useEffect(() => { onlineRef.current = online; }, [online]);
 
@@ -759,7 +763,27 @@ export default function PanelChoferPage() {
     <div className="w-full flex flex-col items-center mb-6">
       <button
         type="button"
-        onClick={intentarToggleOnline}
+        onPointerDown={(e) => {
+          gestoOnlineInicioRef.current = { x: e.clientX, y: e.clientY };
+          gestoOnlineEsScrollRef.current = false;
+        }}
+        onPointerMove={(e) => {
+          if (!gestoOnlineInicioRef.current) return;
+          const dx = e.clientX - gestoOnlineInicioRef.current.x;
+          const dy = e.clientY - gestoOnlineInicioRef.current.y;
+          if (Math.hypot(dx, dy) > 10) gestoOnlineEsScrollRef.current = true;
+        }}
+        onClick={(e) => {
+          if (gestoOnlineEsScrollRef.current) {
+            e.preventDefault();
+            e.stopPropagation();
+            gestoOnlineEsScrollRef.current = false;
+            gestoOnlineInicioRef.current = null;
+            return;
+          }
+          gestoOnlineInicioRef.current = null;
+          intentarToggleOnline();
+        }}
         className={`px-8 py-4 rounded-3xl font-black text-xl md:text-2xl shadow-2xl transition ${online ? "bg-green-500 text-black" : "bg-red-600 text-white"}`}
       >
         {online ? "🟢 ONLINE" : "🔴 OFFLINE"}
