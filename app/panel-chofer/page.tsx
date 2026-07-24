@@ -117,7 +117,7 @@ export default function PanelChoferPage() {
 
   /** Desbloquea el audio de alarma con un play silencioso en el contexto del gesto del usuario. */
   const desbloquearAudio = useCallback(async () => {
-    if (!audioRef.current || audioDesbloqueadoRef.current) return;
+    if (!audioRef.current || audioDesbloqueadoRef.current || sonandoRef.current) return;
     audioDesbloqueadoRef.current = true; // guard inmediato — evita doble-call en mobile
     try {
       audioRef.current.volume = 0;
