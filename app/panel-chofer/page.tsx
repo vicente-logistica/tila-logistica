@@ -81,8 +81,8 @@ export default function PanelChoferPage() {
   const iniciarAlarmaViaje = useCallback((origen: string = "desconocido", ids?: string[]) => {
     const audio = audioRef.current;
     console.log("DEBUG_ALARMA_INICIAR_LLAMADA", { origen, ids, tieneAudioRef: !!audio, yaSonando: sonandoRef.current });
-    if (!audio) return;
-    if (sonandoRef.current) return; // ya suena — no reiniciar
+    if (!audio) { console.log("DEBUG_AUDIO_SCROLL iniciarAlarmaViaje salida", { motivo: "sin-audio-ref" }); return; }
+    if (sonandoRef.current) { console.log("DEBUG_AUDIO_SCROLL iniciarAlarmaViaje salida", { motivo: "ya-sonando" }); return; } // ya suena — no reiniciar
     console.log("🔊 Iniciando alarma viaje");
     sonandoRef.current = true;   // marcar ANTES de play — evita race condition con llamadas concurrentes
     audio.loop = true;           // forzar loop por JS, no solo atributo HTML
@@ -91,6 +91,7 @@ export default function PanelChoferPage() {
     audio.play()
       .then(() => {
         console.log("[ALARMA] play ok — loop:", audio.loop);
+        console.log("DEBUG_AUDIO_SCROLL iniciarAlarmaViaje salida", { motivo: "play-ok" });
         setNecesitaDesbloqueo(false); // limpiar overlay si estaba visible
       })
       .catch(err => {
@@ -117,19 +118,54 @@ export default function PanelChoferPage() {
 
   /** Desbloquea el audio de alarma con un play silencioso en el contexto del gesto del usuario. */
   const desbloquearAudio = useCallback(async () => {
+    console.log("DEBUG_AUDIO_SCROLL desbloquearAudio entrada", {
+      audioDesbloqueado: audioDesbloqueadoRef.current,
+      sonando: sonandoRef.current,
+      paused: audioRef.current?.paused,
+      currentTime: audioRef.current?.currentTime,
+      volume: audioRef.current?.volume,
+    });
     if (!audioRef.current || audioDesbloqueadoRef.current || sonandoRef.current) return;
     audioDesbloqueadoRef.current = true; // guard inmediato — evita doble-call en mobile
     try {
+      console.log("DEBUG_AUDIO_SCROLL antes volume=0");
       audioRef.current.volume = 0;
+      console.log("DEBUG_AUDIO_SCROLL despues volume=0");
+      console.log("DEBUG_AUDIO_SCROLL antes play()");
       await audioRef.current.play();
+      console.log("DEBUG_AUDIO_SCROLL despues play()");
+      console.log("DEBUG_AUDIO_SCROLL antes pause()");
       audioRef.current.pause();
+      console.log("DEBUG_AUDIO_SCROLL despues pause()");
+      console.log("DEBUG_AUDIO_SCROLL antes currentTime=0");
       audioRef.current.currentTime = 0;
+      console.log("DEBUG_AUDIO_SCROLL despues currentTime=0");
+      console.log("DEBUG_AUDIO_SCROLL antes volume=1");
       audioRef.current.volume = 1;
+      console.log("DEBUG_AUDIO_SCROLL despues volume=1");
       console.log("[ALARMA] audio desbloqueado ok");
     } catch (e) {
       audioDesbloqueadoRef.current = false;
       console.warn("[ALARMA] desbloqueo bloqueado por navegador:", e);
     }
+  }, []);
+
+  // ─── DEBUG_AUDIO_SCROLL: listeners nativos temporales sobre el <audio> ────
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    const eventosNativos = ["play", "playing", "pause", "ended", "abort", "emptied", "suspend", "stalled"];
+    const handler = (e: Event) => {
+      console.log("DEBUG_AUDIO_SCROLL evento-nativo", {
+        tipo: e.type,
+        paused: audio.paused,
+        currentTime: audio.currentTime,
+      });
+    };
+    eventosNativos.forEach(tipo => audio.addEventListener(tipo, handler));
+    return () => {
+      eventosNativos.forEach(tipo => audio.removeEventListener(tipo, handler));
+    };
   }, []);
 
   // ─── Viaje activo ─────────────────────────────────────────────────────────
@@ -774,7 +810,8 @@ export default function PanelChoferPage() {
 
       {/* eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions */}
       <main className="min-h-screen bg-black text-white px-4 py-6 flex items-center justify-center"
-        onClick={desbloquearAudio} onTouchStart={desbloquearAudio}>
+        onClick={() => { console.log("DEBUG_AUDIO_SCROLL evento", { tipo: "click" }); desbloquearAudio(); }}
+        onTouchStart={() => { console.log("DEBUG_AUDIO_SCROLL evento", { tipo: "touchstart" }); desbloquearAudio(); }}>
         <audio ref={audioRef} src="/sounds/alerta-viaje.mp3" loop preload="auto" />
 
         <div className="w-full max-w-5xl flex flex-col gap-6">
