@@ -80,7 +80,9 @@ export default function PanelChoferPage() {
    *  No reinicia si ya está sonando. Loop se fuerza por JS para máxima compatibilidad. */
   const iniciarAlarmaViaje = useCallback((origen: string = "desconocido", ids?: string[]) => {
     const audio = audioRef.current;
-    console.log("DEBUG_ALARMA_INICIAR_LLAMADA", { origen, ids, tieneAudioRef: !!audio, yaSonando: sonandoRef.current });
+    console.log(
+      `DEBUG_ALARMA_INICIAR_LLAMADA origen=${origen} ids=${ids?.join(",") ?? ""} tieneAudio=${!!audioRef.current} sonando=${sonandoRef.current} paused=${audioRef.current?.paused}`
+    );
     if (!audio) { console.log("DEBUG_AUDIO_SCROLL iniciarAlarmaViaje salida", { motivo: "sin-audio-ref" }); return; }
     if (sonandoRef.current) { console.log("DEBUG_AUDIO_SCROLL iniciarAlarmaViaje salida", { motivo: "ya-sonando" }); return; } // ya suena — no reiniciar
     console.log("🔊 Iniciando alarma viaje");
@@ -108,7 +110,9 @@ export default function PanelChoferPage() {
   /** Detiene la alarma de viaje. Llamar en aceptar, rechazar u offline. */
   const detenerAlarmaViaje = useCallback((origen: string = "desconocido") => {
     const audio = audioRef.current;
-    console.log("DEBUG_ALARMA_DETENER_LLAMADA", { origen, tieneAudioRef: !!audio, estabaSonando: sonandoRef.current });
+    console.log(
+      `DEBUG_ALARMA_DETENER_LLAMADA origen=${origen} sonando=${sonandoRef.current} paused=${audioRef.current?.paused} currentTime=${audioRef.current?.currentTime}`
+    );
     if (!audio) return;
     console.log("🔇 Deteniendo alarma viaje");
     audio.pause();
@@ -118,13 +122,9 @@ export default function PanelChoferPage() {
 
   /** Desbloquea el audio de alarma con un play silencioso en el contexto del gesto del usuario. */
   const desbloquearAudio = useCallback(async () => {
-    console.log("DEBUG_AUDIO_SCROLL desbloquearAudio entrada", {
-      audioDesbloqueado: audioDesbloqueadoRef.current,
-      sonando: sonandoRef.current,
-      paused: audioRef.current?.paused,
-      currentTime: audioRef.current?.currentTime,
-      volume: audioRef.current?.volume,
-    });
+    console.log(
+      `DEBUG_AUDIO_SCROLL desbloquearAudio audioDesbloqueado=${audioDesbloqueadoRef.current} sonando=${sonandoRef.current} paused=${audioRef.current?.paused} currentTime=${audioRef.current?.currentTime} volume=${audioRef.current?.volume}`
+    );
     if (!audioRef.current || audioDesbloqueadoRef.current || sonandoRef.current) return;
     audioDesbloqueadoRef.current = true; // guard inmediato — evita doble-call en mobile
     try {
@@ -810,8 +810,8 @@ export default function PanelChoferPage() {
 
       {/* eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions */}
       <main className="min-h-screen bg-black text-white px-4 py-6 flex items-center justify-center"
-        onClick={() => { console.log("DEBUG_AUDIO_SCROLL evento", { tipo: "click" }); desbloquearAudio(); }}
-        onTouchStart={() => { console.log("DEBUG_AUDIO_SCROLL evento", { tipo: "touchstart" }); desbloquearAudio(); }}>
+        onClick={() => { console.log("DEBUG_AUDIO_SCROLL evento=click"); desbloquearAudio(); }}
+        onTouchStart={() => { console.log("DEBUG_AUDIO_SCROLL evento=touchstart"); desbloquearAudio(); }}>
         <audio ref={audioRef} src="/sounds/alerta-viaje.mp3" loop preload="auto" />
 
         <div className="w-full max-w-5xl flex flex-col gap-6">
