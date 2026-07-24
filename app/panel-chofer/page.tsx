@@ -445,6 +445,10 @@ export default function PanelChoferPage() {
   const cargarCargasRef = useRef(cargarCargas);
   useEffect(() => { cargarCargasRef.current = cargarCargas; }, [cargarCargas]);
 
+  useEffect(() => {
+    if (vehiculoActivoResuelto) cargarCargasRef.current("vehiculoActivo:resuelto");
+  }, [vehiculoActivoResuelto]);
+
   // ─── Suscripción Supabase + polling — se monta UNA sola vez ──────────────
   useEffect(() => {
     cargarCargasRef.current("mount");
@@ -681,7 +685,11 @@ export default function PanelChoferPage() {
     setTimeout(() => { cargarCargasRef.current("online:activado"); }, 150);
   };
 
-  const BloqueGestion = () => (
+  // ─── JSX directo (NO componentes) — evita remount del árbol en cada render ─
+  // Antes eran function components definidos en el render (BloqueGestion, BotonOnline,
+  // BloquesSoporte); React trataba cada <X /> como un tipo de componente nuevo en
+  // cada render y desmontaba/remontaba todo el subárbol (incl. GestionVehiculosChofer).
+  const bloqueGestion = (
     <div className="w-full max-w-md mx-auto mb-4">
       {accionesRequeridas.length > 0 && !mostrarGestion && (
         <button type="button" onClick={() => setMostrarGestion(true)}
@@ -707,7 +715,7 @@ export default function PanelChoferPage() {
     </div>
   );
 
-  const BotonOnline = () => (
+  const botonOnline = (
     <div className="w-full flex flex-col items-center mb-6">
       <button
         type="button"
@@ -722,7 +730,7 @@ export default function PanelChoferPage() {
     </div>
   );
 
-  const BloquesSoporte = () => (
+  const bloquesSoporte = (
     <div className="mt-5 bg-zinc-800 border border-zinc-700 rounded-2xl p-4">
       <p className="text-zinc-500 text-xs font-black mb-3 text-center">🆘 SOPORTE TILA</p>
       <div className="flex gap-3 justify-center">
@@ -845,15 +853,15 @@ export default function PanelChoferPage() {
           {/* Panel principal */}
           {cargando ? (
             <section className="text-center">
-              <BotonOnline />
-              <BloqueGestion />
+              {botonOnline}
+              {bloqueGestion}
               <h1 className="text-4xl md:text-5xl font-black text-yellow-400 animate-pulse">Buscando viajes...</h1>
             </section>
 
           ) : !cargaActual ? (
             <section className="text-center bg-zinc-900 border border-zinc-800 rounded-3xl p-8 md:p-12">
-              <BotonOnline />
-              <BloqueGestion />
+              {botonOnline}
+              {bloqueGestion}
               <h1 className="text-4xl md:text-6xl font-black text-yellow-400 mb-4">DESPACHO EN TIEMPO REAL</h1>
               <p className="text-green-400 font-black text-lg md:text-xl mb-4">Operando con: {vehiculoChofer || "Sin vehículo"}</p>
               <p className="text-zinc-400 text-lg md:text-2xl mb-8">
@@ -905,14 +913,14 @@ export default function PanelChoferPage() {
                 )}
               </div>
 
-              <BloquesSoporte />
+              {bloquesSoporte}
               <div className="mt-5 flex justify-center"><BotonCerrarSesion /></div>
             </section>
 
           ) : (
             <section className="bg-zinc-900 border-4 border-yellow-400 rounded-3xl p-5 md:p-8 shadow-2xl animate-pulse text-center">
-              <BotonOnline />
-              <BloqueGestion />
+              {botonOnline}
+              {bloqueGestion}
               <p className="text-pink-500 font-black text-xl md:text-2xl mb-4">🚨 NUEVO VIAJE DISPONIBLE 🚨</p>
               <p className="text-green-400 font-black text-lg md:text-xl mb-6">Operando con: {vehiculoChofer || "Sin vehículo"}</p>
 
@@ -1018,7 +1026,7 @@ export default function PanelChoferPage() {
                 className="w-full mt-5 bg-zinc-800 border-2 border-yellow-400 hover:bg-zinc-700 text-yellow-400 font-black text-xl md:text-2xl py-5 rounded-3xl">
                 💼 MI BILLETERA
               </button>
-              <BloquesSoporte />
+              {bloquesSoporte}
               <div className="mt-5 flex justify-center"><BotonCerrarSesion /></div>
               <p className="text-zinc-500 text-center mt-6">Viaje {indice + 1} de {cargas.length}</p>
             </section>
