@@ -322,10 +322,12 @@ export default function PanelChoferPage() {
           setAccionesRequeridas(validacion.acciones);
           const quiereOnline = data.online ?? false;
           if (quiereOnline && !validacion.puedeOnline) {
+            console.log(`DEBUG_ONLINE_CAMBIO origen=estado-inicial:validacion-fallida anterior=${onlineRef.current} nuevo=false`);
             setOnline(false);
             await supabase.from("usuarios").update({ online: false }).eq("id", usuario.id);
             setMostrarGestion(true);
           } else {
+            console.log(`DEBUG_ONLINE_CAMBIO origen=estado-inicial:normal anterior=${onlineRef.current} nuevo=${quiereOnline}`);
             setOnline(quiereOnline);
           }
           const nav = data.navegador_preferido;
@@ -699,6 +701,7 @@ export default function PanelChoferPage() {
     await desbloquearAudio();
     if (online) {
       console.log("DEBUG_SET_ONLINE_ANTES", { online, viajeActivoId: viajeActivo?.id ?? null });
+      console.log(`DEBUG_ONLINE_CAMBIO origen=toggle:desactivar anterior=${onlineRef.current} nuevo=false`);
       setOnline(false);
       console.log("DEBUG_SET_ONLINE_DESPUES", { onlineSolicitado: false, viajeActivoId: viajeActivo?.id ?? null });
       return;
@@ -714,6 +717,7 @@ export default function PanelChoferPage() {
     rechazosConsecutivosRef.current = 0;
     viajesSonadosRef.current.clear();  // tratar todos los viajes existentes como nuevos
     cargasHashRef.current = "";         // forzar re-evaluación completa en cargarCargas
+    console.log(`DEBUG_ONLINE_CAMBIO origen=toggle:activar anterior=${onlineRef.current} nuevo=true`);
     onlineRef.current = true;           // sincronizar antes de cargarCargas (la ref se actualiza en useEffect)
     setOnline(true);
     console.log("DEBUG_SET_ONLINE_DESPUES", { onlineSolicitado: true, viajeActivoId: viajeActivo?.id ?? null });
