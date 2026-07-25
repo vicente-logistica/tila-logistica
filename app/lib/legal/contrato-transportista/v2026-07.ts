@@ -30,8 +30,8 @@ TILA — Tecnología Inteligente Logística Argentina es una plataforma tecnoló
 **Razón social:** [RAZÓN SOCIAL DE LA SAS]
 **CUIT:** [CUIT]
 **Domicilio legal:** [DOMICILIO LEGAL]
-**Correo electrónico contractual:** [legal@tilalogistica.com](mailto:legal@tilalogistica.com)
-**Sitio web:** [www.tilalogistica.com](http://www.tilalogistica.com)
+**Correo electrónico de contacto:** [legal@tilalogistica.com](mailto:legal@tilalogistica.com)
+**Sitio web:** [https://www.tilalogistica.com](https://www.tilalogistica.com)
 
 Hasta que se completen los datos societarios definitivos, estos campos deberán mantenerse identificados como pendientes y no deberán reemplazarse con información ficticia.
 
@@ -441,9 +441,9 @@ Para incumplimientos que no impliquen riesgo inmediato, TILA procurará:
 
 ### 21.3 Calificaciones
 
-Las calificaciones no producirán por sí solas una suspensión automática.
+TILA podrá incorporar en el futuro un sistema de calificaciones entre Cliente y Transportista. Esta funcionalidad no se encuentra implementada a la fecha de esta versión del Contrato.
 
-Podrán ser consideradas junto con reclamos documentados, incidentes verificables, incumplimientos objetivos o riesgos reiterados.
+Si en el futuro se implementa, las calificaciones no producirán por sí solas una suspensión automática. Podrán ser consideradas junto con reclamos documentados, incidentes verificables, incumplimientos objetivos o riesgos reiterados.
 
 Rechazar solicitudes, desconectarse o utilizar otra plataforma no constituirá una causa válida de suspensión.
 
