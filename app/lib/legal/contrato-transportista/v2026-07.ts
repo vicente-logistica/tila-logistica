@@ -1,17 +1,11 @@
 import type { DocumentoLegalFuente } from "../tipos";
 
-// ⚠️ BORRADOR INTERNO — NO PUBLICAR, NO MARCAR "vigente", NO RECIBIR
-// ACEPTACIONES. Contiene placeholders sin completar ([MES Y AÑO DE
-// PUBLICACIÓN], [NÚMERO DE VERSIÓN], [RAZÓN SOCIAL DE LA SAS], [CUIT],
-// [DOMICILIO LEGAL]). Texto tomado literalmente del borrador de 34 cláusulas
-// provisto para revisión — sin inventar ni completar ningún dato faltante.
-
 export const documento: DocumentoLegalFuente = {
   tipoDocumento: "contrato_transportista",
-  version: "2026-07", // placeholder técnico del nombre de archivo — el texto interno aún dice [NÚMERO DE VERSIÓN]
+  version: "2026-07",
   titulo: "CONTRATO DE ADHESIÓN PARA TRANSPORTISTAS INDEPENDIENTES — TILA",
-  contenido: `**Última actualización:** [MES Y AÑO DE PUBLICACIÓN]
-**Versión:** [NÚMERO DE VERSIÓN]
+  contenido: `**Última actualización:** Julio 2026
+**Versión:** 2026-07
 
 ## Información importante antes de registrarte
 
@@ -27,9 +21,9 @@ La aceptación quedará registrada electrónicamente junto con la identificació
 
 TILA — Tecnología Inteligente Logística Argentina es una plataforma tecnológica de intermediación logística operada por:
 
-**Razón social:** [RAZÓN SOCIAL DE LA SAS]
-**CUIT:** [CUIT]
-**Domicilio legal:** [DOMICILIO LEGAL]
+**Razón social:** pendiente de constitución
+**CUIT:** pendiente de asignación
+**Domicilio legal:** pendiente de definición
 **Correo electrónico de contacto:** [legal@tilalogistica.com](mailto:legal@tilalogistica.com)
 **Sitio web:** [https://www.tilalogistica.com](https://www.tilalogistica.com)
 

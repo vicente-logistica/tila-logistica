@@ -1,18 +1,11 @@
 import type { DocumentoLegalFuente } from "../tipos";
 
-// ⚠️ BORRADOR INTERNO — NO PUBLICAR, NO MARCAR "vigente", NO RECIBIR
-// ACEPTACIONES. Contiene placeholders sin completar ([MES Y AÑO DE
-// PUBLICACIÓN], [NÚMERO DE VERSIÓN], [RAZÓN SOCIAL DE LA SAS], [CUIT],
-// [DOMICILIO LEGAL]). El correo legal@tilalogistica.com y el sitio
-// https://www.tilalogistica.com SÍ están confirmados (en uso real en
-// app/privacidad/page.tsx) — no son placeholders.
-
 export const documento: DocumentoLegalFuente = {
   tipoDocumento: "privacidad",
-  version: "2026-07", // placeholder técnico del nombre de archivo — el texto interno aún dice [NÚMERO DE VERSIÓN]
+  version: "2026-07",
   titulo: "POLÍTICA DE PRIVACIDAD — TILA",
-  contenido: `**Última actualización:** [MES Y AÑO DE PUBLICACIÓN]
-**Versión:** [NÚMERO DE VERSIÓN]
+  contenido: `**Última actualización:** Julio 2026
+**Versión:** 2026-07
 
 ## Información importante antes de registrarte
 
@@ -26,9 +19,9 @@ La aceptación de esta Política queda registrada electrónicamente junto con la
 
 ## 1. Identificación del responsable del tratamiento
 
-**Razón social:** [RAZÓN SOCIAL DE LA SAS]
-**CUIT:** [CUIT]
-**Domicilio legal:** [DOMICILIO LEGAL]
+**Razón social:** pendiente de constitución
+**CUIT:** pendiente de asignación
+**Domicilio legal:** pendiente de definición
 **Correo electrónico de contacto:** [legal@tilalogistica.com](mailto:legal@tilalogistica.com)
 **Sitio web:** [https://www.tilalogistica.com](https://www.tilalogistica.com)
 
