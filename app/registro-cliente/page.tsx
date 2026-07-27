@@ -109,10 +109,10 @@ export default function RegistroClientePage() {
               className="mt-1 accent-yellow-400 w-4 h-4 flex-shrink-0"
             />
             <span className="text-zinc-400 text-sm">
-              Acepto los{" "}
+              He leído y acepto los{" "}
               <Link href="/terminos" target="_blank" className="text-yellow-400 hover:underline">Términos y Condiciones</Link>
               {" "}y la{" "}
-              <Link href="/privacidad" target="_blank" className="text-yellow-400 hover:underline">Política de Privacidad</Link>
+              <Link href="/privacidad" target="_blank" className="text-yellow-400 hover:underline">Política de Privacidad</Link>.
             </span>
           </label>
 
@@ -124,9 +124,9 @@ export default function RegistroClientePage() {
 
           <button
             onClick={registrar}
-            disabled={loading}
+            disabled={loading || !aceptaTerminos}
             className={`w-full font-black text-xl py-5 rounded-3xl transition ${
-              loading
+              loading || !aceptaTerminos
                 ? "bg-zinc-700 text-zinc-400 cursor-not-allowed"
                 : "bg-yellow-400 hover:bg-yellow-500 text-black hover:scale-105"
             }`}
