@@ -11,19 +11,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 const LIBRARIES: ("places" | "geometry" | "drawing")[] = [];
 
-const estiloMapa = [
-  { elementType: "geometry", stylers: [{ color: "#1a1a1a" }] },
-  { elementType: "labels.text.fill", stylers: [{ color: "#9ca3af" }] },
-  { elementType: "labels.text.stroke", stylers: [{ color: "#1a1a1a" }] },
-  { featureType: "road", elementType: "geometry", stylers: [{ color: "#2d2d2d" }] },
-  { featureType: "road.arterial", elementType: "geometry", stylers: [{ color: "#374151" }] },
-  { featureType: "road.highway", elementType: "geometry", stylers: [{ color: "#4b5563" }] },
-  { featureType: "road.highway", elementType: "geometry.stroke", stylers: [{ color: "#1f2937" }] },
-  { featureType: "water", elementType: "geometry", stylers: [{ color: "#111827" }] },
-  { featureType: "poi", stylers: [{ visibility: "off" }] },
-  { featureType: "transit", stylers: [{ visibility: "off" }] },
-];
-
 const centroArgentina = { lat: -34.6037, lng: -58.3816 };
 const LABELS = ["A", "B", "C", "D", "E", "F"];
 
@@ -831,18 +818,25 @@ export default function MapaTILA({
         center={centroInicial}
         zoom={zoomInicial}
         options={{
-          styles: estiloMapa,
           disableDefaultUI: true,
           zoomControl: true,
           streetViewControl: false,
           mapTypeControl: false,
           fullscreenControl: false,
-          // Arrastre/zoom/rotación quedan libres para el usuario — nada bloquea
-          // gestos de dos dedos acá. Sin mapId el mapa sigue siendo raster, así que
-          // la inclinación real depende de si Google la soporta en ese modo; esto
-          // sólo deja de impedirla activamente. gestureHandling "greedy" evita el
-          // modo cooperativo (que exigiría dos dedos incluso para arrastrar) en esta
-          // vista de mapa a pantalla completa.
+          // Mapa vectorial (mapId de Google Cloud) — el estilo ("TILA Vector Base")
+          // vive en Cloud Console, ya no en un array `styles` local: con mapId
+          // presente, Google ignora `styles` por completo. colorScheme sigue la
+          // preferencia del sistema (claro/oscuro); todavía no hay selector propio
+          // ni persistencia — eso queda para una etapa posterior.
+          mapId: process.env.NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID,
+          colorScheme: google.maps.ColorScheme.FOLLOW_SYSTEM,
+          // Inclinación/rotación por gesto sólo en Viaje Activo — en las vistas de
+          // sólo lectura (panel-cliente/panel-chofer) modoNavegacion es false y el
+          // mapa queda plano, sin necesidad de ninguna regla de estilo adicional.
+          tiltInteractionEnabled: modoNavegacion,
+          headingInteractionEnabled: modoNavegacion,
+          // Arrastre/zoom libres, sin el modo cooperativo (que exigiría dos dedos
+          // incluso para arrastrar) en esta vista de mapa a pantalla completa.
           gestureHandling: "greedy",
         }}
         onLoad={modoMultiChofer ? onMapLoadMulti : onMapLoad}
