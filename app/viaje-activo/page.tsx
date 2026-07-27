@@ -207,13 +207,29 @@ export default function ViajeActivoPage() {
     return null;
   }, [viaje?.estado, viaje?.origen, viaje?.destino, paradas, paradaActivaIndex]);
 
-  const paradasParaMapa: ParadaMapa[] = useMemo(() =>
-    paradas.map((p, i) => ({
-      direccion: p.direccion,
-      tipo:      p.tipo as "retiro" | "entrega" | "parada",
-      estado:    i < paradaActivaIndex ? "completada" : i === paradaActivaIndex ? "en_curso" : "pendiente",
-    })),
-  [paradas, paradaActivaIndex]);
+  // Para viajes con filas reales en paradas_viaje, se usan tal cual. Para viajes legados
+  // sin esas filas (sólo viaje.origen/viaje.destino), se sintetiza un retiro+entrega con el
+  // mismo criterio de estado, para que MapaTILA siempre reciba una ruta continua de al menos
+  // 2 puntos (chofer → retiro → destino) en vez de un solo tramo suelto a la vez.
+  const paradasParaMapa: ParadaMapa[] = useMemo(() => {
+    if (paradas.length > 0) {
+      return paradas.map((p, i) => ({
+        direccion: p.direccion,
+        tipo:      p.tipo as "retiro" | "entrega" | "parada",
+        estado:    i < paradaActivaIndex ? "completada" : i === paradaActivaIndex ? "en_curso" : "pendiente",
+      }));
+    }
+    const origenViaje  = viaje?.origen;
+    const destinoViaje = viaje?.destino;
+    const estado       = viaje?.estado || "Chofer asignado";
+    if (!origenViaje || !destinoViaje) return [];
+    const retiroCompletado  = ["Carga retirada", "En ruta", "Descarga completada", "Viaje finalizado"].includes(estado);
+    const entregaCompletada = ["Descarga completada", "Viaje finalizado"].includes(estado);
+    return [
+      { direccion: origenViaje,  tipo: "retiro"  as const, estado: (retiroCompletado ? "completada" : "en_curso") as "completada" | "en_curso" },
+      { direccion: destinoViaje, tipo: "entrega" as const, estado: (entregaCompletada ? "completada" : retiroCompletado ? "en_curso" : "pendiente") as "completada" | "en_curso" | "pendiente" },
+    ];
+  }, [paradas, paradaActivaIndex, viaje?.estado, viaje?.origen, viaje?.destino]);
 
   const todasParadasCompletadas = useMemo(() => paradas.length > 0 && paradaActivaIndex >= paradas.length, [paradas, paradaActivaIndex]);
 
@@ -373,6 +389,30 @@ export default function ViajeActivoPage() {
 
   useEffect(() => { cargarViajeActivo(); }, []);
 
+  // ─── Retomar viaje: reabrir el selector de navegación ────────────────────
+  // Un viaje sólo puede llegar a "En camino"/"Carga retirada"/"En ruta" mediante
+  // actualizarEstado(), que corre dentro de una sesión de /viaje-activo ya montada.
+  // Si al MONTAR la página (cargarViajeActivo recién terminó) el viaje YA está en
+  // alguno de esos estados, esto sólo puede significar que la sesión anterior se
+  // perdió (cerró la app, se quedó sin conexión, reinició el teléfono, volvió a
+  // loguearse) y ésta es una recuperación. En ese caso mostramos el selector con
+  // las tres opciones — nunca abrimos Google Maps/Waze automáticamente. Se dispara
+  // una única vez por montaje (selectorResumeAbiertoRef), no en cada actualización
+  // posterior de destinoRuta (p. ej. al completar una parada).
+  const selectorResumeAbiertoRef = useRef(false);
+  useEffect(() => {
+    if (cargando || selectorResumeAbiertoRef.current) return;
+    if (!viaje?.estado) return;
+    const viajeEnCurso = ["En camino", "Carga retirada", "En ruta"].includes(viaje.estado);
+    if (!viajeEnCurso) return;
+    selectorResumeAbiertoRef.current = true;
+    const destino = destinoRuta ?? viaje.destino;
+    if (destino) {
+      setDestNavPendiente(destino);
+      setMostrarNavSel(true);
+    }
+  }, [cargando, viaje?.estado, viaje?.destino, destinoRuta]);
+
   // ─── GPS ──────────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!viaje?.id) return;
@@ -447,12 +487,9 @@ export default function ViajeActivoPage() {
     const nuevoIndice = paradaActivaIndex + 1;
     setParadaActivaIndex(nuevoIndice);
     setConfirmandoParada(false);
-    // Navegar automáticamente al próximo objetivo
-    if (nuevoIndice < paradas.length) {
-      iniciarNavegacion(paradas[nuevoIndice].direccion);
-    } else {
-      iniciarNavegacion(viaje.destino);
-    }
+    // No se reabre el selector de navegación acá: si el chofer ya eligió una app,
+    // sigue en la misma. Mapa TILA recalcula solo hacia el próximo punto pendiente.
+    // Si el chofer quiere cambiar de navegación, usa el botón "Cambiar navegación".
   };
 
   const acreditarBilletera = async (data: any) => {
@@ -518,16 +555,12 @@ export default function ViajeActivoPage() {
     setDestNavPendiente(null);
   };
 
-  // Abre navegador o muestra selector
+  // Siempre muestra el selector — nunca abre una app externa sin elección expresa
+  // del chofer. navegadorPreferido sólo se usa para destacar visualmente la opción
+  // habitual dentro del selector (ver modal), nunca para saltearlo.
   const iniciarNavegacion = (dest: string) => {
-    const nav = navegadorPreferido;
-    const valido = nav && nav !== "preguntar_siempre" && nav !== "sygic_truck" && nav !== "tomtom_truck" ? nav : null;
-    if (valido) {
-      abrirNavegador(valido, dest);
-    } else {
-      setDestNavPendiente(dest);
-      setMostrarNavSel(true);
-    }
+    setDestNavPendiente(dest);
+    setMostrarNavSel(true);
   };
 
   // ─── Actualizar estado + navegación automática ────────────────────────────
@@ -871,6 +904,19 @@ export default function ViajeActivoPage() {
               className={`flex-1 py-2 rounded-xl text-base transition ${silenciarSoporteChofer ? "bg-zinc-700 opacity-60" : "bg-zinc-800 hover:bg-zinc-700"}`}>
               {silenciarSoporteChofer ? "🛟🔕" : "🛟🔔"}
             </button>
+            {/* Cambiar navegación — disponible siempre, en cualquier estado recuperable */}
+            <button type="button"
+              onClick={() => {
+                const destino = destinoRuta ?? viaje?.destino;
+                if (!destino) return;
+                setDestNavPendiente(destino);
+                setMostrarNavSel(true);
+              }}
+              title="Cambiar navegación"
+              aria-label="Cambiar navegación"
+              className="flex-1 py-2 rounded-xl text-lg bg-zinc-800 hover:bg-zinc-700 transition">
+              🧭
+            </button>
           </div>
 
           {/* Cancelar viaje — solo antes de "Carga retirada" */}
@@ -1001,11 +1047,14 @@ export default function ViajeActivoPage() {
       )}
 
       {/* ─── MODAL SELECTOR NAVEGADOR ────────────────────────────────────── */}
+      {/* navegadorPreferido sólo destaca visualmente la opción habitual (borde +
+          etiqueta "Habitual") — nunca decide ni abre nada por sí solo. Las tres
+          opciones quedan siempre bajo elección expresa del chofer. */}
       {mostrarNavSel && destNavPendiente && (
         <div className="absolute inset-0 z-50 bg-black/80 flex items-end p-4">
           <div className="w-full bg-zinc-900 border border-zinc-700 rounded-3xl p-5 space-y-3">
             <div className="flex items-center justify-between">
-              <p className="text-yellow-400 font-black">🧭 Elegí tu navegador</p>
+              <p className="text-yellow-400 font-black">🧭 Elegí cómo navegar</p>
               <button type="button" onClick={() => { setMostrarNavSel(false); setDestNavPendiente(null); }} className="text-zinc-400 font-black px-2">✕</button>
             </div>
             {/* Aviso legal */}
@@ -1013,17 +1062,30 @@ export default function ViajeActivoPage() {
               ⚠️ {AVISO_LEGAL}
             </div>
             <p className="text-zinc-300 text-xs px-1">📍 <span className="text-white font-black">{destNavPendiente}</span></p>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 gap-3">
+              <button type="button" onClick={() => { setMostrarNavSel(false); setDestNavPendiente(null); }}
+                className={`flex items-center justify-center gap-3 border rounded-2xl px-4 py-4 font-black text-sm text-white transition ${
+                  navegadorPreferido === "mapa_tila" ? "bg-zinc-800 border-yellow-400" : "bg-zinc-800 hover:bg-zinc-700 border-zinc-600"
+                }`}>
+                🗺️ Mapa TILA
+                {navegadorPreferido === "mapa_tila" && <span className="text-yellow-400 text-xs">✓ Habitual</span>}
+              </button>
               <button type="button" onClick={() => abrirNavegador("google_maps", destNavPendiente)}
-                className="flex items-center justify-center gap-3 bg-zinc-800 hover:bg-zinc-700 border border-zinc-600 rounded-2xl px-4 py-4 font-black text-sm text-white transition">
+                className={`flex items-center justify-center gap-3 border rounded-2xl px-4 py-4 font-black text-sm text-white transition ${
+                  navegadorPreferido === "google_maps" ? "bg-zinc-800 border-yellow-400" : "bg-zinc-800 hover:bg-zinc-700 border-zinc-600"
+                }`}>
                 🗺️ Google Maps
+                {navegadorPreferido === "google_maps" && <span className="text-yellow-400 text-xs">✓ Habitual</span>}
               </button>
               <button type="button" onClick={() => abrirNavegador("waze", destNavPendiente)}
-                className="flex items-center justify-center gap-3 bg-zinc-800 hover:bg-zinc-700 border border-zinc-600 rounded-2xl px-4 py-4 font-black text-sm text-white transition">
+                className={`flex items-center justify-center gap-3 border rounded-2xl px-4 py-4 font-black text-sm text-white transition ${
+                  navegadorPreferido === "waze" ? "bg-zinc-800 border-yellow-400" : "bg-zinc-800 hover:bg-zinc-700 border-zinc-600"
+                }`}>
                 📡 Waze
+                {navegadorPreferido === "waze" && <span className="text-yellow-400 text-xs">✓ Habitual</span>}
               </button>
             </div>
-            <p className="text-zinc-600 text-xs text-center">TILA mantiene el tracking interno independientemente del navegador elegido.</p>
+            <p className="text-zinc-600 text-xs text-center">TILA mantiene el tracking interno independientemente de la opción elegida.</p>
           </div>
         </div>
       )}

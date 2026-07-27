@@ -31,6 +31,23 @@ const LABELS = ["A", "B", "C", "D", "E", "F"];
 // Sólo se aplica cuando el usuario reactiva el seguimiento con el botón "Mi ubicación".
 const ZOOM_SEGUIMIENTO = 15;
 
+// Distancia mínima que debe moverse el chofer respecto del origen usado en el último
+// cálculo de ruta para considerar que hay un "desvío real y significativo" y volver a
+// llamar a Directions. Por debajo de este umbral, un tick de GPS mueve el marcador pero
+// nunca recalcula la ruta — evita llamadas innecesarias a Google Maps y parpadeo del trazo.
+const UMBRAL_RECALCULO_RUTA_METROS = 300;
+
+// Distancia geodésica simple (haversine) entre dos puntos, en metros.
+const distanciaMetros = (a: google.maps.LatLngLiteral, b: google.maps.LatLngLiteral): number => {
+  const R = 6371000;
+  const dLat = ((b.lat - a.lat) * Math.PI) / 180;
+  const dLng = ((b.lng - a.lng) * Math.PI) / 180;
+  const s =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((a.lat * Math.PI) / 180) * Math.cos((b.lat * Math.PI) / 180) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(s)));
+};
+
 export interface ParadaMapa {
   direccion: string;
   tipo: "retiro" | "entrega" | "parada";
@@ -198,6 +215,17 @@ export default function MapaTILA({
   const siguiendoChoferRef   = useRef(false);
   const encuadreInicialHechoRef = useRef(false);
   const programaticoRef      = useRef(false);
+
+  // Espejo en estado de siguiendoChoferRef — sólo para que el botón "Mi ubicación"
+  // pueda pintarse distinto según el seguimiento esté activo o pausado. La lógica de
+  // cámara sigue leyendo el ref (rápido, síncrono, sin depender del ciclo de render);
+  // este setState sólo se dispara cuando el valor realmente cambia, no en cada tick de GPS.
+  const [siguiendoActivo, setSiguiendoActivo] = useState(false);
+  const actualizarSeguimiento = useCallback((activo: boolean) => {
+    if (siguiendoChoferRef.current === activo) return;
+    siguiendoChoferRef.current = activo;
+    setSiguiendoActivo(activo);
+  }, []);
 
   const [origenCoords,  setOrigenCoords]  = useState<google.maps.LatLngLiteral | null>(null);
   const [destinoCoords, setDestinoCoords] = useState<google.maps.LatLngLiteral | null>(null);
@@ -367,12 +395,17 @@ export default function MapaTILA({
   }, [encuadrarPuntos]);
 
   // ─── Calcular ruta con DirectionsService ──────────────────────────────────
+  // onSettled (opcional) se llama SIEMPRE al terminar, haya éxito o fallback — a
+  // diferencia de onSuccess, que sólo se llama si Directions respondió OK. Los
+  // llamadores existentes (recorrido antes de aceptar, multietapa de sólo lectura,
+  // modo simple) no lo pasan, así que su comportamiento no cambia.
   const calcularRuta = useCallback((
     origin: string | google.maps.LatLngLiteral,
     destinationStr: string,
     waypoints: google.maps.DirectionsWaypoint[],
     fallbackPuntos: google.maps.LatLngLiteral[],
-    onSuccess?: (result: google.maps.DirectionsResult) => void
+    onSuccess?: (result: google.maps.DirectionsResult) => void,
+    onSettled?: () => void
   ) => {
     if (!directionsServiceRef.current) {
       directionsServiceRef.current = new google.maps.DirectionsService();
@@ -398,6 +431,7 @@ export default function MapaTILA({
           // FALLBACK: dibujar Polyline simple con los puntos que tenemos
           aplicarPolylineFallback(fallbackPuntos);
         }
+        if (onSettled) onSettled();
       }
     );
   }, [aplicarPolylineFallback, encuadrarDesdeRuta]);
@@ -470,9 +504,12 @@ export default function MapaTILA({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isLoaded, mostrarRutaDesdeChofer, modoMultiChofer, tieneParadas, lat, lng, origen, destino]);
 
-  // ─── MODO MULTIETAPA ──────────────────────────────────────────────────────
+  // ─── MODO MULTIETAPA (sólo lectura: panel-cliente / panel-chofer) ─────────
+  // En modoNavegacion (Viaje Activo) este efecto NO corre — lo reemplazan los dos
+  // efectos dedicados de más abajo, que usan la posición real del chofer como
+  // origen y recalculan cuando corresponde (no una única vez al montar).
   useEffect(() => {
-    if (!isLoaded || !tieneParadas || modoMultiChofer) return;
+    if (!isLoaded || !tieneParadas || modoMultiChofer || modoNavegacion) return;
     if (!geocoderRef.current) geocoderRef.current = new google.maps.Geocoder();
 
     setDiagnostico(d => ({ ...d, modoActivo: "multietapa", tieneParadas: true }));
@@ -574,30 +611,114 @@ export default function MapaTILA({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isLoaded, tieneParadas, modoMultiChofer, mostrarRutaDesdeChofer, origen, destino, paradaActivaDireccion, modoNavegacion]);
 
-  // ─── modoNavegacion: recalcular ruta cuando cambia destino O llega primer GPS
-  // Efecto puramente de DATOS: sólo actualiza la línea de ruta (directions/polyline).
-  // Nunca mueve la cámara — eso es responsabilidad exclusiva del efecto de encuadre inicial.
-  const prevDestinoNavRef  = useRef<string | null>(null);
-  const primerGpsNavRef    = useRef(false);
+  // ─── modoNavegacion multietapa: geocodificar paradas (markers + encuadre) ──
+  // Sólo depende de las direcciones de las paradas — no cambian durante el viaje
+  // (sólo cambia su `estado`), así que este efecto corre una única vez por viaje,
+  // nunca en cada tick de GPS. Alimenta `paradasCoords`, usado por los markers,
+  // por el encuadre inicial y como fallback si Directions falla.
   useEffect(() => {
-    if (!isLoaded || !modoNavegacion || !lat || !lng || !paradaActivaDireccion || tieneParadas || modoMultiChofer) return;
-    const destinoCambio = prevDestinoNavRef.current !== paradaActivaDireccion;
-    const primerGps     = !primerGpsNavRef.current;
-    if (!destinoCambio && !primerGps) return; // nada cambió relevante
-    prevDestinoNavRef.current = paradaActivaDireccion;
-    primerGpsNavRef.current   = true;
+    if (!isLoaded || !modoNavegacion || !tieneParadas || modoMultiChofer) return;
+    if (!geocoderRef.current) geocoderRef.current = new google.maps.Geocoder();
 
-    // Geocodificar destino para marcador + ruta
-    const fallback: google.maps.LatLngLiteral[] = [{ lat, lng }];
-    geocodificar(paradaActivaDireccion, (coords) => {
-      if (coords) {
-        fallback.push(coords);
-        setDestinoCoords(coords); // marcador del objetivo visible
-      }
-      calcularRuta({ lat, lng }, paradaActivaDireccion, [], fallback);
+    const coords: (google.maps.LatLngLiteral | null)[] = new Array(paradas!.length).fill(null);
+    let pendientes = paradas!.length;
+    paradas!.forEach((parada, index) => {
+      geocodificar(parada.direccion, (result) => {
+        coords[index] = result;
+        pendientes--;
+        if (pendientes === 0) setParadasCoords([...coords]);
+      });
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [paradaActivaDireccion, lat, lng, modoNavegacion]);
+  }, [isLoaded, modoNavegacion, tieneParadas, modoMultiChofer, JSON.stringify(paradas?.map(p => p.direccion))]);
+
+  // ─── modoNavegacion multietapa: calcular ruta chofer → paradas pendientes ──
+  // A diferencia del modo de sólo lectura de arriba (que usa paradas[0] como origen
+  // porque ahí no hay un chofer en viaje), acá el origen SIEMPRE es la posición real
+  // del chofer, y el destino/waypoints salen únicamente de las paradas todavía NO
+  // completadas, respetando su orden real. Recalcula cuando: cambia el conjunto de
+  // paradas pendientes (se completó una), llega el primer GPS, o el chofer recorrió
+  // más de UMBRAL_RECALCULO_RUTA_METROS desde el origen del último cálculo — esto
+  // último es distancia recorrida, no detección de desvío: se repite aunque el
+  // chofer esté siguiendo la ruta correctamente. Nunca en cada tick mínimo de GPS.
+  const paradasPendientesKeyRef  = useRef<string | null>(null);
+  const primerGpsMultietapaRef   = useRef(false);
+  const origenUltimoCalculoRef   = useRef<google.maps.LatLngLiteral | null>(null);
+
+  // Protección contra cálculos simultáneos: mientras calculandoRutaNavRef es true,
+  // cualquier disparador nuevo sólo marca recalculoPendienteNavRef en vez de lanzar
+  // una segunda llamada a Directions en paralelo. Al terminar la llamada en curso
+  // (éxito o fallback) se libera calculandoRutaNavRef y, si quedó un pendiente, se
+  // dispara inmediatamente un nuevo cálculo con la posición/paradas MÁS RECIENTES
+  // conocidas (ultimoLatLngConocidoRef/ultimasParadasConocidasRef, actualizadas en
+  // cada corrida del efecto) — así ningún disparador se pierde y nunca hay dos
+  // llamadas en vuelo al mismo tiempo.
+  const calculandoRutaNavRef       = useRef(false);
+  const recalculoPendienteNavRef   = useRef(false);
+  const ultimoLatLngConocidoRef    = useRef<google.maps.LatLngLiteral | null>(null);
+  const ultimasParadasConocidasRef = useRef<ParadaMapa[]>([]);
+  // Referencia estable a la versión más reciente de dispararCalculoNav — permite que
+  // el propio callback se re-invoque a sí mismo al drenar un pendiente sin un
+  // auto-referencia directa a la const (evita el ciclo de declaración) y de paso
+  // nunca queda con una versión vieja del closure entre renders.
+  const dispararCalculoNavRef = useRef<() => void>(() => {});
+
+  const dispararCalculoNav = useCallback(() => {
+    if (calculandoRutaNavRef.current) {
+      recalculoPendienteNavRef.current = true;
+      return;
+    }
+    const latLng = ultimoLatLngConocidoRef.current;
+    if (!latLng) return;
+    const pendientes = ultimasParadasConocidasRef.current.filter(p => p.estado !== "completada");
+    if (pendientes.length === 0) return; // no queda ningún tramo por recorrer
+
+    calculandoRutaNavRef.current    = true;
+    paradasPendientesKeyRef.current = pendientes.map(p => p.direccion).join("|");
+    origenUltimoCalculoRef.current  = latLng;
+
+    const destino   = pendientes[pendientes.length - 1].direccion;
+    const waypoints = pendientes.slice(0, -1).map(p => ({ location: `${p.direccion}, Argentina`, stopover: true }));
+    const fallback: google.maps.LatLngLiteral[] = [latLng];
+    paradasCoords.forEach(c => { if (c) fallback.push(c); });
+
+    calcularRuta({ lat: latLng.lat, lng: latLng.lng }, destino, waypoints, fallback, undefined, () => {
+      calculandoRutaNavRef.current = false;
+      if (recalculoPendienteNavRef.current) {
+        recalculoPendienteNavRef.current = false;
+        dispararCalculoNavRef.current();
+      }
+    });
+  }, [calcularRuta, paradasCoords]);
+  useEffect(() => {
+    dispararCalculoNavRef.current = dispararCalculoNav;
+  }, [dispararCalculoNav]);
+
+  useEffect(() => {
+    if (!isLoaded || !modoNavegacion || !tieneParadas || modoMultiChofer) return;
+    if (!lat || !lng) return;
+
+    // Siempre al día, se use o no en este tick — es lo que lee dispararCalculoNav
+    // cuando drena un recálculo pendiente después de que termine el que está en vuelo.
+    ultimoLatLngConocidoRef.current    = { lat, lng };
+    ultimasParadasConocidasRef.current = paradas!;
+
+    const pendientes = paradas!.filter(p => p.estado !== "completada");
+    if (pendientes.length === 0) return; // no queda ningún tramo por recorrer
+
+    const key = pendientes.map(p => p.direccion).join("|");
+    const cambioDeParadas    = paradasPendientesKeyRef.current !== key;
+    const primerGps          = !primerGpsMultietapaRef.current;
+    const origenPrevio       = origenUltimoCalculoRef.current;
+    const desvioSignificativo =
+      !!origenPrevio && distanciaMetros(origenPrevio, { lat, lng }) >= UMBRAL_RECALCULO_RUTA_METROS;
+
+    if (!cambioDeParadas && !primerGps && !desvioSignificativo) return; // nada relevante cambió
+
+    primerGpsMultietapaRef.current = true;
+    dispararCalculoNav();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isLoaded, modoNavegacion, tieneParadas, modoMultiChofer, lat, lng, JSON.stringify(paradas?.map(p => ({ d: p.direccion, e: p.estado }))), dispararCalculoNav]);
 
   // ─── modoNavegacion: encuadre inicial único ────────────────────────────────
   // Único lugar que hace el fitBounds/setCenter automático de arranque en modoNavegacion.
@@ -636,13 +757,13 @@ export default function MapaTILA({
     // Panel Chofer nunca pasa modoNavegacion=true, así que este bloque no le afecta.
     if (modoNavegacion) {
       mapa.addListener("dragstart", () => {
-        siguiendoChoferRef.current = false;
+        actualizarSeguimiento(false);
       });
       mapa.addListener("zoom_changed", () => {
-        if (!programaticoRef.current) siguiendoChoferRef.current = false;
+        if (!programaticoRef.current) actualizarSeguimiento(false);
       });
     }
-  }, [actualizarMarcadorChofer, modoMultiChofer, modoNavegacion]);
+  }, [actualizarMarcadorChofer, modoMultiChofer, modoNavegacion, actualizarSeguimiento]);
 
   const onMapLoadMulti = useCallback((mapa: google.maps.Map) => {
     mapRef.current = mapa;
@@ -675,20 +796,20 @@ export default function MapaTILA({
 
   // ─── Botones de control manual de cámara (solo modoNavegacion) ────────────
   const verRecorridoCompleto = useCallback(() => {
-    siguiendoChoferRef.current = false;
+    actualizarSeguimiento(false);
     const puntos: google.maps.LatLngLiteral[] = [];
     if (lat && lng) puntos.push({ lat, lng });
     paradasCoords.forEach(p => { if (p) puntos.push(p); });
     if (destinoCoords) puntos.push(destinoCoords);
     if (puntos.length === 0) return;
     encuadrarPuntosForzado(puntos);
-  }, [lat, lng, paradasCoords, destinoCoords, encuadrarPuntosForzado]);
+  }, [lat, lng, paradasCoords, destinoCoords, encuadrarPuntosForzado, actualizarSeguimiento]);
 
   const volverAMiUbicacion = useCallback(() => {
     if (!lat || !lng) return;
-    siguiendoChoferRef.current = true;
+    actualizarSeguimiento(true);
     seguirChofer(lat, lng);
-  }, [lat, lng, seguirChofer]);
+  }, [lat, lng, seguirChofer, actualizarSeguimiento]);
 
   // ─── Fallbacks de carga ───────────────────────────────────────────────────
   if (loadError) return (
@@ -716,6 +837,13 @@ export default function MapaTILA({
           streetViewControl: false,
           mapTypeControl: false,
           fullscreenControl: false,
+          // Arrastre/zoom/rotación quedan libres para el usuario — nada bloquea
+          // gestos de dos dedos acá. Sin mapId el mapa sigue siendo raster, así que
+          // la inclinación real depende de si Google la soporta en ese modo; esto
+          // sólo deja de impedirla activamente. gestureHandling "greedy" evita el
+          // modo cooperativo (que exigiría dos dedos incluso para arrastrar) en esta
+          // vista de mapa a pantalla completa.
+          gestureHandling: "greedy",
         }}
         onLoad={modoMultiChofer ? onMapLoadMulti : onMapLoad}
       >
@@ -818,9 +946,14 @@ export default function MapaTILA({
           <button
             type="button"
             onClick={volverAMiUbicacion}
-            title="Volver a mi ubicación"
-            aria-label="Volver a mi ubicación"
-            className="w-11 h-11 rounded-full bg-black/85 border border-yellow-400 text-yellow-400 flex items-center justify-center text-lg shadow-lg active:scale-95 transition"
+            title={siguiendoActivo ? "Siguiendo tu ubicación" : "Volver a mi ubicación"}
+            aria-label={siguiendoActivo ? "Siguiendo tu ubicación — tocá para recentrar" : "Volver a mi ubicación"}
+            aria-pressed={siguiendoActivo}
+            className={`w-11 h-11 rounded-full border flex items-center justify-center text-lg shadow-lg active:scale-95 transition ${
+              siguiendoActivo
+                ? "bg-yellow-400 border-yellow-400 text-black"
+                : "bg-black/85 border-yellow-400 text-yellow-400"
+            }`}
           >
             📍
           </button>
