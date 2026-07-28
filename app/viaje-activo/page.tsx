@@ -75,6 +75,7 @@ export default function ViajeActivoPage() {
   const [festejo, setFestejo]         = useState(false);
   const [gpsEstado, setGpsEstado]     = useState("GPS...");
   const [velocidadGps, setVelocidadGps] = useState(0);
+  const [headingChofer, setHeadingChofer] = useState<number | null>(null);
   const [bateriaNivel, setBateriaNivel]     = useState<number | null>(null);
   const [bateriaCargando, setBateriaCargando] = useState<boolean | null>(null);
   const [bateriaDisponible, setBateriaDisponible] = useState(false);
@@ -423,6 +424,14 @@ export default function ViajeActivoPage() {
         if (viajeTerminado.current) return;
         const lat = pos.coords.latitude, lng = pos.coords.longitude;
         const vel = pos.coords.speed ? Math.round(pos.coords.speed * 3.6) : 0;
+        // heading viene null cuando el GPS no puede inferir dirección (vehículo
+        // detenido, primera lectura, señal débil) — sólo se actualiza el estado con
+        // valores válidos, así se conserva el último rumbo conocido en vez de
+        // pasarle null a MapaTILA (que "resetearía" la orientación de la cámara).
+        const rumbo = pos.coords.heading;
+        if (rumbo !== null && !Number.isNaN(rumbo)) {
+          setHeadingChofer(rumbo);
+        }
         const now = new Date().toISOString();
         setGpsEstado("🟢"); setVelocidadGps(vel);
         setUltimaSenal(new Date(now).toLocaleTimeString("es-AR", { hour:"2-digit", minute:"2-digit" }));
@@ -745,7 +754,7 @@ export default function ViajeActivoPage() {
       {/* ─── MAPA ────────────────────────────────────────────────────────── */}
       <div className="absolute inset-0" style={{ height: "100dvh", width: "100vw" }}>
         <MapaTILA
-          lat={viaje?.lat} lng={viaje?.lng}
+          lat={viaje?.lat} lng={viaje?.lng} heading={headingChofer}
           origen={viaje.origen} destino={viaje.destino}
           paradaActivaDireccion={destinoRuta}
           paradas={paradasParaMapa.length > 0 ? paradasParaMapa : undefined}

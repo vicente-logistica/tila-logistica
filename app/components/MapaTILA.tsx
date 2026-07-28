@@ -74,6 +74,9 @@ interface DiagnosticoMapa {
 interface MapaTILAProps {
   lat?: number | null;
   lng?: number | null;
+  /** Rumbo GPS del chofer en grados (0-360). Sólo se usa en modoNavegacion, y sólo
+   *  mientras el seguimiento automático esté activo, para orientar la cámara. */
+  heading?: number | null;
   origen: string;
   destino: string;
   paradaActivaDireccion?: string | null;
@@ -152,23 +155,66 @@ const construirIconoParada = (
 };
 
 // Camión con semirremolque visto desde arriba — sin letra, no reemplaza ningún punto
-// del recorrido, sólo indica la posición real del chofer.
+// del recorrido, sólo indica la posición real del chofer. Rediseñado para distinguirse
+// claramente del trazo amarillo de la ruta: cuerpo blanco/gris (no amarillo), borde
+// blanco, sombra propia, cabina y caja diferenciadas por color y gradiente (sensación
+// de volumen sin 3D real), franja y techo amarillo como acento de marca TILA, luces
+// traseras. Mismo viewBox, scaledSize y anchor que antes — no cambia el tamaño de
+// referencia usado por el resto del código (posicionamiento, hit-area).
 const construirIconoChofer = (): google.maps.Icon => {
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="36" height="56" viewBox="0 0 36 56">
-    <rect x="4" y="20" width="28" height="34" rx="3" fill="#facc15" stroke="#111827" stroke-width="2"/>
-    <rect x="2" y="44" width="4" height="6" rx="1" fill="#111827"/>
-    <rect x="30" y="44" width="4" height="6" rx="1" fill="#111827"/>
-    <rect x="8" y="2" width="20" height="20" rx="3" fill="#facc15" stroke="#111827" stroke-width="2"/>
-    <rect x="11" y="5" width="14" height="6" rx="1.5" fill="#111827" opacity="0.55"/>
-    <rect x="15" y="19" width="6" height="4" fill="#111827"/>
+    <defs>
+      <linearGradient id="tilaCajaGrad" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#fafafa"/>
+        <stop offset="1" stop-color="#c7c7cf"/>
+      </linearGradient>
+      <linearGradient id="tilaCabinaGrad" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#ffffff"/>
+        <stop offset="1" stop-color="#dcdce3"/>
+      </linearGradient>
+    </defs>
+
+    <ellipse cx="19" cy="30" rx="14" ry="22" fill="#000000" opacity="0.28"/>
+
+    <rect x="4" y="21" width="28" height="32" rx="3" fill="url(#tilaCajaGrad)" stroke="#ffffff" stroke-width="2.5"/>
+    <rect x="4" y="33" width="28" height="5.5" fill="#facc15"/>
+    <rect x="4" y="33" width="28" height="1.2" fill="#111827" opacity="0.3"/>
+    <rect x="4" y="37.3" width="28" height="1.2" fill="#111827" opacity="0.3"/>
+
+    <rect x="1.5" y="46" width="4.5" height="7" rx="1.2" fill="#18181b"/>
+    <rect x="30" y="46" width="4.5" height="7" rx="1.2" fill="#18181b"/>
+
+    <rect x="5.5" y="49.5" width="3.5" height="3" rx="1" fill="#ef4444"/>
+    <rect x="27" y="49.5" width="3.5" height="3" rx="1" fill="#ef4444"/>
+
+    <rect x="15" y="18.5" width="6" height="4" fill="#3f3f46"/>
+
+    <rect x="7" y="1.5" width="22" height="19" rx="3.5" fill="url(#tilaCabinaGrad)" stroke="#ffffff" stroke-width="2.5"/>
+    <rect x="10" y="4.5" width="16" height="6.5" rx="1.5" fill="#1e293b" opacity="0.8"/>
+    <rect x="4.5" y="7" width="2.5" height="4" rx="1" fill="#18181b"/>
+    <rect x="29" y="7" width="2.5" height="4" rx="1" fill="#18181b"/>
+    <rect x="12" y="2.5" width="12" height="2.5" rx="1.25" fill="#facc15"/>
   </svg>`;
   const url = `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
   return { url, scaledSize: new google.maps.Size(30, 46), anchor: new google.maps.Point(15, 23) };
 };
 
+// ─── Tema del mapa (modoNavegacion) ─────────────────────────────────────────
+// Sin persistencia todavía: arranca en "automatico" en cada montaje. El botón cicla
+// automatico → dia → noche → automatico. La conversión a google.maps.ColorScheme se
+// hace dentro del componente (no acá arriba) porque el objeto `google` sólo existe
+// después de que useJsApiLoader termine de cargar el script — exactamente el mismo
+// motivo por el que ya existía esa lectura sólo dentro del JSX renderizado tras el
+// guard de isLoaded.
+type TemaMapa = "automatico" | "dia" | "noche";
+const SIGUIENTE_TEMA: Record<TemaMapa, TemaMapa> = { automatico: "dia", dia: "noche", noche: "automatico" };
+const ICONO_TEMA: Record<TemaMapa, string> = { automatico: "🌓", dia: "☀️", noche: "🌙" };
+const LABEL_TEMA: Record<TemaMapa, string> = { automatico: "Automático", dia: "Claro", noche: "Oscuro" };
+
 export default function MapaTILA({
   lat,
   lng,
+  heading,
   origen,
   destino,
   paradaActivaDireccion,
@@ -212,6 +258,13 @@ export default function MapaTILA({
     if (siguiendoChoferRef.current === activo) return;
     siguiendoChoferRef.current = activo;
     setSiguiendoActivo(activo);
+  }, []);
+
+  // Tema del mapa — sólo estado de sesión, sin persistencia (ver comentario junto a
+  // TemaMapa más arriba). Empieza en "automatico" en cada montaje del componente.
+  const [tema, setTema] = useState<TemaMapa>("automatico");
+  const cambiarTema = useCallback(() => {
+    setTema(t => SIGUIENTE_TEMA[t]);
   }, []);
 
   const [origenCoords,  setOrigenCoords]  = useState<google.maps.LatLngLiteral | null>(null);
@@ -309,11 +362,17 @@ export default function MapaTILA({
 
   // Seguimiento GPS del chofer en modoNavegacion — sólo mueve la cámara mientras
   // siguiendoChoferRef sea true (arranca en false; lo activa el botón "Mi ubicación").
-  const seguirChofer = useCallback((latChofer: number, lngChofer: number) => {
+  // headingChofer es opcional: cuando viene un valor válido, además de centrar también
+  // orienta el mapa según el rumbo real — el camión (ícono fijo, sin rotación propia)
+  // queda visualmente "hacia arriba" porque es el mapa el que gira, no el ícono.
+  const seguirChofer = useCallback((latChofer: number, lngChofer: number, headingChofer?: number | null) => {
     if (!siguiendoChoferRef.current) return;
     moverCamara(() => {
       mapRef.current!.setCenter({ lat: latChofer, lng: lngChofer });
       if (mapRef.current!.getZoom() !== ZOOM_SEGUIMIENTO) mapRef.current!.setZoom(ZOOM_SEGUIMIENTO);
+      if (headingChofer !== null && headingChofer !== undefined && !Number.isNaN(headingChofer)) {
+        mapRef.current!.setHeading(headingChofer);
+      }
     });
   }, [moverCamara]);
 
@@ -749,6 +808,12 @@ export default function MapaTILA({
       mapa.addListener("zoom_changed", () => {
         if (!programaticoRef.current) actualizarSeguimiento(false);
       });
+      mapa.addListener("heading_changed", () => {
+        if (!programaticoRef.current) actualizarSeguimiento(false);
+      });
+      mapa.addListener("tilt_changed", () => {
+        if (!programaticoRef.current) actualizarSeguimiento(false);
+      });
     }
   }, [actualizarMarcadorChofer, modoMultiChofer, modoNavegacion, actualizarSeguimiento]);
 
@@ -775,11 +840,11 @@ export default function MapaTILA({
     // se desacopla únicamente el movimiento de la cámara.
     actualizarMarcadorChofer(mapRef.current);
     if (modoNavegacion) {
-      seguirChofer(lat, lng);
+      seguirChofer(lat, lng, heading);
     } else {
       seguirEnVistaLectura(lat, lng);
     }
-  }, [lat, lng, actualizarMarcadorChofer, modoMultiChofer, modoNavegacion, seguirChofer, seguirEnVistaLectura]);
+  }, [lat, lng, heading, actualizarMarcadorChofer, modoMultiChofer, modoNavegacion, seguirChofer, seguirEnVistaLectura]);
 
   // ─── Botones de control manual de cámara (solo modoNavegacion) ────────────
   const verRecorridoCompleto = useCallback(() => {
@@ -795,8 +860,8 @@ export default function MapaTILA({
   const volverAMiUbicacion = useCallback(() => {
     if (!lat || !lng) return;
     actualizarSeguimiento(true);
-    seguirChofer(lat, lng);
-  }, [lat, lng, seguirChofer, actualizarSeguimiento]);
+    seguirChofer(lat, lng, heading);
+  }, [lat, lng, heading, seguirChofer, actualizarSeguimiento]);
 
   // ─── Fallbacks de carga ───────────────────────────────────────────────────
   if (loadError) return (
@@ -811,6 +876,13 @@ export default function MapaTILA({
     </div>
   );
 
+  // Sólo puede leerse google.maps.* acá abajo (después del guard de isLoaded) — el
+  // script de Maps recién existe en tiempo de ejecución, no al importar el módulo.
+  const colorSchemeActual =
+    tema === "dia"   ? google.maps.ColorScheme.LIGHT :
+    tema === "noche" ? google.maps.ColorScheme.DARK :
+    google.maps.ColorScheme.FOLLOW_SYSTEM;
+
   return (
     <div style={{ width: "100%", position: "relative" }}>
       <GoogleMap
@@ -819,17 +891,29 @@ export default function MapaTILA({
         zoom={zoomInicial}
         options={{
           disableDefaultUI: true,
-          zoomControl: true,
+          // Redundante con el pinch-to-zoom (gestureHandling "greedy") en la vista de
+          // navegación a pantalla completa — igual que Google Maps/Waze/Uber Driver no
+          // muestran botones +/- durante la conducción. Se mantiene en las vistas de
+          // sólo lectura (panel-cliente/panel-chofer), donde sí es una ayuda útil.
+          zoomControl: !modoNavegacion,
           streetViewControl: false,
           mapTypeControl: false,
           fullscreenControl: false,
+          // El control de rotación propio de Google quedaría redundante con nuestro
+          // propio botón "Mi ubicación" (que ya centra + reorienta) — se apaga en
+          // todos los modos; en los modos sin tiltInteractionEnabled ni aparecería.
+          rotateControl: false,
+          // Sin utilidad en una app táctil dentro de un WebView — quita el enlace
+          // "Keyboard shortcuts" de la fila de atribución.
+          keyboardShortcuts: false,
+          // Evita que tocar un ícono de comercio/POI ajeno abra la tarjeta info nativa
+          // de Google en medio de la conducción; no afecta a los paneles de sólo lectura.
+          clickableIcons: !modoNavegacion,
           // Mapa vectorial (mapId de Google Cloud) — el estilo ("TILA Vector Base")
           // vive en Cloud Console, ya no en un array `styles` local: con mapId
-          // presente, Google ignora `styles` por completo. colorScheme sigue la
-          // preferencia del sistema (claro/oscuro); todavía no hay selector propio
-          // ni persistencia — eso queda para una etapa posterior.
+          // presente, Google ignora `styles` por completo.
           mapId: process.env.NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID,
-          colorScheme: google.maps.ColorScheme.FOLLOW_SYSTEM,
+          colorScheme: colorSchemeActual,
           // Inclinación/rotación por gesto sólo en Viaje Activo — en las vistas de
           // sólo lectura (panel-cliente/panel-chofer) modoNavegacion es false y el
           // mapa queda plano, sin necesidad de ninguna regla de estilo adicional.
@@ -950,6 +1034,15 @@ export default function MapaTILA({
             }`}
           >
             📍
+          </button>
+          <button
+            type="button"
+            onClick={cambiarTema}
+            title={`Tema: ${LABEL_TEMA[tema]} — tocá para ${LABEL_TEMA[SIGUIENTE_TEMA[tema]]}`}
+            aria-label={`Tema del mapa: ${LABEL_TEMA[tema]}. Tocá para cambiar a ${LABEL_TEMA[SIGUIENTE_TEMA[tema]]}`}
+            className="w-11 h-11 rounded-full bg-black/85 border border-yellow-400 text-yellow-400 flex items-center justify-center text-lg shadow-lg active:scale-95 transition"
+          >
+            {ICONO_TEMA[tema]}
           </button>
         </div>
       )}
