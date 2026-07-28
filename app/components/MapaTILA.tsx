@@ -1023,26 +1023,15 @@ export default function MapaTILA({
     });
   }, [lat, lng, heading, moverCamara, actualizarSeguimiento]);
 
-  // ─── Fallbacks de carga ───────────────────────────────────────────────────
-  if (loadError) return (
-    <div style={{ height: altura }} className="w-full bg-zinc-900 border border-zinc-700 rounded-2xl flex items-center justify-center">
-      <p className="text-zinc-500 text-sm">Error al cargar el mapa</p>
-    </div>
-  );
-
-  if (!isLoaded) return (
-    <div style={{ height: altura }} className="w-full bg-zinc-900 border border-zinc-700 rounded-2xl flex items-center justify-center">
-      <p className="text-yellow-400 font-black animate-pulse">Cargando mapa...</p>
-    </div>
-  );
-
-  // Sólo puede leerse google.maps.* acá abajo (después del guard de isLoaded) — el
-  // script de Maps recién existe en tiempo de ejecución, no al importar el módulo.
-  const colorSchemeActual =
-    tema === "dia"   ? google.maps.ColorScheme.LIGHT :
-    tema === "noche" ? google.maps.ColorScheme.DARK :
-    google.maps.ColorScheme.FOLLOW_SYSTEM;
-
+  // Este useMemo debe ejecutarse SIEMPRE, incluso mientras el script de Maps
+  // todavía no cargó (isLoaded === false). Antes vivía después de los dos
+  // `return` de carga/error de más abajo, por lo que en el render con
+  // isLoaded=false el componente cortaba ahí y nunca llegaba a este hook, y en
+  // el render siguiente (isLoaded=true) sí lo ejecutaba: distinta cantidad de
+  // hooks entre renders del mismo componente → React tira "Rendered more
+  // hooks than during the previous render". Por eso colorSchemeActual sólo lee
+  // google.maps.* cuando isLoaded es true; si no, cae a undefined.
+  //
   // Memoizado: @react-google-maps/api decide si llama a map.setOptions(...) comparando
   // la REFERENCIA del objeto `options` contra la del render anterior (ver
   // applyUpdaterToNextProps en su código fuente). Un objeto literal inline sería una
@@ -1051,6 +1040,12 @@ export default function MapaTILA({
   // cambia cuando cambia modoNavegacion o colorSchemeActual (las únicas dependencias
   // reales), así que setOptions() deja de ejecutarse en cada render. heading/tilt NO
   // van acá — ver el comentario en onMapLoad de por qué se aplican ahí en cambio.
+  const colorSchemeActual = isLoaded
+    ? (tema === "dia"   ? google.maps.ColorScheme.LIGHT :
+       tema === "noche" ? google.maps.ColorScheme.DARK :
+       google.maps.ColorScheme.FOLLOW_SYSTEM)
+    : undefined;
+
   const opciones = useMemo<google.maps.MapOptions>(() => ({
     disableDefaultUI: true,
     // Redundante con el pinch-to-zoom (gestureHandling "greedy") en la vista de
@@ -1085,6 +1080,19 @@ export default function MapaTILA({
     // incluso para arrastrar) en esta vista de mapa a pantalla completa.
     gestureHandling: "greedy",
   }), [modoNavegacion, colorSchemeActual]);
+
+  // ─── Fallbacks de carga ───────────────────────────────────────────────────
+  if (loadError) return (
+    <div style={{ height: altura }} className="w-full bg-zinc-900 border border-zinc-700 rounded-2xl flex items-center justify-center">
+      <p className="text-zinc-500 text-sm">Error al cargar el mapa</p>
+    </div>
+  );
+
+  if (!isLoaded) return (
+    <div style={{ height: altura }} className="w-full bg-zinc-900 border border-zinc-700 rounded-2xl flex items-center justify-center">
+      <p className="text-yellow-400 font-black animate-pulse">Cargando mapa...</p>
+    </div>
+  );
 
   return (
     <div style={{ width: "100%", position: "relative" }}>
