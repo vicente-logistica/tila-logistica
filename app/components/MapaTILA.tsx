@@ -155,44 +155,50 @@ const construirIconoParada = (
 };
 
 // Camión con semirremolque visto desde arriba — sin letra, no reemplaza ningún punto
-// del recorrido, sólo indica la posición real del chofer. Segundo rediseño: cabina
-// amarilla TILA (identidad de marca) + caja blanca (más grande, así el amarillo no
-// domina la silueta y no se confunde con el trazo de ruta), contorno negro fino,
-// parabrisas azul oscuro, luces traseras rojas, sombra más marcada que la versión
-// anterior. Mismo viewBox, scaledSize y anchor que antes — no cambia el tamaño de
-// referencia usado por el resto del código (posicionamiento, hit-area).
+// del recorrido, sólo indica la posición real del chofer. Tercer rediseño: cabina
+// gris casi negro + caja azul marino muy oscuro (tono distinto de la cabina, ninguna
+// superficie grande blanca ni amarilla — la versión blanca se perdía contra mapas en
+// modo claro), contorno negro bien definido, parabrisas azul vivo, luces traseras
+// rojo intenso, halo claro (en vez de sombra oscura) para recortar la silueta también
+// sobre mapas en modo oscuro, acento amarillo TILA reducido a un detalle mínimo.
+// Mismo viewBox, scaledSize y anchor que antes — no cambia el tamaño de referencia
+// usado por el resto del código (posicionamiento, hit-area).
 const construirIconoChofer = (): google.maps.Icon => {
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="36" height="56" viewBox="0 0 36 56">
     <defs>
-      <linearGradient id="tilaCajaGrad2" x1="0" y1="0" x2="0" y2="1">
-        <stop offset="0" stop-color="#ffffff"/>
-        <stop offset="1" stop-color="#e4e4e7"/>
+      <linearGradient id="tilaCajaGrad3" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#1e293b"/>
+        <stop offset="1" stop-color="#0f172a"/>
       </linearGradient>
-      <linearGradient id="tilaCabinaGrad2" x1="0" y1="0" x2="0" y2="1">
-        <stop offset="0" stop-color="#fde047"/>
-        <stop offset="1" stop-color="#eab308"/>
+      <linearGradient id="tilaCabinaGrad3" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#3f3f46"/>
+        <stop offset="1" stop-color="#18181b"/>
       </linearGradient>
     </defs>
 
-    <ellipse cx="19.5" cy="31" rx="15" ry="23" fill="#000000" opacity="0.38"/>
+    <!-- Halo claro: recorta la silueta también sobre mapas en modo oscuro -->
+    <ellipse cx="19.5" cy="31" rx="15" ry="23" fill="#f4f4f5" opacity="0.42"/>
 
-    <rect x="4" y="21" width="28" height="32" rx="3" fill="url(#tilaCajaGrad2)" stroke="#111827" stroke-width="1.5"/>
-    <rect x="4" y="31" width="28" height="1" fill="#111827" opacity="0.12"/>
-    <rect x="4" y="41" width="28" height="1" fill="#111827" opacity="0.12"/>
+    <rect x="4" y="21" width="28" height="32" rx="3" fill="url(#tilaCajaGrad3)" stroke="#000000" stroke-width="1.75"/>
+    <rect x="4" y="31" width="28" height="1" fill="#ffffff" opacity="0.1"/>
+    <rect x="4" y="41" width="28" height="1" fill="#ffffff" opacity="0.1"/>
 
     <rect x="1.5" y="46" width="4.5" height="7" rx="1.2" fill="#18181b"/>
     <rect x="30" y="46" width="4.5" height="7" rx="1.2" fill="#18181b"/>
 
-    <rect x="5.5" y="49.5" width="3.5" height="3" rx="1" fill="#ef4444"/>
-    <rect x="27" y="49.5" width="3.5" height="3" rx="1" fill="#ef4444"/>
+    <rect x="5.5" y="49.5" width="3.5" height="3" rx="1" fill="#dc2626" stroke="#fecaca" stroke-width="0.6"/>
+    <rect x="27" y="49.5" width="3.5" height="3" rx="1" fill="#dc2626" stroke="#fecaca" stroke-width="0.6"/>
 
-    <rect x="15" y="18.5" width="6" height="4" fill="#111827"/>
+    <rect x="15" y="18.5" width="6" height="4" fill="#000000"/>
 
-    <rect x="7" y="1.5" width="22" height="19" rx="3.5" fill="url(#tilaCabinaGrad2)" stroke="#111827" stroke-width="1.5"/>
-    <rect x="10" y="4.5" width="16" height="6.5" rx="1.5" fill="#1e3a5f"/>
-    <rect x="11" y="5.2" width="6" height="2" rx="1" fill="#ffffff" opacity="0.25"/>
-    <rect x="4.5" y="7" width="2.5" height="4" rx="1" fill="#111827"/>
-    <rect x="29" y="7" width="2.5" height="4" rx="1" fill="#111827"/>
+    <rect x="7" y="1.5" width="22" height="19" rx="3.5" fill="url(#tilaCabinaGrad3)" stroke="#000000" stroke-width="1.75"/>
+    <rect x="10" y="4.5" width="16" height="6.5" rx="1.5" fill="#2563eb"/>
+    <rect x="11" y="5.2" width="6" height="2" rx="1" fill="#ffffff" opacity="0.3"/>
+    <rect x="4.5" y="7" width="2.5" height="4" rx="1" fill="#000000"/>
+    <rect x="29" y="7" width="2.5" height="4" rx="1" fill="#000000"/>
+
+    <!-- Acento TILA — detalle mínimo, sin superficie grande -->
+    <rect x="15.5" y="0.4" width="5" height="1.8" rx="0.9" fill="#facc15"/>
   </svg>`;
   const url = `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
   return { url, scaledSize: new google.maps.Size(30, 46), anchor: new google.maps.Point(15, 23) };
