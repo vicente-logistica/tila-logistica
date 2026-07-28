@@ -7,16 +7,19 @@ import {
   DirectionsRenderer,
   Polyline,
 } from "@react-google-maps/api";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 const LIBRARIES: ("places" | "geometry" | "drawing")[] = [];
 
 const centroArgentina = { lat: -34.6037, lng: -58.3816 };
 const LABELS = ["A", "B", "C", "D", "E", "F"];
 
-// Zoom que ya usaba el seguimiento automático en modoNavegacion (no es un valor nuevo).
-// Sólo se aplica cuando el usuario reactiva el seguimiento con el botón "Mi ubicación".
-const ZOOM_SEGUIMIENTO = 15;
+// Zoom y tilt aplicados por "Mi ubicación" al restaurar la cámara de navegación.
+// Valores conservadores de primera corrección — ajustar libremente tras probar en
+// el teléfono, no son definitivos. Ya no se reaplican en cada tick de GPS (ver
+// seguirChofer): sólo se fijan una vez, al reactivar el seguimiento.
+const ZOOM_NAVEGACION = 18;
+const TILT_NAVEGACION = 45;
 
 // Distancia mínima que debe moverse el chofer respecto del origen usado en el último
 // cálculo de ruta para considerar que hay un "desvío real y significativo" y volver a
@@ -33,6 +36,20 @@ const distanciaMetros = (a: google.maps.LatLngLiteral, b: google.maps.LatLngLite
     Math.sin(dLat / 2) ** 2 +
     Math.cos((a.lat * Math.PI) / 180) * Math.cos((b.lat * Math.PI) / 180) * Math.sin(dLng / 2) ** 2;
   return 2 * R * Math.asin(Math.min(1, Math.sqrt(s)));
+};
+
+// Heading siempre en el rango 0-359, incluso si el cálculo produce negativos.
+const normalizarHeading = (h: number): number => ((h % 360) + 360) % 360;
+
+// Rumbo inicial (bearing) desde el punto a hacia el punto b, en grados 0-359.
+// Fallback de heading cuando el GPS no trae uno válido — ver restaurarCamaraNavegacion.
+const calcularBearing = (a: google.maps.LatLngLiteral, b: google.maps.LatLngLiteral): number => {
+  const lat1 = (a.lat * Math.PI) / 180;
+  const lat2 = (b.lat * Math.PI) / 180;
+  const dLng = ((b.lng - a.lng) * Math.PI) / 180;
+  const y = Math.sin(dLng) * Math.cos(lat2);
+  const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLng);
+  return normalizarHeading((Math.atan2(y, x) * 180) / Math.PI);
 };
 
 export interface ParadaMapa {
@@ -253,6 +270,20 @@ export default function MapaTILA({
   const siguiendoChoferRef   = useRef(false);
   const encuadreInicialHechoRef = useRef(false);
   const programaticoRef      = useRef(false);
+  // Guarda el id del timeout que libera programaticoRef, para poder cancelarlo si
+  // llega una nueva llamada a moverCamara() antes de que se cumpla — sin esto, dos
+  // movimientos programáticos seguidos podían dejar timeouts superpuestos y liberar
+  // programaticoRef en medio de una actualización todavía en curso.
+  const programaticoTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Últimas dos posiciones conocidas — respaldo para calcular un bearing cuando el
+  // heading del GPS no está disponible (ver restaurarCamaraNavegacion).
+  const historialPosicionRef = useRef<{
+    previa: google.maps.LatLngLiteral | null;
+    actual: google.maps.LatLngLiteral | null;
+  }>({ previa: null, actual: null });
+  // Último heading que efectivamente se aplicó a la cámara de navegación — último
+  // recurso del fallback de heading; nunca se fuerza 0 por defecto.
+  const ultimoHeadingNavegacionRef = useRef<number | null>(null);
 
   // Espejo en estado de siguiendoChoferRef — sólo para que el botón "Mi ubicación"
   // pueda pintarse distinto según el seguimiento esté activo o pausado. La lógica de
@@ -368,9 +399,34 @@ export default function MapaTILA({
   // ─── Único punto que puede tocar el mapa imperativamente ──────────────────
   const moverCamara = useCallback((mover: () => void) => {
     if (!mapRef.current) return;
+    // Si ya había un timeout pendiente de una llamada anterior, se cancela: así dos
+    // moverCamara() seguidos no dejan timeouts superpuestos que liberen
+    // programaticoRef en medio de una actualización todavía en curso.
+    if (programaticoTimeoutRef.current !== null) {
+      clearTimeout(programaticoTimeoutRef.current);
+    }
     programaticoRef.current = true;
     mover();
-    setTimeout(() => { programaticoRef.current = false; }, 0);
+    // 150ms (antes 0ms): el evento heading_changed/zoom_changed/tilt_changed que
+    // Google dispara como consecuencia de este mismo cambio programático no está
+    // garantizado a llegar antes de la próxima vuelta del event loop — con 0ms,
+    // programaticoRef podía volver a false antes de que ese eco llegara, y el
+    // listener lo tomaba como gesto manual y cancelaba el seguimiento recién activado.
+    programaticoTimeoutRef.current = setTimeout(() => {
+      programaticoRef.current = false;
+      programaticoTimeoutRef.current = null;
+    }, 150);
+  }, []);
+
+  // Limpieza del timeout pendiente al desmontar — evita setState/mutación de refs
+  // de un componente ya desmontado si el usuario navega justo después de un
+  // movimiento de cámara.
+  useEffect(() => {
+    return () => {
+      if (programaticoTimeoutRef.current !== null) {
+        clearTimeout(programaticoTimeoutRef.current);
+      }
+    };
   }, []);
 
   // Matemática pura de encuadre (fitBounds / setCenter+zoom14) — no decide POR SÍ SOLA si debe
@@ -414,13 +470,17 @@ export default function MapaTILA({
   // headingChofer es opcional: cuando viene un valor válido, además de centrar también
   // orienta el mapa según el rumbo real — el camión (ícono fijo, sin rotación propia)
   // queda visualmente "hacia arriba" porque es el mapa el que gira, no el ícono.
+  // A propósito NO toca zoom ni tilt en cada tick: esos quedan estables durante el
+  // seguimiento (los fija restaurarCamaraNavegacion una única vez, al reactivarse) —
+  // así las actualizaciones de GPS no producen saltos de zoom/inclinación.
   const seguirChofer = useCallback((latChofer: number, lngChofer: number, headingChofer?: number | null) => {
     if (!siguiendoChoferRef.current) return;
     moverCamara(() => {
       mapRef.current!.setCenter({ lat: latChofer, lng: lngChofer });
-      if (mapRef.current!.getZoom() !== ZOOM_SEGUIMIENTO) mapRef.current!.setZoom(ZOOM_SEGUIMIENTO);
       if (headingChofer !== null && headingChofer !== undefined && !Number.isNaN(headingChofer)) {
-        mapRef.current!.setHeading(headingChofer);
+        const h = normalizarHeading(headingChofer);
+        mapRef.current!.setHeading(h);
+        ultimoHeadingNavegacionRef.current = h;
       }
     });
   }, [moverCamara]);
@@ -848,6 +908,16 @@ export default function MapaTILA({
     mapRef.current = mapa;
     if (!modoMultiChofer) actualizarMarcadorChofer(mapa);
 
+    // Restaurar heading/tilt UNA sola vez, imperativamente, sólo si esta instancia
+    // nace de un remount por cambio de tema (cambiarTema dejó un snapshot). No van
+    // dentro de `options` porque ese objeto se reconstruye en cada render (ver
+    // comentario junto a `opciones` más abajo) y `setOptions` los reaplicaría sin
+    // parar, pisando cualquier gesto manual o el heading real de marcha.
+    if (camaraSnapshotRef.current) {
+      mapa.setHeading(camaraSnapshotRef.current.heading);
+      mapa.setTilt(camaraSnapshotRef.current.tilt);
+    }
+
     // Solo en modoNavegacion (Viaje Activo) el usuario puede "tomar control" de la cámara.
     // Panel Chofer nunca pasa modoNavegacion=true, así que este bloque no le afecta.
     if (modoNavegacion) {
@@ -888,6 +958,14 @@ export default function MapaTILA({
     // El marcador del chofer SIEMPRE se actualiza — el seguimiento de posición nunca se pierde,
     // se desacopla únicamente el movimiento de la cámara.
     actualizarMarcadorChofer(mapRef.current);
+    // Historial de posiciones — respaldo para calcular un bearing en
+    // restaurarCamaraNavegacion cuando el heading del GPS no esté disponible.
+    // Se mantiene al día siempre, independientemente de si el seguimiento está
+    // activo o pausado (leer la posición no mueve la cámara).
+    historialPosicionRef.current = {
+      previa: historialPosicionRef.current.actual,
+      actual: { lat, lng },
+    };
     if (modoNavegacion) {
       seguirChofer(lat, lng, heading);
     } else {
@@ -906,11 +984,44 @@ export default function MapaTILA({
     encuadrarPuntosForzado(puntos);
   }, [lat, lng, paradasCoords, destinoCoords, encuadrarPuntosForzado, actualizarSeguimiento]);
 
-  const volverAMiUbicacion = useCallback(() => {
+  // Única función que reactiva el seguimiento (botón "Mi ubicación"). A diferencia
+  // de seguirChofer (que sólo actualiza center/heading tick a tick mientras el
+  // seguimiento YA está activo), acá se restablece la cámara de navegación completa
+  // de una sola vez — descarta el zoom/tilt/orientación que haya dejado la
+  // exploración manual, en una única ventana de moverCamara().
+  //
+  // Prioridad del heading (nunca se fuerza 0 por defecto):
+  //   1) heading GPS real y válido;
+  //   2) bearing calculado entre las dos últimas posiciones conocidas, sólo si el
+  //      chofer se movió ≥3m entre ellas (evita ruido de GPS estacionario);
+  //   3) último heading de navegación que se haya aplicado alguna vez;
+  //   4) si no hay ninguno de los anteriores, no se toca el heading de cámara.
+  const restaurarCamaraNavegacion = useCallback(() => {
     if (!lat || !lng) return;
     actualizarSeguimiento(true);
-    seguirChofer(lat, lng, heading);
-  }, [lat, lng, heading, seguirChofer, actualizarSeguimiento]);
+
+    let headingFinal: number | null = null;
+    if (heading !== null && heading !== undefined && !Number.isNaN(heading)) {
+      headingFinal = normalizarHeading(heading);
+    } else {
+      const { previa, actual } = historialPosicionRef.current;
+      if (previa && actual && distanciaMetros(previa, actual) >= 3) {
+        headingFinal = calcularBearing(previa, actual);
+      } else if (ultimoHeadingNavegacionRef.current !== null) {
+        headingFinal = ultimoHeadingNavegacionRef.current;
+      }
+    }
+
+    moverCamara(() => {
+      mapRef.current!.setCenter({ lat, lng });
+      mapRef.current!.setZoom(ZOOM_NAVEGACION);
+      mapRef.current!.setTilt(TILT_NAVEGACION);
+      if (headingFinal !== null) {
+        mapRef.current!.setHeading(headingFinal);
+        ultimoHeadingNavegacionRef.current = headingFinal;
+      }
+    });
+  }, [lat, lng, heading, moverCamara, actualizarSeguimiento]);
 
   // ─── Fallbacks de carga ───────────────────────────────────────────────────
   if (loadError) return (
@@ -932,59 +1043,63 @@ export default function MapaTILA({
     tema === "noche" ? google.maps.ColorScheme.DARK :
     google.maps.ColorScheme.FOLLOW_SYSTEM;
 
+  // Memoizado: @react-google-maps/api decide si llama a map.setOptions(...) comparando
+  // la REFERENCIA del objeto `options` contra la del render anterior (ver
+  // applyUpdaterToNextProps en su código fuente). Un objeto literal inline sería una
+  // referencia nueva en cada render — y como lat/lng/heading cambian en cada tick de
+  // GPS, eso disparaba setOptions() constantemente. Con useMemo, la referencia sólo
+  // cambia cuando cambia modoNavegacion o colorSchemeActual (las únicas dependencias
+  // reales), así que setOptions() deja de ejecutarse en cada render. heading/tilt NO
+  // van acá — ver el comentario en onMapLoad de por qué se aplican ahí en cambio.
+  const opciones = useMemo<google.maps.MapOptions>(() => ({
+    disableDefaultUI: true,
+    // Redundante con el pinch-to-zoom (gestureHandling "greedy") en la vista de
+    // navegación a pantalla completa — igual que Google Maps/Waze/Uber Driver no
+    // muestran botones +/- durante la conducción. Se mantiene en las vistas de
+    // sólo lectura (panel-cliente/panel-chofer), donde sí es una ayuda útil.
+    zoomControl: !modoNavegacion,
+    streetViewControl: false,
+    mapTypeControl: false,
+    fullscreenControl: false,
+    // El control de rotación propio de Google quedaría redundante con nuestro
+    // propio botón "Mi ubicación" (que ya centra + reorienta) — se apaga en
+    // todos los modos; en los modos sin tiltInteractionEnabled ni aparecería.
+    rotateControl: false,
+    // Sin utilidad en una app táctil dentro de un WebView — quita el enlace
+    // "Keyboard shortcuts" de la fila de atribución.
+    keyboardShortcuts: false,
+    // Evita que tocar un ícono de comercio/POI ajeno abra la tarjeta info nativa
+    // de Google en medio de la conducción; no afecta a los paneles de sólo lectura.
+    clickableIcons: !modoNavegacion,
+    // Mapa vectorial (mapId de Google Cloud) — el estilo ("TILA Vector Base")
+    // vive en Cloud Console, ya no en un array `styles` local: con mapId
+    // presente, Google ignora `styles` por completo.
+    mapId: process.env.NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID,
+    colorScheme: colorSchemeActual,
+    // Inclinación/rotación por gesto sólo en Viaje Activo — en las vistas de
+    // sólo lectura (panel-cliente/panel-chofer) modoNavegacion es false y el
+    // mapa queda plano, sin necesidad de ninguna regla de estilo adicional.
+    tiltInteractionEnabled: modoNavegacion,
+    headingInteractionEnabled: modoNavegacion,
+    // Arrastre/zoom libres, sin el modo cooperativo (que exigiría dos dedos
+    // incluso para arrastrar) en esta vista de mapa a pantalla completa.
+    gestureHandling: "greedy",
+  }), [modoNavegacion, colorSchemeActual]);
+
   return (
     <div style={{ width: "100%", position: "relative" }}>
       <GoogleMap
         // key={tema}: única forma oficial de aplicar un colorScheme nuevo (ver el
         // comentario largo junto a cambiarTema) — al cambiar, React desmonta esta
-        // instancia y monta una nueva. center/zoom/heading/tilt usan el snapshot
-        // capturado justo antes del remount para no perder la posición actual;
-        // en el primer montaje (sin snapshot todavía) caen a centroInicial/zoomInicial
-        // como siempre.
+        // instancia y monta una nueva. center/zoom usan el snapshot capturado justo
+        // antes del remount para no perder la posición actual; heading/tilt se
+        // restauran aparte, en onMapLoad (ver ahí el porqué). En el primer montaje
+        // (sin snapshot todavía) center/zoom caen a centroInicial/zoomInicial.
         key={tema}
         mapContainerStyle={contenedorEstilo}
         center={camaraSnapshotRef.current?.center ?? centroInicial}
         zoom={camaraSnapshotRef.current?.zoom ?? zoomInicial}
-        options={{
-          disableDefaultUI: true,
-          // Redundante con el pinch-to-zoom (gestureHandling "greedy") en la vista de
-          // navegación a pantalla completa — igual que Google Maps/Waze/Uber Driver no
-          // muestran botones +/- durante la conducción. Se mantiene en las vistas de
-          // sólo lectura (panel-cliente/panel-chofer), donde sí es una ayuda útil.
-          zoomControl: !modoNavegacion,
-          streetViewControl: false,
-          mapTypeControl: false,
-          fullscreenControl: false,
-          // El control de rotación propio de Google quedaría redundante con nuestro
-          // propio botón "Mi ubicación" (que ya centra + reorienta) — se apaga en
-          // todos los modos; en los modos sin tiltInteractionEnabled ni aparecería.
-          rotateControl: false,
-          // Sin utilidad en una app táctil dentro de un WebView — quita el enlace
-          // "Keyboard shortcuts" de la fila de atribución.
-          keyboardShortcuts: false,
-          // Evita que tocar un ícono de comercio/POI ajeno abra la tarjeta info nativa
-          // de Google en medio de la conducción; no afecta a los paneles de sólo lectura.
-          clickableIcons: !modoNavegacion,
-          // Mapa vectorial (mapId de Google Cloud) — el estilo ("TILA Vector Base")
-          // vive en Cloud Console, ya no en un array `styles` local: con mapId
-          // presente, Google ignora `styles` por completo.
-          mapId: process.env.NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID,
-          colorScheme: colorSchemeActual,
-          // Orientación inicial de ESTA instancia — sólo tiene un valor real cuando
-          // venimos de un remount por cambio de tema (ver cambiarTema); en el primer
-          // montaje quedan undefined y Google usa sus propios valores por defecto
-          // (norte arriba, plano), igual que siempre.
-          heading: camaraSnapshotRef.current?.heading,
-          tilt: camaraSnapshotRef.current?.tilt,
-          // Inclinación/rotación por gesto sólo en Viaje Activo — en las vistas de
-          // sólo lectura (panel-cliente/panel-chofer) modoNavegacion es false y el
-          // mapa queda plano, sin necesidad de ninguna regla de estilo adicional.
-          tiltInteractionEnabled: modoNavegacion,
-          headingInteractionEnabled: modoNavegacion,
-          // Arrastre/zoom libres, sin el modo cooperativo (que exigiría dos dedos
-          // incluso para arrastrar) en esta vista de mapa a pantalla completa.
-          gestureHandling: "greedy",
-        }}
+        options={opciones}
         onLoad={modoMultiChofer ? onMapLoadMulti : onMapLoad}
       >
         {/* Multi-chofer admin */}
@@ -1085,7 +1200,7 @@ export default function MapaTILA({
           </button>
           <button
             type="button"
-            onClick={volverAMiUbicacion}
+            onClick={restaurarCamaraNavegacion}
             title={siguiendoActivo ? "Siguiendo tu ubicación" : "Volver a mi ubicación"}
             aria-label={siguiendoActivo ? "Siguiendo tu ubicación — tocá para recentrar" : "Volver a mi ubicación"}
             aria-pressed={siguiendoActivo}
@@ -1130,3 +1245,18 @@ export default function MapaTILA({
     </div>
   );
 }
+
+// ─── Pendiente para la próxima iteración de cámara de navegación ───────────────
+// Esta corrección deja center/zoom/heading/tilt coordinados y estables (sin pisar
+// gestos manuales), pero todavía NO implementa:
+//   - vehículo en el tercio inferior de la pantalla (requiere desplazar el centro
+//     visual sin falsear la coordenada GPS real — ver map.getProjection());
+//   - centro virtual adelantado sobre el bearing actual;
+//   - look-ahead mínimo de ~100m de ruta visible por delante;
+//   - zoom adaptativo según velocidad/contexto (ciudad/ruta/autopista);
+//   - traza principal más firme y visible, con borde/contorno de contraste (hoy
+//     DirectionsRenderer y el Polyline de respaldo usan una única línea
+//     strokeColor="#facc15" sin casing oscuro — puede perder contraste en mapa
+//     claro contra calles/fondos claros);
+//   - transición suave de cámara entre posiciones (hoy los saltos son instantáneos:
+//     setCenter/setZoom/setHeading/setTilt aplican el valor final de inmediato).
