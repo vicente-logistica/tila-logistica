@@ -155,31 +155,30 @@ const construirIconoParada = (
 };
 
 // Camión con semirremolque visto desde arriba — sin letra, no reemplaza ningún punto
-// del recorrido, sólo indica la posición real del chofer. Rediseñado para distinguirse
-// claramente del trazo amarillo de la ruta: cuerpo blanco/gris (no amarillo), borde
-// blanco, sombra propia, cabina y caja diferenciadas por color y gradiente (sensación
-// de volumen sin 3D real), franja y techo amarillo como acento de marca TILA, luces
-// traseras. Mismo viewBox, scaledSize y anchor que antes — no cambia el tamaño de
+// del recorrido, sólo indica la posición real del chofer. Segundo rediseño: cabina
+// amarilla TILA (identidad de marca) + caja blanca (más grande, así el amarillo no
+// domina la silueta y no se confunde con el trazo de ruta), contorno negro fino,
+// parabrisas azul oscuro, luces traseras rojas, sombra más marcada que la versión
+// anterior. Mismo viewBox, scaledSize y anchor que antes — no cambia el tamaño de
 // referencia usado por el resto del código (posicionamiento, hit-area).
 const construirIconoChofer = (): google.maps.Icon => {
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="36" height="56" viewBox="0 0 36 56">
     <defs>
-      <linearGradient id="tilaCajaGrad" x1="0" y1="0" x2="0" y2="1">
-        <stop offset="0" stop-color="#fafafa"/>
-        <stop offset="1" stop-color="#c7c7cf"/>
-      </linearGradient>
-      <linearGradient id="tilaCabinaGrad" x1="0" y1="0" x2="0" y2="1">
+      <linearGradient id="tilaCajaGrad2" x1="0" y1="0" x2="0" y2="1">
         <stop offset="0" stop-color="#ffffff"/>
-        <stop offset="1" stop-color="#dcdce3"/>
+        <stop offset="1" stop-color="#e4e4e7"/>
+      </linearGradient>
+      <linearGradient id="tilaCabinaGrad2" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#fde047"/>
+        <stop offset="1" stop-color="#eab308"/>
       </linearGradient>
     </defs>
 
-    <ellipse cx="19" cy="30" rx="14" ry="22" fill="#000000" opacity="0.28"/>
+    <ellipse cx="19.5" cy="31" rx="15" ry="23" fill="#000000" opacity="0.38"/>
 
-    <rect x="4" y="21" width="28" height="32" rx="3" fill="url(#tilaCajaGrad)" stroke="#ffffff" stroke-width="2.5"/>
-    <rect x="4" y="33" width="28" height="5.5" fill="#facc15"/>
-    <rect x="4" y="33" width="28" height="1.2" fill="#111827" opacity="0.3"/>
-    <rect x="4" y="37.3" width="28" height="1.2" fill="#111827" opacity="0.3"/>
+    <rect x="4" y="21" width="28" height="32" rx="3" fill="url(#tilaCajaGrad2)" stroke="#111827" stroke-width="1.5"/>
+    <rect x="4" y="31" width="28" height="1" fill="#111827" opacity="0.12"/>
+    <rect x="4" y="41" width="28" height="1" fill="#111827" opacity="0.12"/>
 
     <rect x="1.5" y="46" width="4.5" height="7" rx="1.2" fill="#18181b"/>
     <rect x="30" y="46" width="4.5" height="7" rx="1.2" fill="#18181b"/>
@@ -187,13 +186,13 @@ const construirIconoChofer = (): google.maps.Icon => {
     <rect x="5.5" y="49.5" width="3.5" height="3" rx="1" fill="#ef4444"/>
     <rect x="27" y="49.5" width="3.5" height="3" rx="1" fill="#ef4444"/>
 
-    <rect x="15" y="18.5" width="6" height="4" fill="#3f3f46"/>
+    <rect x="15" y="18.5" width="6" height="4" fill="#111827"/>
 
-    <rect x="7" y="1.5" width="22" height="19" rx="3.5" fill="url(#tilaCabinaGrad)" stroke="#ffffff" stroke-width="2.5"/>
-    <rect x="10" y="4.5" width="16" height="6.5" rx="1.5" fill="#1e293b" opacity="0.8"/>
-    <rect x="4.5" y="7" width="2.5" height="4" rx="1" fill="#18181b"/>
-    <rect x="29" y="7" width="2.5" height="4" rx="1" fill="#18181b"/>
-    <rect x="12" y="2.5" width="12" height="2.5" rx="1.25" fill="#facc15"/>
+    <rect x="7" y="1.5" width="22" height="19" rx="3.5" fill="url(#tilaCabinaGrad2)" stroke="#111827" stroke-width="1.5"/>
+    <rect x="10" y="4.5" width="16" height="6.5" rx="1.5" fill="#1e3a5f"/>
+    <rect x="11" y="5.2" width="6" height="2" rx="1" fill="#ffffff" opacity="0.25"/>
+    <rect x="4.5" y="7" width="2.5" height="4" rx="1" fill="#111827"/>
+    <rect x="29" y="7" width="2.5" height="4" rx="1" fill="#111827"/>
   </svg>`;
   const url = `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
   return { url, scaledSize: new google.maps.Size(30, 46), anchor: new google.maps.Point(15, 23) };
@@ -262,10 +261,15 @@ export default function MapaTILA({
 
   // Tema del mapa — sólo estado de sesión, sin persistencia (ver comentario junto a
   // TemaMapa más arriba). Empieza en "automatico" en cada montaje del componente.
+  // cambiarTema (que necesita leer centroInicial/zoomInicial) se define más abajo,
+  // junto a esas declaraciones — ver el comentario largo ahí.
   const [tema, setTema] = useState<TemaMapa>("automatico");
-  const cambiarTema = useCallback(() => {
-    setTema(t => SIGUIENTE_TEMA[t]);
-  }, []);
+  const camaraSnapshotRef = useRef<{
+    center: google.maps.LatLngLiteral;
+    zoom: number;
+    heading: number;
+    tilt: number;
+  } | null>(null);
 
   const [origenCoords,  setOrigenCoords]  = useState<google.maps.LatLngLiteral | null>(null);
   const [destinoCoords, setDestinoCoords] = useState<google.maps.LatLngLiteral | null>(null);
@@ -315,6 +319,45 @@ export default function MapaTILA({
     if (lat && lng) return 14;
     return 10;
   });
+
+  // colorScheme es de sólo-inicialización en la Maps JS API ("This option can only
+  // be set when the map is initialized" — @types/google.maps, MapOptions.colorScheme).
+  // Cambiar `options.colorScheme` en un render posterior NO hace nada: Google lo
+  // ignora en instancias ya construidas. La única forma oficial de aplicar un tema
+  // nuevo es destruir y reconstruir la instancia — acá vía `key={tema}` en
+  // <GoogleMap>, que fuerza a React a desmontar/montar el mapa de cero.
+  //
+  // camaraSnapshotRef guarda el centro/zoom/heading/tilt EXACTOS de la instancia
+  // vieja justo antes de pedir el remount, para que la instancia nueva nazca ya
+  // ubicada ahí — sin esto, el remount volvería a centroInicial/zoomInicial (la
+  // posición de arranque del viaje) y se perdería todo el seguimiento acumulado.
+  //
+  // Lo que NO se toca acá, a propósito: siguiendoChoferRef/siguiendoActivo,
+  // encuadreInicialHechoRef y programaticoRef viven en MapaTILA (el padre), no en
+  // <GoogleMap> (el hijo que remonta) — sobreviven el remount sin ningún cambio,
+  // así que "seguimiento activo/pausado" y "no repetir el encuadre inicial" quedan
+  // exactamente como estaban, sin ninguna acción extra de nuestra parte.
+  const cambiarTema = useCallback(() => {
+    if (mapRef.current) {
+      const centro = mapRef.current.getCenter();
+      camaraSnapshotRef.current = {
+        center: centro ? { lat: centro.lat(), lng: centro.lng() } : centroInicial,
+        zoom:    mapRef.current.getZoom()    ?? zoomInicial,
+        heading: mapRef.current.getHeading() ?? 0,
+        tilt:    mapRef.current.getTilt()    ?? 0,
+      };
+    }
+    // Únicamente las refs necesarias para que el mapa y el marcador del chofer se
+    // recreen correctamente contra la instancia nueva — mapRef.current en null hace
+    // que cualquier intento de mover cámara durante la breve ventana del remount
+    // no-opee (moverCamara ya guarda `if (!mapRef.current) return;`), en vez de
+    // operar sobre una instancia destruida; choferMarkerRef.current en null hace
+    // que actualizarMarcadorChofer cree un marcador nuevo en vez de reusar uno
+    // atado al mapa viejo ya destruido.
+    mapRef.current = null;
+    choferMarkerRef.current = null;
+    setTema(t => SIGUIENTE_TEMA[t]);
+  }, [centroInicial, zoomInicial]);
 
   // ─── Único punto que puede tocar el mapa imperativamente ──────────────────
   const moverCamara = useCallback((mover: () => void) => {
@@ -886,9 +929,16 @@ export default function MapaTILA({
   return (
     <div style={{ width: "100%", position: "relative" }}>
       <GoogleMap
+        // key={tema}: única forma oficial de aplicar un colorScheme nuevo (ver el
+        // comentario largo junto a cambiarTema) — al cambiar, React desmonta esta
+        // instancia y monta una nueva. center/zoom/heading/tilt usan el snapshot
+        // capturado justo antes del remount para no perder la posición actual;
+        // en el primer montaje (sin snapshot todavía) caen a centroInicial/zoomInicial
+        // como siempre.
+        key={tema}
         mapContainerStyle={contenedorEstilo}
-        center={centroInicial}
-        zoom={zoomInicial}
+        center={camaraSnapshotRef.current?.center ?? centroInicial}
+        zoom={camaraSnapshotRef.current?.zoom ?? zoomInicial}
         options={{
           disableDefaultUI: true,
           // Redundante con el pinch-to-zoom (gestureHandling "greedy") en la vista de
@@ -914,6 +964,12 @@ export default function MapaTILA({
           // presente, Google ignora `styles` por completo.
           mapId: process.env.NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID,
           colorScheme: colorSchemeActual,
+          // Orientación inicial de ESTA instancia — sólo tiene un valor real cuando
+          // venimos de un remount por cambio de tema (ver cambiarTema); en el primer
+          // montaje quedan undefined y Google usa sus propios valores por defecto
+          // (norte arriba, plano), igual que siempre.
+          heading: camaraSnapshotRef.current?.heading,
+          tilt: camaraSnapshotRef.current?.tilt,
           // Inclinación/rotación por gesto sólo en Viaje Activo — en las vistas de
           // sólo lectura (panel-cliente/panel-chofer) modoNavegacion es false y el
           // mapa queda plano, sin necesidad de ninguna regla de estilo adicional.
