@@ -21,11 +21,25 @@ const LABELS = ["A", "B", "C", "D", "E", "F"];
 const ZOOM_NAVEGACION = 18;
 const TILT_NAVEGACION = 45;
 
-// Distancia mínima que debe moverse el chofer respecto del origen usado en el último
-// cálculo de ruta para considerar que hay un "desvío real y significativo" y volver a
-// llamar a Directions. Por debajo de este umbral, un tick de GPS mueve el marcador pero
-// nunca recalcula la ruta — evita llamadas innecesarias a Google Maps y parpadeo del trazo.
-const UMBRAL_RECALCULO_RUTA_METROS = 300;
+// ─── Suavizado de marcador/cámara (interpolación por requestAnimationFrame) ───
+// Ventana de animación por cada lectura GPS nueva: nunca más corta que el mínimo (para
+// que el movimiento se perciba fluido, no instantáneo) ni más larga que el máximo (para
+// no "quedarse atrás" si el GPS entrega fixes seguidos). Se ajusta dentro de ese rango
+// según el intervalo real medido entre el fix anterior y el actual — ver animarHaciaPosicion.
+const DURACION_ANIMACION_MIN_MS = 300;
+const DURACION_ANIMACION_MAX_MS = 500;
+
+// ─── Rerouting por desvío real de la ruta (no por distancia recorrida) ────────
+// Antes se recalculaba cada 300m recorridos desde el origen del último cálculo, sin
+// importar si el chofer seguía la ruta correctamente. Ahora se mide la distancia real
+// del punto GPS a la polyline vigente (rutaPolylineRef) y sólo se dispara un recálculo
+// si esa distancia supera el umbral durante varias lecturas seguidas (evita falsos
+// positivos por ruido de GPS) y respeta un cooldown mínimo entre recálculos (evita
+// spamear la API de Directions). Valores iniciales conservadores para zona urbana —
+// ajustar libremente tras probar en el teléfono, no son definitivos.
+const UMBRAL_DESVIO_RUTA_METROS    = 40;
+const LECTURAS_CONSECUTIVAS_DESVIO = 3;
+const COOLDOWN_RECALCULO_MS        = 12000;
 
 // Distancia geodésica simple (haversine) entre dos puntos, en metros.
 const distanciaMetros = (a: google.maps.LatLngLiteral, b: google.maps.LatLngLiteral): number => {
@@ -50,6 +64,52 @@ const calcularBearing = (a: google.maps.LatLngLiteral, b: google.maps.LatLngLite
   const y = Math.sin(dLng) * Math.cos(lat2);
   const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLng);
   return normalizarHeading((Math.atan2(y, x) * 180) / Math.PI);
+};
+
+// Un valor de heading GPS válido, o null (nunca NaN/undefined) — usado tanto por la
+// animación de cámara como por el punto de partida de cada tramo interpolado.
+const headingValido = (h: number | null | undefined): number | null =>
+  h !== null && h !== undefined && !Number.isNaN(h) ? h : null;
+
+// Interpolación angular por el camino más corto (0-359°) — evita que un giro real de,
+// por ejemplo, 350° a 10° (20° reales) se anime como un giro de 340° en sentido contrario,
+// que es lo que daría una interpolación lineal ingenua sobre los valores crudos.
+const interpolarHeading = (desde: number, hasta: number, t: number): number => {
+  const diferencia = ((hasta - desde + 540) % 360) - 180;
+  return normalizarHeading(desde + diferencia * t);
+};
+
+// Distancia (metros) de un punto al segmento a-b, proyectando sobre un plano local
+// equirectangular centrado en el segmento — precisión sobrada para las distancias cortas
+// (decenas/cientos de metros) que interesan para detectar desvío de ruta.
+const METROS_POR_GRADO_LAT = 111320;
+const distanciaPuntoASegmentoMetros = (
+  p: google.maps.LatLngLiteral,
+  a: google.maps.LatLngLiteral,
+  b: google.maps.LatLngLiteral
+): number => {
+  const metrosPorGradoLng = METROS_POR_GRADO_LAT * Math.cos((a.lat * Math.PI) / 180);
+  const px = (p.lng - a.lng) * metrosPorGradoLng, py = (p.lat - a.lat) * METROS_POR_GRADO_LAT;
+  const bx = (b.lng - a.lng) * metrosPorGradoLng, by = (b.lat - a.lat) * METROS_POR_GRADO_LAT;
+  const largoSegmentoCuadrado = bx * bx + by * by;
+  if (largoSegmentoCuadrado === 0) return Math.hypot(px, py);
+  const t = Math.max(0, Math.min(1, (px * bx + py * by) / largoSegmentoCuadrado));
+  return Math.hypot(px - t * bx, py - t * by);
+};
+
+// Distancia mínima de un punto a una polyline (mínimo entre la distancia a cada tramo).
+// null si la polyline todavía no tiene al menos 2 puntos (ninguna ruta calculada aún).
+const distanciaMinAPolyline = (
+  p: google.maps.LatLngLiteral,
+  puntos: google.maps.LatLngLiteral[]
+): number | null => {
+  if (puntos.length < 2) return null;
+  let minimo = Infinity;
+  for (let i = 0; i < puntos.length - 1; i++) {
+    const d = distanciaPuntoASegmentoMetros(p, puntos[i], puntos[i + 1]);
+    if (d < minimo) minimo = d;
+  }
+  return minimo;
 };
 
 export interface ParadaMapa {
@@ -285,6 +345,35 @@ export default function MapaTILA({
   // recurso del fallback de heading; nunca se fuerza 0 por defecto.
   const ultimoHeadingNavegacionRef = useRef<number | null>(null);
 
+  // ─── Animación de marcador/cámara (interpolación GPS) ──────────────────────
+  // Un único loop de requestAnimationFrame anima marcador y cámara juntos, desde la
+  // última posición VISUAL (no la última posición GPS cruda) hacia la nueva — así, si
+  // llega un fix nuevo a mitad de una animación, el siguiente tramo continúa desde
+  // donde el ojo lo ve, en vez de saltar hacia atrás. Ver animarHaciaPosicion/pasoAnimacion.
+  const animacionFrameRef       = useRef<number | null>(null);
+  const animacionInicioRef      = useRef<{ lat: number; lng: number; heading: number | null } | null>(null);
+  const animacionDestinoRef     = useRef<{ lat: number; lng: number; heading: number | null } | null>(null);
+  const animacionInicioTsRef    = useRef(0);
+  const animacionDuracionRef    = useRef(DURACION_ANIMACION_MAX_MS);
+  const posicionVisualActualRef = useRef<{ lat: number; lng: number; heading: number | null } | null>(null);
+  const ultimoTickTsRef         = useRef<number | null>(null);
+  // Ref-al-callback-más-reciente: permite que pasoAnimacion se re-programe a sí mismo
+  // (vía requestAnimationFrame) sin una auto-referencia directa a su propia const (evita
+  // el ciclo de declaración) y sin quedar nunca con una versión vieja del closure — mismo
+  // patrón ya usado por dispararCalculoNavRef más abajo.
+  const pasoAnimacionRef = useRef<() => void>(() => {});
+
+  // ─── Ruta vigente y protección de respuestas de Directions ─────────────────
+  // rutaPolylineRef: puntos de la ruta actualmente dibujada (overview_path de Directions,
+  // o los puntos del fallback si Directions falló) — es contra esto que se mide el desvío
+  // real del chofer (ver el efecto de recálculo multietapa más abajo).
+  // rutaRequestIdRef: se incrementa en cada llamada a calcularRuta; la respuesta de
+  // Directions sólo se aplica si su id sigue siendo el más reciente al llegar — una
+  // respuesta vieja que llega tarde (fuera de orden) se descarta en vez de pisar a una
+  // más nueva. Protege a los 4 call-sites de calcularRuta con un solo cambio.
+  const rutaPolylineRef = useRef<google.maps.LatLngLiteral[]>([]);
+  const rutaRequestIdRef = useRef(0);
+
   // Espejo en estado de siguiendoChoferRef — sólo para que el botón "Mi ubicación"
   // pueda pintarse distinto según el seguimiento esté activo o pausado. La lógica de
   // cámara sigue leyendo el ref (rápido, síncrono, sin depender del ciclo de render);
@@ -389,10 +478,16 @@ export default function MapaTILA({
     // que cualquier intento de mover cámara durante la breve ventana del remount
     // no-opee (moverCamara ya guarda `if (!mapRef.current) return;`), en vez de
     // operar sobre una instancia destruida; choferMarkerRef.current en null hace
-    // que actualizarMarcadorChofer cree un marcador nuevo en vez de reusar uno
+    // que asegurarMarcadorChofer cree un marcador nuevo en vez de reusar uno
     // atado al mapa viejo ya destruido.
     mapRef.current = null;
     choferMarkerRef.current = null;
+    // Cancela cualquier animación en vuelo: seguiría escribiendo sobre un marcador/mapa
+    // que está a punto de destruirse. onMapLoad reposiciona sin animar en el remount.
+    if (animacionFrameRef.current !== null) {
+      cancelAnimationFrame(animacionFrameRef.current);
+      animacionFrameRef.current = null;
+    }
     setTema(t => SIGUIENTE_TEMA[t]);
   }, [centroInicial, zoomInicial]);
 
@@ -418,13 +513,16 @@ export default function MapaTILA({
     }, 150);
   }, []);
 
-  // Limpieza del timeout pendiente al desmontar — evita setState/mutación de refs
-  // de un componente ya desmontado si el usuario navega justo después de un
-  // movimiento de cámara.
+  // Limpieza del timeout pendiente y del frame de animación al desmontar — evita
+  // setState/mutación de refs de un componente ya desmontado si el usuario navega
+  // justo después de un movimiento de cámara o a mitad de una animación de posición.
   useEffect(() => {
     return () => {
       if (programaticoTimeoutRef.current !== null) {
         clearTimeout(programaticoTimeoutRef.current);
+      }
+      if (animacionFrameRef.current !== null) {
+        cancelAnimationFrame(animacionFrameRef.current);
       }
     };
   }, []);
@@ -465,31 +563,90 @@ export default function MapaTILA({
     moverCamara(() => aplicarEncuadre(puntos));
   }, [moverCamara, aplicarEncuadre]);
 
-  // Seguimiento GPS del chofer en modoNavegacion — sólo mueve la cámara mientras
-  // siguiendoChoferRef sea true (arranca en false; lo activa el botón "Mi ubicación").
-  // headingChofer es opcional: cuando viene un valor válido, además de centrar también
-  // orienta el mapa según el rumbo real — el camión (ícono fijo, sin rotación propia)
-  // queda visualmente "hacia arriba" porque es el mapa el que gira, no el ícono.
-  // A propósito NO toca zoom ni tilt en cada tick: esos quedan estables durante el
-  // seguimiento (los fija restaurarCamaraNavegacion una única vez, al reactivarse) —
-  // así las actualizaciones de GPS no producen saltos de zoom/inclinación.
-  const seguirChofer = useCallback((latChofer: number, lngChofer: number, headingChofer?: number | null) => {
-    if (!siguiendoChoferRef.current) return;
-    moverCamara(() => {
-      mapRef.current!.setCenter({ lat: latChofer, lng: lngChofer });
-      if (headingChofer !== null && headingChofer !== undefined && !Number.isNaN(headingChofer)) {
-        const h = normalizarHeading(headingChofer);
-        mapRef.current!.setHeading(h);
-        ultimoHeadingNavegacionRef.current = h;
-      }
-    });
-  }, [moverCamara]);
+  // ─── Paso de animación (un solo loop de rAF para marcador + cámara) ───────
+  // Interpola linealmente lat/lng entre animacionInicioRef y animacionDestinoRef (a
+  // las distancias de dos fixes GPS consecutivos, decenas de metros, una interpolación
+  // lineal es indistinguible de una esférica) y el heading por el camino angular más
+  // corto. Cada frame: 1) actualiza el marcador siempre; 2) mueve la cámara sólo si
+  // corresponde (en modoNavegacion, sólo mientras siguiendoChoferRef sea true — en
+  // vistas de sólo lectura, siempre, igual que el comportamiento previo). A propósito
+  // NO toca zoom ni tilt acá: esos quedan estables durante el seguimiento (los fija
+  // restaurarCamaraNavegacion una única vez, al reactivarse).
+  const pasoAnimacion = useCallback(() => {
+    const inicio  = animacionInicioRef.current;
+    const destino = animacionDestinoRef.current;
+    if (!inicio || !destino || !mapRef.current) {
+      animacionFrameRef.current = null;
+      return;
+    }
+    const ahora = performance.now();
+    const t = Math.min(1, (ahora - animacionInicioTsRef.current) / animacionDuracionRef.current);
 
-  // Seguimiento continuo en vistas de sólo lectura (panel-cliente/admin, preview de panel-chofer)
-  // — comportamiento sin cambios respecto al actual: el punto del chofer siempre se sigue.
-  const seguirEnVistaLectura = useCallback((latChofer: number, lngChofer: number) => {
-    moverCamara(() => { mapRef.current!.panTo({ lat: latChofer, lng: lngChofer }); });
-  }, [moverCamara]);
+    const latActual = inicio.lat + (destino.lat - inicio.lat) * t;
+    const lngActual = inicio.lng + (destino.lng - inicio.lng) * t;
+    let headingActual: number | null;
+    if (destino.heading === null) {
+      headingActual = inicio.heading;
+    } else if (inicio.heading === null) {
+      headingActual = destino.heading;
+    } else {
+      headingActual = interpolarHeading(inicio.heading, destino.heading, t);
+    }
+
+    posicionVisualActualRef.current = { lat: latActual, lng: lngActual, heading: headingActual };
+
+    if (choferMarkerRef.current) {
+      choferMarkerRef.current.setPosition({ lat: latActual, lng: lngActual });
+    }
+
+    if (modoNavegacion) {
+      if (siguiendoChoferRef.current) {
+        moverCamara(() => {
+          mapRef.current!.setCenter({ lat: latActual, lng: lngActual });
+          if (headingActual !== null) {
+            mapRef.current!.setHeading(headingActual);
+            ultimoHeadingNavegacionRef.current = headingActual;
+          }
+        });
+      }
+    } else {
+      moverCamara(() => { mapRef.current!.setCenter({ lat: latActual, lng: lngActual }); });
+    }
+
+    if (t < 1) {
+      animacionFrameRef.current = requestAnimationFrame(() => pasoAnimacionRef.current());
+    } else {
+      animacionFrameRef.current = null;
+    }
+  }, [modoNavegacion, moverCamara]);
+  useEffect(() => {
+    pasoAnimacionRef.current = pasoAnimacion;
+  }, [pasoAnimacion]);
+
+  // ─── Dispara una animación hacia una nueva posición GPS ───────────────────
+  // Reemplaza el salto instantáneo (setPosition/setCenter directo) por una interpolación
+  // de DURACION_ANIMACION_MIN_MS a MAX_MS, ajustada según el intervalo real entre este
+  // fix y el anterior. El punto de partida es la posición VISUAL actual (no la última
+  // posición GPS cruda), para que un fix nuevo a mitad de una animación continúe suave
+  // desde donde el ojo lo ve, en vez de saltar hacia atrás al último punto "oficial".
+  const animarHaciaPosicion = useCallback((latDestino: number, lngDestino: number, headingDestino: number | null) => {
+    const ahora = performance.now();
+    const intervalo = ultimoTickTsRef.current === null ? DURACION_ANIMACION_MAX_MS : ahora - ultimoTickTsRef.current;
+    const duracion = Math.min(DURACION_ANIMACION_MAX_MS, Math.max(DURACION_ANIMACION_MIN_MS, intervalo));
+    ultimoTickTsRef.current = ahora;
+
+    animacionInicioRef.current  = posicionVisualActualRef.current ?? { lat: latDestino, lng: lngDestino, heading: headingDestino };
+    animacionDestinoRef.current = { lat: latDestino, lng: lngDestino, heading: headingDestino };
+    animacionInicioTsRef.current = ahora;
+    animacionDuracionRef.current = duracion;
+
+    // Cancela cualquier animación anterior todavía en vuelo antes de arrancar la nueva —
+    // nunca dos loops de rAF compitiendo por el mismo marcador/cámara.
+    if (animacionFrameRef.current !== null) {
+      cancelAnimationFrame(animacionFrameRef.current);
+    }
+    animacionFrameRef.current = requestAnimationFrame(() => pasoAnimacionRef.current());
+  }, []);
 
   // ─── Aplicar polyline fallback con los puntos disponibles ─────────────────
   const aplicarPolylineFallback = useCallback((puntos: google.maps.LatLngLiteral[]) => {
@@ -565,6 +722,10 @@ export default function MapaTILA({
     if (!directionsServiceRef.current) {
       directionsServiceRef.current = new google.maps.DirectionsService();
     }
+    // Id de esta llamada — si al llegar la respuesta ya no es la más reciente (se disparó
+    // otro cálculo mientras ésta estaba en vuelo), se descarta en vez de aplicarse: evita
+    // que una respuesta lenta/fuera de orden pise a una más nueva.
+    const miRequestId = ++rutaRequestIdRef.current;
     setDiagnostico(d => ({ ...d, directionsStatus: "calculando..." }));
 
     directionsServiceRef.current.route(
@@ -576,14 +737,18 @@ export default function MapaTILA({
         travelMode: google.maps.TravelMode.DRIVING,
       },
       (result, status) => {
+        if (miRequestId !== rutaRequestIdRef.current) return; // respuesta obsoleta
         setDiagnostico(d => ({ ...d, directionsStatus: status }));
         if (status === "OK" && result) {
+          rutaPolylineRef.current = (result.routes?.[0]?.overview_path ?? []).map(p => ({ lat: p.lat(), lng: p.lng() }));
           setDirections(result);
           setPolylinePuntos([]); // limpiar fallback si Directions funcionó
           encuadrarDesdeRuta(result);
           if (onSuccess) onSuccess(result);
         } else {
-          // FALLBACK: dibujar Polyline simple con los puntos que tenemos
+          // FALLBACK: dibujar Polyline simple con los puntos que tenemos — también sirve
+          // como polyline de referencia para medir desvío mientras no haya Directions real.
+          rutaPolylineRef.current = fallbackPuntos;
           aplicarPolylineFallback(fallbackPuntos);
         }
         if (onSettled) onSettled();
@@ -792,13 +957,11 @@ export default function MapaTILA({
   // porque ahí no hay un chofer en viaje), acá el origen SIEMPRE es la posición real
   // del chofer, y el destino/waypoints salen únicamente de las paradas todavía NO
   // completadas, respetando su orden real. Recalcula cuando: cambia el conjunto de
-  // paradas pendientes (se completó una), llega el primer GPS, o el chofer recorrió
-  // más de UMBRAL_RECALCULO_RUTA_METROS desde el origen del último cálculo — esto
-  // último es distancia recorrida, no detección de desvío: se repite aunque el
-  // chofer esté siguiendo la ruta correctamente. Nunca en cada tick mínimo de GPS.
+  // paradas pendientes (se completó una), llega el primer GPS, o el chofer se desvió
+  // realmente de la ruta vigente — nunca por sólo haber recorrido distancia mientras
+  // sigue sobre la ruta correcta, y nunca por una sola lectura ruidosa (ver más abajo).
   const paradasPendientesKeyRef  = useRef<string | null>(null);
   const primerGpsMultietapaRef   = useRef(false);
-  const origenUltimoCalculoRef   = useRef<google.maps.LatLngLiteral | null>(null);
 
   // Protección contra cálculos simultáneos: mientras calculandoRutaNavRef es true,
   // cualquier disparador nuevo sólo marca recalculoPendienteNavRef en vez de lanzar
@@ -807,7 +970,8 @@ export default function MapaTILA({
   // dispara inmediatamente un nuevo cálculo con la posición/paradas MÁS RECIENTES
   // conocidas (ultimoLatLngConocidoRef/ultimasParadasConocidasRef, actualizadas en
   // cada corrida del efecto) — así ningún disparador se pierde y nunca hay dos
-  // llamadas en vuelo al mismo tiempo.
+  // llamadas en vuelo al mismo tiempo. (La protección contra respuestas fuera de
+  // orden es aparte, por requestId, dentro de calcularRuta — ver rutaRequestIdRef.)
   const calculandoRutaNavRef       = useRef(false);
   const recalculoPendienteNavRef   = useRef(false);
   const ultimoLatLngConocidoRef    = useRef<google.maps.LatLngLiteral | null>(null);
@@ -817,6 +981,13 @@ export default function MapaTILA({
   // auto-referencia directa a la const (evita el ciclo de declaración) y de paso
   // nunca queda con una versión vieja del closure entre renders.
   const dispararCalculoNavRef = useRef<() => void>(() => {});
+
+  // Detección de desvío real: lecturas GPS consecutivas por encima de
+  // UMBRAL_DESVIO_RUTA_METROS respecto de rutaPolylineRef, más un cooldown mínimo
+  // entre recálculos disparados por desvío (cambioDeParadas/primerGps NO respetan
+  // este cooldown — son cambios legítimos de la ruta en sí, no "ruido").
+  const lecturasFueraDeRutaRef     = useRef(0);
+  const ultimoRecalculoDesvioTsRef = useRef(0);
 
   const dispararCalculoNav = useCallback(() => {
     if (calculandoRutaNavRef.current) {
@@ -830,7 +1001,6 @@ export default function MapaTILA({
 
     calculandoRutaNavRef.current    = true;
     paradasPendientesKeyRef.current = pendientes.map(p => p.direccion).join("|");
-    origenUltimoCalculoRef.current  = latLng;
 
     const destino   = pendientes[pendientes.length - 1].direccion;
     const waypoints = pendientes.slice(0, -1).map(p => ({ location: `${p.direccion}, Argentina`, stopover: true }));
@@ -862,13 +1032,28 @@ export default function MapaTILA({
     if (pendientes.length === 0) return; // no queda ningún tramo por recorrer
 
     const key = pendientes.map(p => p.direccion).join("|");
-    const cambioDeParadas    = paradasPendientesKeyRef.current !== key;
-    const primerGps          = !primerGpsMultietapaRef.current;
-    const origenPrevio       = origenUltimoCalculoRef.current;
-    const desvioSignificativo =
-      !!origenPrevio && distanciaMetros(origenPrevio, { lat, lng }) >= UMBRAL_RECALCULO_RUTA_METROS;
+    const cambioDeParadas = paradasPendientesKeyRef.current !== key;
+    const primerGps       = !primerGpsMultietapaRef.current;
 
-    if (!cambioDeParadas && !primerGps && !desvioSignificativo) return; // nada relevante cambió
+    // El desvío sólo se evalúa cuando no hay ya un motivo legítimo distinto para
+    // recalcular (cambio de paradas / primer GPS) — evita contar lecturas "fuera de
+    // ruta" contra una polyline que de todos modos está por reemplazarse.
+    let desvioConfirmado = false;
+    if (!cambioDeParadas && !primerGps) {
+      const distancia  = distanciaMinAPolyline({ lat, lng }, rutaPolylineRef.current);
+      const fueraDeRuta = distancia !== null && distancia >= UMBRAL_DESVIO_RUTA_METROS;
+      lecturasFueraDeRutaRef.current = fueraDeRuta ? lecturasFueraDeRutaRef.current + 1 : 0;
+      if (lecturasFueraDeRutaRef.current >= LECTURAS_CONSECUTIVAS_DESVIO) {
+        const ahora = Date.now();
+        if (ahora - ultimoRecalculoDesvioTsRef.current >= COOLDOWN_RECALCULO_MS) {
+          desvioConfirmado = true;
+          ultimoRecalculoDesvioTsRef.current = ahora;
+          lecturasFueraDeRutaRef.current = 0;
+        }
+      }
+    }
+
+    if (!cambioDeParadas && !primerGps && !desvioConfirmado) return; // nada relevante cambió
 
     primerGpsMultietapaRef.current = true;
     dispararCalculoNav();
@@ -891,8 +1076,10 @@ export default function MapaTILA({
   }, [modoNavegacion, modoMultiChofer, lat, lng, paradasCoords, destinoCoords, encuadrarPuntos]);
 
   // ─── Marcador chofer ──────────────────────────────────────────────────────
-  const actualizarMarcadorChofer = useCallback((mapa: google.maps.Map) => {
-    if (!lat || !lng || modoMultiChofer) return;
+  // Sólo crea el marcador si todavía no existe — ya NO fija su posición (eso lo hace
+  // exclusivamente pasoAnimacion, frame a frame). onMapLoad es la única excepción: ahí
+  // sí se posiciona una vez, sin animar, para el primer paint / cada remount de tema.
+  const asegurarMarcadorChofer = useCallback((mapa: google.maps.Map): google.maps.Marker => {
     if (!choferMarkerRef.current) {
       choferMarkerRef.current = new google.maps.Marker({
         map: mapa,
@@ -901,12 +1088,21 @@ export default function MapaTILA({
         zIndex: 10,
       });
     }
-    choferMarkerRef.current.setPosition({ lat, lng });
-  }, [lat, lng, modoMultiChofer]);
+    return choferMarkerRef.current;
+  }, []);
 
   const onMapLoad = useCallback((mapa: google.maps.Map) => {
     mapRef.current = mapa;
-    if (!modoMultiChofer) actualizarMarcadorChofer(mapa);
+    if (!modoMultiChofer) {
+      const marker = asegurarMarcadorChofer(mapa);
+      if (lat && lng) {
+        // Posicionamiento instantáneo, sin animar: es el primer paint del mapa (o un
+        // remount por cambio de tema) — no hay una posición visual previa desde la cual
+        // interpolar. pasoAnimacion recién anima a partir del próximo fix de GPS.
+        marker.setPosition({ lat, lng });
+        posicionVisualActualRef.current = { lat, lng, heading: headingValido(heading) };
+      }
+    }
 
     // Restaurar heading/tilt UNA sola vez, imperativamente, sólo si esta instancia
     // nace de un remount por cambio de tema (cambiarTema dejó un snapshot). No van
@@ -934,7 +1130,7 @@ export default function MapaTILA({
         if (!programaticoRef.current) actualizarSeguimiento(false);
       });
     }
-  }, [actualizarMarcadorChofer, modoMultiChofer, modoNavegacion, actualizarSeguimiento]);
+  }, [asegurarMarcadorChofer, lat, lng, heading, modoMultiChofer, modoNavegacion, actualizarSeguimiento]);
 
   const onMapLoadMulti = useCallback((mapa: google.maps.Map) => {
     mapRef.current = mapa;
@@ -955,23 +1151,18 @@ export default function MapaTILA({
 
   useEffect(() => {
     if (!mapRef.current || !lat || !lng || modoMultiChofer) return;
-    // El marcador del chofer SIEMPRE se actualiza — el seguimiento de posición nunca se pierde,
-    // se desacopla únicamente el movimiento de la cámara.
-    actualizarMarcadorChofer(mapRef.current);
     // Historial de posiciones — respaldo para calcular un bearing en
     // restaurarCamaraNavegacion cuando el heading del GPS no esté disponible.
-    // Se mantiene al día siempre, independientemente de si el seguimiento está
-    // activo o pausado (leer la posición no mueve la cámara).
+    // Se mantiene al día siempre, con la posición GPS cruda (no la interpolada),
+    // independientemente de si el seguimiento está activo o pausado.
     historialPosicionRef.current = {
       previa: historialPosicionRef.current.actual,
       actual: { lat, lng },
     };
-    if (modoNavegacion) {
-      seguirChofer(lat, lng, heading);
-    } else {
-      seguirEnVistaLectura(lat, lng);
-    }
-  }, [lat, lng, heading, actualizarMarcadorChofer, modoMultiChofer, modoNavegacion, seguirChofer, seguirEnVistaLectura]);
+    // El marcador y la cámara (si corresponde) se actualizan juntos, de forma suave,
+    // a través del único loop de animación — ya no hay un salto instantáneo acá.
+    animarHaciaPosicion(lat, lng, headingValido(heading));
+  }, [lat, lng, heading, modoMultiChofer, animarHaciaPosicion]);
 
   // ─── Botones de control manual de cámara (solo modoNavegacion) ────────────
   const verRecorridoCompleto = useCallback(() => {
@@ -1011,6 +1202,16 @@ export default function MapaTILA({
         headingFinal = ultimoHeadingNavegacionRef.current;
       }
     }
+
+    // Esta es una reposición instantánea y explícita del usuario — no una animación de
+    // GPS — así que cancela cualquier interpolación todavía en vuelo (si no, el próximo
+    // frame de pasoAnimacion pisaría este reseteo con un valor interpolado viejo) y deja
+    // la posición visual sincronizada para que la próxima animación GPS parta de acá.
+    if (animacionFrameRef.current !== null) {
+      cancelAnimationFrame(animacionFrameRef.current);
+      animacionFrameRef.current = null;
+    }
+    posicionVisualActualRef.current = { lat, lng, heading: headingFinal ?? posicionVisualActualRef.current?.heading ?? null };
 
     moverCamara(() => {
       mapRef.current!.setCenter({ lat, lng });
@@ -1080,6 +1281,39 @@ export default function MapaTILA({
     // incluso para arrastrar) en esta vista de mapa a pantalla completa.
     gestureHandling: "greedy",
   }), [modoNavegacion, colorSchemeActual]);
+
+  // ─── Traza de la ruta: doble capa (casing oscuro + línea amarilla firme) ──
+  // Mismo motivo que `opciones` arriba para memoizar: options nuevo en cada render
+  // dispara setOptions() en cada tick de GPS aunque los valores no cambien. Deps vacías
+  // porque los colores/anchos son constantes — nunca cambia la referencia.
+  // DirectionsRenderer no soporta un trazo de dos colores nativamente, así que se
+  // renderizan dos instancias con la misma `directions`/`path`: una más gruesa y oscura
+  // debajo (zIndex 1) y una más angosta y amarilla encima (zIndex 2) — sigue siendo UNA
+  // sola ruta/decisión de datos, sólo con dos trazos visuales para más contraste.
+  const rutaCasingOptions = useMemo<google.maps.PolylineOptions>(() => ({
+    strokeColor: "#18181b",
+    strokeWeight: 10,
+    strokeOpacity: 0.85,
+    zIndex: 1,
+  }), []);
+  const rutaPrincipalOptions = useMemo<google.maps.PolylineOptions>(() => ({
+    strokeColor: "#facc15",
+    strokeWeight: 6,
+    strokeOpacity: 1,
+    zIndex: 2,
+  }), []);
+  const directionsCasingOptions = useMemo<google.maps.DirectionsRendererOptions>(() => ({
+    suppressMarkers: true,
+    // Sin esto, la librería hace su propio fitBounds cada vez que cambia `directions`,
+    // moviendo la cámara por fuera de moverCamara()/siguiendoChoferRef.
+    preserveViewport: true,
+    polylineOptions: rutaCasingOptions,
+  }), [rutaCasingOptions]);
+  const directionsPrincipalOptions = useMemo<google.maps.DirectionsRendererOptions>(() => ({
+    suppressMarkers: true,
+    preserveViewport: true,
+    polylineOptions: rutaPrincipalOptions,
+  }), [rutaPrincipalOptions]);
 
   // ─── Fallbacks de carga ───────────────────────────────────────────────────
   if (loadError) return (
@@ -1162,32 +1396,30 @@ export default function MapaTILA({
           />
         )}
 
-        {/* Ruta Directions (principal) */}
+        {/* Ruta Directions (principal) — doble capa: casing oscuro debajo, línea
+            amarilla firme encima. Misma `directions` en ambas instancias: sigue siendo
+            una sola ruta/decisión de datos, sólo dos trazos visuales por contraste. */}
         {!modoMultiChofer && directions && (
-          <DirectionsRenderer
-            key={`dir-${directions.request?.origin?.toString()}`}
-            directions={directions}
-            options={{
-              suppressMarkers: true,
-              // Sin esto, la librería hace su propio fitBounds cada vez que cambia `directions`,
-              // moviendo la cámara por fuera de moverCamara()/siguiendoChoferRef.
-              preserveViewport: true,
-              polylineOptions: { strokeColor: "#facc15", strokeWeight: 5, strokeOpacity: 0.9 },
-            }}
-          />
+          <>
+            <DirectionsRenderer
+              key={`dir-casing-${directions.request?.origin?.toString()}`}
+              directions={directions}
+              options={directionsCasingOptions}
+            />
+            <DirectionsRenderer
+              key={`dir-principal-${directions.request?.origin?.toString()}`}
+              directions={directions}
+              options={directionsPrincipalOptions}
+            />
+          </>
         )}
 
-        {/* Polyline fallback — siempre dibuja si Directions falla */}
+        {/* Polyline fallback — siempre dibuja si Directions falla — misma doble capa */}
         {!modoMultiChofer && !directions && polylinePuntos.length >= 2 && (
-          <Polyline
-            path={polylinePuntos}
-            options={{
-              strokeColor: "#facc15",
-              strokeWeight: 4,
-              strokeOpacity: 0.8,
-              geodesic: true,
-            }}
-          />
+          <>
+            <Polyline path={polylinePuntos} options={rutaCasingOptions} />
+            <Polyline path={polylinePuntos} options={rutaPrincipalOptions} />
+          </>
         )}
       </GoogleMap>
 
@@ -1255,16 +1487,15 @@ export default function MapaTILA({
 }
 
 // ─── Pendiente para la próxima iteración de cámara de navegación ───────────────
-// Esta corrección deja center/zoom/heading/tilt coordinados y estables (sin pisar
-// gestos manuales), pero todavía NO implementa:
+// Esta corrección agrega interpolación de marcador/cámara (pasoAnimacion), rerouting
+// por desvío real contra la polyline vigente (en vez de distancia recorrida) y traza de
+// doble capa. Zoom y tilt siguen sin animar (siguen fijos entre ticks, sólo los toca
+// restaurarCamaraNavegacion una vez al reactivar el seguimiento) — a propósito, no
+// pedido en esta etapa. Todavía NO implementa (deliberadamente fuera de esta etapa):
 //   - vehículo en el tercio inferior de la pantalla (requiere desplazar el centro
 //     visual sin falsear la coordenada GPS real — ver map.getProjection());
-//   - centro virtual adelantado sobre el bearing actual;
+//   - centro virtual adelantado sobre el bearing actual (look-ahead);
 //   - look-ahead mínimo de ~100m de ruta visible por delante;
 //   - zoom adaptativo según velocidad/contexto (ciudad/ruta/autopista);
-//   - traza principal más firme y visible, con borde/contorno de contraste (hoy
-//     DirectionsRenderer y el Polyline de respaldo usan una única línea
-//     strokeColor="#facc15" sin casing oscuro — puede perder contraste en mapa
-//     claro contra calles/fondos claros);
-//   - transición suave de cámara entre posiciones (hoy los saltos son instantáneos:
-//     setCenter/setZoom/setHeading/setTilt aplican el valor final de inmediato).
+//   - navegación por voz / instrucciones giro a giro;
+//   - cambios de POI (eso vive en Google Cloud Console, no en este archivo).
