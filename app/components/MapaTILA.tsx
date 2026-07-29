@@ -71,6 +71,23 @@ const calcularBearing = (a: google.maps.LatLngLiteral, b: google.maps.LatLngLite
 const headingValido = (h: number | null | undefined): number | null =>
   h !== null && h !== undefined && !Number.isNaN(h) ? h : null;
 
+// ─── Resolución del tema "Automático" ──────────────────────────────────────
+// google.maps.ColorScheme.FOLLOW_SYSTEM (lo que se usaba antes) delega la decisión
+// a Google/el WebView — y en el WebView de Capacitor no hay garantía de que
+// `prefers-color-scheme` refleje el tema real del sistema operativo, lo que hacía que
+// "Automático" terminara comportándose siempre como "Oscuro". Se resuelve explícitamente
+// por HORARIO LOCAL únicamente — decisión explícita: no se usa la preferencia del SO
+// para esto, porque un dispositivo con "modo oscuro" del sistema activado de forma
+// permanente (algo muy común) haría que "Automático" coincidiera con "Noche" a toda
+// hora, de día también. HORA_INICIO_NOCHE/HORA_FIN_NOCHE son las únicas dos constantes
+// a ajustar si el corte día/noche necesita cambiar.
+const HORA_INICIO_NOCHE = 19; // 19:00
+const HORA_FIN_NOCHE    = 6;  // 06:00
+const resolverTemaAutomatico = (): "dia" | "noche" => {
+  const hora = new Date().getHours();
+  return hora >= HORA_INICIO_NOCHE || hora < HORA_FIN_NOCHE ? "noche" : "dia";
+};
+
 // Interpolación angular por el camino más corto (0-359°) — evita que un giro real de,
 // por ejemplo, 350° a 10° (20° reales) se anime como un giro de 340° en sentido contrario,
 // que es lo que daría una interpolación lineal ingenua sobre los valores crudos.
@@ -110,6 +127,78 @@ const distanciaMinAPolyline = (
     if (d < minimo) minimo = d;
   }
   return minimo;
+};
+
+// ─── Recorte visual de la traza (SOLO representación — rutaPolylineRef sigue intacta
+// para rerouting/maniobras/llegada, ver el efecto que usa esto más abajo) ──────────
+// Distancia detrás del vehículo que se mantiene visible, para dar continuidad — la
+// traza no debe cortar exactamente debajo del ícono del camión.
+const MARGEN_RUTA_DETRAS_METROS = 20;
+
+// Proyección de un punto sobre el segmento a-b: distancia y el punto proyectado (no
+// sólo la distancia, a diferencia de distanciaPuntoASegmentoMetros de arriba — se
+// necesita el punto para poder recortar la polyline ahí). Función separada a propósito:
+// no se reutiliza ni se modifica distanciaPuntoASegmentoMetros, que usa el rerouting real.
+const proyeccionEnSegmento = (
+  p: google.maps.LatLngLiteral,
+  a: google.maps.LatLngLiteral,
+  b: google.maps.LatLngLiteral
+): { distancia: number; punto: google.maps.LatLngLiteral } => {
+  const metrosPorGradoLng = METROS_POR_GRADO_LAT * Math.cos((a.lat * Math.PI) / 180);
+  const px = (p.lng - a.lng) * metrosPorGradoLng, py = (p.lat - a.lat) * METROS_POR_GRADO_LAT;
+  const bx = (b.lng - a.lng) * metrosPorGradoLng, by = (b.lat - a.lat) * METROS_POR_GRADO_LAT;
+  const largoCuadrado = bx * bx + by * by;
+  const t = largoCuadrado === 0 ? 0 : Math.max(0, Math.min(1, (px * bx + py * by) / largoCuadrado));
+  const punto = { lat: a.lat + (b.lat - a.lat) * t, lng: a.lng + (b.lng - a.lng) * t };
+  const distancia = Math.hypot(px - t * bx, py - t * by);
+  return { distancia, punto };
+};
+
+// Recorta `polyline` para mostrar sólo desde cerca del vehículo hasta el final, con un
+// margen de continuidad detrás. `indiceMinimo` es la clave de la monotonía: la búsqueda
+// del punto más cercano nunca mira tramos anteriores a él, así que el arranque visible
+// nunca "salta" hacia atrás por una lectura de GPS momentáneamente imprecisa — sólo
+// puede avanzar o quedarse, nunca retroceder, mientras sea la MISMA ruta (ver el efecto
+// de más abajo, que reinicia indiceMinimo a 0 cuando rutaPolylineRef cambia de verdad).
+const recortarRutaDesdeVehiculo = (
+  polyline: google.maps.LatLngLiteral[],
+  posicion: google.maps.LatLngLiteral,
+  margenMetros: number,
+  indiceMinimo: number
+): { puntos: google.maps.LatLngLiteral[]; indice: number } => {
+  if (polyline.length < 2) return { puntos: polyline, indice: 0 };
+  const desde = Math.min(Math.max(indiceMinimo, 0), polyline.length - 2);
+  let mejorIndice = desde, mejorDistancia = Infinity, mejorPunto = polyline[desde];
+  for (let i = desde; i < polyline.length - 1; i++) {
+    const { distancia, punto } = proyeccionEnSegmento(posicion, polyline[i], polyline[i + 1]);
+    if (distancia < mejorDistancia) {
+      mejorDistancia = distancia; mejorIndice = i; mejorPunto = punto;
+    }
+  }
+  // Retroceder margenMetros desde el punto más cercano, para continuidad visual — nunca
+  // cruza por debajo de `desde` (mismo límite que ya impidió mirar tramos anteriores).
+  let restante = margenMetros;
+  let indice = mejorIndice;
+  let punto = mejorPunto;
+  while (restante > 0 && indice > desde) {
+    const inicioSegmento = polyline[indice];
+    const largoHastaInicio = distanciaMetros(punto, inicioSegmento);
+    if (largoHastaInicio >= restante) {
+      const fraccion = restante / largoHastaInicio;
+      punto = {
+        lat: punto.lat + (inicioSegmento.lat - punto.lat) * fraccion,
+        lng: punto.lng + (inicioSegmento.lng - punto.lng) * fraccion,
+      };
+      restante = 0;
+      break;
+    }
+    restante -= largoHastaInicio;
+    punto = inicioSegmento;
+    indice -= 1;
+  }
+  // El índice que se devuelve para el próximo tick es el del punto más cercano REAL
+  // (mejorIndice), no el retrocedido por el margen — el margen es sólo cosmético.
+  return { puntos: [punto, ...polyline.slice(indice + 1)], indice: mejorIndice };
 };
 
 export interface ParadaMapa {
@@ -405,6 +494,16 @@ export default function MapaTILA({
   // ── Polyline fallback cuando DirectionsService falla ─────────────────────
   const [polylinePuntos, setPolylinePuntos] = useState<google.maps.LatLngLiteral[]>([]);
 
+  // ── Ruta visual recortada (sólo en modoNavegacion) — ver el efecto más abajo que la
+  // calcula. rutaPolylineRef (la ruta completa, para rerouting/maniobras) NO se toca acá.
+  const [rutaVisibleDesdeVehiculo, setRutaVisibleDesdeVehiculo] = useState<google.maps.LatLngLiteral[]>([]);
+  // Índice monotónico: nunca retrocede mientras sea la misma ruta — evita que el
+  // arranque visible "salte" hacia atrás por una lectura de GPS momentáneamente
+  // imprecisa (ver recortarRutaDesdeVehiculo). Se reinicia sólo cuando rutaPolylineRef
+  // apunta a un array distinto (ruta realmente nueva, tras un recálculo).
+  const indiceRutaVisibleRef  = useRef(0);
+  const ultimaRutaRefVistaRef = useRef<google.maps.LatLngLiteral[] | null>(null);
+
   // ── Diagnóstico visible ───────────────────────────────────────────────────
   const [diagnostico, setDiagnostico] = useState<DiagnosticoMapa>({
     directionsStatus: "pendiente",
@@ -463,7 +562,10 @@ export default function MapaTILA({
   // <GoogleMap> (el hijo que remonta) — sobreviven el remount sin ningún cambio,
   // así que "seguimiento activo/pausado" y "no repetir el encuadre inicial" quedan
   // exactamente como estaban, sin ninguna acción extra de nuestra parte.
-  const cambiarTema = useCallback(() => {
+  // Snapshot de cámara + limpieza de refs antes de forzar un remount de <GoogleMap> —
+  // compartido por cambiarTema (botón manual) y por el recálculo automático de
+  // horario más abajo, para no duplicar esta lógica en dos lugares.
+  const prepararRemountTema = useCallback(() => {
     if (mapRef.current) {
       const centro = mapRef.current.getCenter();
       camaraSnapshotRef.current = {
@@ -488,8 +590,42 @@ export default function MapaTILA({
       cancelAnimationFrame(animacionFrameRef.current);
       animacionFrameRef.current = null;
     }
-    setTema(t => SIGUIENTE_TEMA[t]);
   }, [centroInicial, zoomInicial]);
+
+  const cambiarTema = useCallback(() => {
+    prepararRemountTema();
+    setTema(t => SIGUIENTE_TEMA[t]);
+  }, [prepararRemountTema]);
+
+  // ─── "Automático" en vivo ───────────────────────────────────────────────────
+  // autoResuelto guarda el resultado de resolverTemaAutomatico() vigente — se aplica
+  // al construir el mapa (colorSchemeActual lo lee, más abajo) y forma parte de la
+  // `key` de <GoogleMap> cuando tema==="automatico" (ver el JSX). Sin esto, el mapa
+  // se quedaría con el primer resultado para siempre: colorScheme sólo puede fijarse
+  // al construir la instancia, y `key={tema}` por sí solo no cambia mientras el chofer
+  // no toque el botón — un chequeo periódico es la única forma de que "Automático"
+  // reaccione solo al cruzar la hora de corte, sin que el chofer tenga que hacer nada.
+  const [autoResuelto, setAutoResuelto] = useState<"dia" | "noche">(() => resolverTemaAutomatico());
+  // Espejo en ref del estado — el setInterval de abajo necesita el valor vigente sin
+  // depender de él (recrear el interval cada vez que autoResuelto cambia sería más
+  // frágil), y así el efecto secundario (prepararRemountTema) puede quedar afuera de
+  // cualquier callback de setState, nunca dentro de un updater funcional.
+  const autoResueltoRef = useRef<"dia" | "noche">(autoResuelto);
+  useEffect(() => { autoResueltoRef.current = autoResuelto; }, [autoResuelto]);
+
+  useEffect(() => {
+    if (tema !== "automatico") return;
+    const intervalo = setInterval(() => {
+      const resuelto = resolverTemaAutomatico();
+      if (resuelto === autoResueltoRef.current) return;
+      // Efecto secundario primero, afuera de cualquier setter — recién después se
+      // actualiza el estado (setAutoResuelto acá es un valor directo, no un updater
+      // funcional: no hay ningún efecto secundario adentro de React).
+      prepararRemountTema();
+      setAutoResuelto(resuelto);
+    }, 60000); // 1 minuto — de sobra para no notarse el retraso al cruzar la hora de corte
+    return () => clearInterval(intervalo);
+  }, [tema, prepararRemountTema]);
 
   // ─── Único punto que puede tocar el mapa imperativamente ──────────────────
   const moverCamara = useCallback((mover: () => void) => {
@@ -1075,6 +1211,31 @@ export default function MapaTILA({
     encuadrarPuntos(puntos);
   }, [modoNavegacion, modoMultiChofer, lat, lng, paradasCoords, destinoCoords, encuadrarPuntos]);
 
+  // ─── Recorte visual de la traza (sólo representación) ──────────────────────
+  // Sólo lee rutaPolylineRef.current (no la modifica) y recalcula la porción visible
+  // en cada tick de GPS — nada de esto toca calcularRuta/dispararCalculoNav/rerouting,
+  // ni la detección de desvío o maniobras (que siguen leyendo rutaPolylineRef completa).
+  useEffect(() => {
+    if (!modoNavegacion || modoMultiChofer) return;
+    if (!lat || !lng) return;
+    const polyline = rutaPolylineRef.current;
+    if (polyline.length < 2) {
+      setRutaVisibleDesdeVehiculo([]);
+      return;
+    }
+    // Ruta realmente nueva (referencia distinta — rutaPolylineRef se reasigna a un
+    // array nuevo en cada recálculo, ver calcularRuta) → reinicia el índice monotónico.
+    if (polyline !== ultimaRutaRefVistaRef.current) {
+      ultimaRutaRefVistaRef.current = polyline;
+      indiceRutaVisibleRef.current = 0;
+    }
+    const { puntos, indice } = recortarRutaDesdeVehiculo(
+      polyline, { lat, lng }, MARGEN_RUTA_DETRAS_METROS, indiceRutaVisibleRef.current
+    );
+    indiceRutaVisibleRef.current = indice;
+    setRutaVisibleDesdeVehiculo(puntos);
+  }, [lat, lng, directions, polylinePuntos, modoNavegacion, modoMultiChofer]);
+
   // ─── Marcador chofer ──────────────────────────────────────────────────────
   // Sólo crea el marcador si todavía no existe — ya NO fija su posición (eso lo hace
   // exclusivamente pasoAnimacion, frame a frame). onMapLoad es la única excepción: ahí
@@ -1241,10 +1402,16 @@ export default function MapaTILA({
   // cambia cuando cambia modoNavegacion o colorSchemeActual (las únicas dependencias
   // reales), así que setOptions() deja de ejecutarse en cada render. heading/tilt NO
   // van acá — ver el comentario en onMapLoad de por qué se aplican ahí en cambio.
+  // "automatico" ya NO usa FOLLOW_SYSTEM (ver resolverTemaAutomatico arriba: en el
+  // WebView de Capacitor terminaba siempre en oscuro) — se resuelve explícitamente a
+  // LIGHT o DARK por horario. Lee `autoResuelto` (el estado, actualizado por el efecto
+  // de arriba) en vez de llamar a resolverTemaAutomatico() acá directamente: así el
+  // valor efectivamente aplicado siempre coincide con el que forma parte de la `key`
+  // de <GoogleMap> más abajo — ambos deben ir sincronizados al mismo valor.
   const colorSchemeActual = isLoaded
-    ? (tema === "dia"   ? google.maps.ColorScheme.LIGHT :
-       tema === "noche" ? google.maps.ColorScheme.DARK :
-       google.maps.ColorScheme.FOLLOW_SYSTEM)
+    ? ((tema === "dia" || (tema === "automatico" && autoResuelto === "dia"))
+        ? google.maps.ColorScheme.LIGHT
+        : google.maps.ColorScheme.DARK)
     : undefined;
 
   const opciones = useMemo<google.maps.MapOptions>(() => ({
@@ -1331,13 +1498,16 @@ export default function MapaTILA({
   return (
     <div style={{ width: "100%", position: "relative" }}>
       <GoogleMap
-        // key={tema}: única forma oficial de aplicar un colorScheme nuevo (ver el
-        // comentario largo junto a cambiarTema) — al cambiar, React desmonta esta
-        // instancia y monta una nueva. center/zoom usan el snapshot capturado justo
-        // antes del remount para no perder la posición actual; heading/tilt se
-        // restauran aparte, en onMapLoad (ver ahí el porqué). En el primer montaje
-        // (sin snapshot todavía) center/zoom caen a centroInicial/zoomInicial.
-        key={tema}
+        // key: única forma oficial de aplicar un colorScheme nuevo (ver el comentario
+        // largo junto a cambiarTema) — al cambiar, React desmonta esta instancia y
+        // monta una nueva. Cuando tema==="automatico" se suma autoResuelto a la key:
+        // sin esto, el efecto que detecta el cruce de horario podría actualizar
+        // autoResuelto (y por lo tanto colorSchemeActual) sin que la key cambiara, y el
+        // remount nunca ocurriría. center/zoom usan el snapshot capturado justo antes
+        // del remount para no perder la posición actual; heading/tilt se restauran
+        // aparte, en onMapLoad (ver ahí el porqué). En el primer montaje (sin snapshot
+        // todavía) center/zoom caen a centroInicial/zoomInicial.
+        key={tema === "automatico" ? `automatico-${autoResuelto}` : tema}
         mapContainerStyle={contenedorEstilo}
         center={camaraSnapshotRef.current?.center ?? centroInicial}
         zoom={camaraSnapshotRef.current?.zoom ?? zoomInicial}
@@ -1396,10 +1566,21 @@ export default function MapaTILA({
           />
         )}
 
-        {/* Ruta Directions (principal) — doble capa: casing oscuro debajo, línea
-            amarilla firme encima. Misma `directions` en ambas instancias: sigue siendo
-            una sola ruta/decisión de datos, sólo dos trazos visuales por contraste. */}
-        {!modoMultiChofer && directions && (
+        {/* Ruta en modoNavegacion: recortada visualmente desde cerca del vehículo hasta
+            el destino (rutaVisibleDesdeVehiculo — rutaPolylineRef sigue completa para
+            rerouting/maniobras/llegada, esto es sólo representación). DirectionsRenderer
+            no admite dibujar un tramo parcial de su propio resultado, por eso acá se usa
+            Polyline directamente, con la misma doble capa (casing oscuro + línea amarilla). */}
+        {!modoMultiChofer && modoNavegacion && rutaVisibleDesdeVehiculo.length >= 2 && (
+          <>
+            <Polyline path={rutaVisibleDesdeVehiculo} options={rutaCasingOptions} />
+            <Polyline path={rutaVisibleDesdeVehiculo} options={rutaPrincipalOptions} />
+          </>
+        )}
+
+        {/* Fuera de modoNavegacion (paneles de sólo lectura): ruta completa, sin cambios —
+            doble capa vía DirectionsRenderer. */}
+        {!modoMultiChofer && !modoNavegacion && directions && (
           <>
             <DirectionsRenderer
               key={`dir-casing-${directions.request?.origin?.toString()}`}
@@ -1414,8 +1595,8 @@ export default function MapaTILA({
           </>
         )}
 
-        {/* Polyline fallback — siempre dibuja si Directions falla — misma doble capa */}
-        {!modoMultiChofer && !directions && polylinePuntos.length >= 2 && (
+        {/* Polyline fallback fuera de modoNavegacion — siempre dibuja si Directions falla */}
+        {!modoMultiChofer && !modoNavegacion && !directions && polylinePuntos.length >= 2 && (
           <>
             <Polyline path={polylinePuntos} options={rutaCasingOptions} />
             <Polyline path={polylinePuntos} options={rutaPrincipalOptions} />
@@ -1499,3 +1680,10 @@ export default function MapaTILA({
 //   - zoom adaptativo según velocidad/contexto (ciudad/ruta/autopista);
 //   - navegación por voz / instrucciones giro a giro;
 //   - cambios de POI (eso vive en Google Cloud Console, no en este archivo).
+//
+// Tema "Automático": resuelve LIGHT/DARK explícitamente por HORARIO LOCAL únicamente
+// (resolverTemaAutomatico — sin preferencia del sistema operativo, ver el comentario
+// junto a esa función). Reacciona en vivo: un chequeo cada 1 minuto (autoResuelto +
+// autoResueltoRef) detecta el cruce de HORA_INICIO_NOCHE/HORA_FIN_NOCHE y fuerza un
+// remount (autoResuelto forma parte de la `key` de <GoogleMap> cuando tema==="automatico")
+// — no hace falta que el chofer toque el botón ni reinstale la app.

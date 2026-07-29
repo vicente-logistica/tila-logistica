@@ -88,6 +88,9 @@ export default function ViajeActivoPage() {
   const [viajeCanceladoPorCliente, setViajeCanceladoPorCliente] = useState(false);
 
   // UI
+  // Arranca minimizado: el mapa debe ser la prioridad visual durante la conducción.
+  // Sin localStorage a propósito — sólo dura mientras este viaje siga montado.
+  const [panelExpandido, setPanelExpandido]   = useState(false);
   const [mostrarChat, setMostrarChat]         = useState(false);
   const [mostrarDetalles, setMostrarDetalles] = useState(false);
   const [mostrarSoporte, setMostrarSoporte]   = useState(false);
@@ -688,6 +691,35 @@ export default function ViajeActivoPage() {
     actualizarEstado("Descarga completada", true); // skip evidencia automática — ya registrada
   };
 
+  // Extraído para que el panel expandido y el minimizado usen exactamente la misma
+  // lógica (mismo botón, en dos lugares) sin duplicar el cuerpo del onClick.
+  const manejarClickBotonPrincipal = () => {
+    if (!botonActivo) return;
+    if (botonActivo.nombre === "Viaje finalizado") {
+      console.log("FINALIZAR CLICK");
+      const audio = finalizadoAudioRef.current;
+      console.log("audioRef", audio);
+      if (audio) {
+        audio.pause();
+        audio.currentTime = 0;
+        audio.play()
+          .then(() => { console.log("FINALIZADO PLAY OK"); })
+          .catch((err) => { console.error("FINALIZADO PLAY ERROR", err); });
+      }
+    }
+    // "Carga retirada" abre modal de evidencia de carga
+    if (botonActivo.nombre === "Carga retirada") {
+      setModalCarga(true);
+      return;
+    }
+    // "Descarga completada" abre modal de evidencia de descarga
+    if (botonActivo.nombre === "Descarga completada") {
+      setModalEntrega(true);
+      return;
+    }
+    actualizarEstado(botonActivo.nombre);
+  };
+
   // ─── Guards ───────────────────────────────────────────────────────────────
   if (!autorizado) return <main className="min-h-screen bg-black flex items-center justify-center"><p className="text-yellow-400 font-black text-2xl animate-pulse">Cargando...</p></main>;
   if (cargando)    return <main className="min-h-screen bg-black flex items-center justify-center"><p className="text-yellow-400 font-black text-2xl animate-pulse">Cargando viaje...</p></main>;
@@ -783,181 +815,235 @@ export default function ViajeActivoPage() {
       </div>
 
       {/* ─── BOTTOM FLOTANTE ─────────────────────────────────────────────── */}
-      <div className="absolute bottom-0 left-0 right-0 z-20 p-3">
-        <div className="bg-black/92 backdrop-blur-sm rounded-3xl px-4 pt-3 pb-4 border border-zinc-800 space-y-2">
+      <div
+        className="absolute bottom-0 left-0 right-0 z-20 p-3"
+        style={{ paddingBottom: "max(0.75rem, env(safe-area-inset-bottom))" }}
+      >
+        {panelExpandido ? (
+          <div className="bg-black/92 backdrop-blur-sm rounded-3xl px-4 pt-3 pb-4 border border-zinc-800 space-y-2">
 
-          {/* Instrucción corta + dirección */}
-          <div className="px-1">
-            <p className="text-zinc-400 text-xs">{instruccion.subtitulo}</p>
-            {paradaActiva && (
-              <p className="text-white font-black text-sm truncate">{paradaActiva.direccion}</p>
-            )}
-          </div>
-
-          {/* Confirmar parada */}
-          {paradas.length > 0 && !todasParadasCompletadas && paradaActivaIndex < paradas.length && (
-            <button type="button" onClick={confirmarParadaCompletada} disabled={confirmandoParada}
-              className={`w-full py-3 rounded-2xl font-black text-sm transition ${confirmandoParada ? "bg-zinc-700 text-zinc-400" : "bg-blue-600 hover:bg-blue-500 text-white"}`}>
-              {confirmandoParada ? "Confirmando..." : `✅ Confirmar parada ${LABELS[paradaActivaIndex] || ""}`}
-            </button>
-          )}
-
-          {/* Aviso pago pendiente — solo informativo, no bloquea */}
-          {viaje.pago_estado && viaje.pago_estado !== "pagado" && (
-            <div className={`w-full px-3 py-2 rounded-xl text-xs font-black text-center ${
-              viaje.pago_estado === "rechazado" ? "bg-red-900/60 text-red-300 border border-red-700" :
-              "bg-orange-900/60 text-orange-300 border border-orange-700"
-            }`}>
-              {viaje.pago_estado === "rechazado"
-                ? "❌ Pago rechazado — el cliente debe reintentar"
-                : "💳 Pago pendiente del cliente"}
-            </div>
-          )}
-
-          {/* Botón principal */}
-          {botonActivo && (
+            {/* Minimizar */}
             <button
               type="button"
-              disabled={bloqueadoPorParadas}
-              className={`w-full py-4 rounded-2xl font-black text-lg transition ${
-                bloqueadoPorParadas ? "bg-zinc-800 text-zinc-500 cursor-not-allowed"
-                : `${botonActivo.color} hover:opacity-90 active:scale-[0.98]`
-              }`}
-              onClick={() => {
-                if (botonActivo?.nombre === "Viaje finalizado") {
-                  console.log("FINALIZAR CLICK");
-                  const audio = finalizadoAudioRef.current;
-                  console.log("audioRef", audio);
-                  if (audio) {
-                    audio.pause();
-                    audio.currentTime = 0;
-                    audio.play()
-                      .then(() => { console.log("FINALIZADO PLAY OK"); })
-                      .catch((err) => { console.error("FINALIZADO PLAY ERROR", err); });
-                  }
-                }
-                // "Carga retirada" abre modal de evidencia de carga
-                if (botonActivo?.nombre === "Carga retirada") {
-                  setModalCarga(true);
-                  return;
-                }
-                // "Descarga completada" abre modal de evidencia de descarga
-                if (botonActivo?.nombre === "Descarga completada") {
-                  setModalEntrega(true);
-                  return;
-                }
-                actualizarEstado(botonActivo.nombre);
-              }}
+              onClick={() => setPanelExpandido(false)}
+              aria-label="Minimizar panel"
+              className="w-full flex items-center justify-center gap-1 text-zinc-500 hover:text-zinc-300 text-xs font-black py-1 transition"
             >
-              {botonActivo.label}{bloqueadoPorParadas ? " 🔒" : ""}
+              ▾ Minimizar
             </button>
-          )}
 
-          {/* Secundarios — solo íconos */}
-          <div className="flex gap-2 pt-1">
-            <button type="button"
-              onClick={() => {
-                const abriendo = !mostrarChat;
-                setMostrarChat(abriendo);
-                setMostrarSoporte(false);
-                setMostrarDetalles(false);
-                if (abriendo) {
-                  setNoLeidosViaje(0);
-                  setAlertaMensaje(null);
-                  if (alertaTimerRef.current) clearTimeout(alertaTimerRef.current);
-                }
-              }}
-              className={`relative flex-1 py-2 rounded-xl text-lg transition ${mostrarChat ? "bg-blue-600" : noLeidosViaje > 0 ? "bg-blue-900 border border-blue-500" : "bg-zinc-800 hover:bg-zinc-700"}`}>
-              💬
-              {noLeidosViaje > 0 && !mostrarChat && (
-                <span className="absolute -top-1.5 -right-1.5 bg-red-500 text-white text-xs font-black rounded-full min-w-5 h-5 flex items-center justify-center px-1 animate-pulse">
-                  {noLeidosViaje}
-                </span>
+            {/* Instrucción corta + dirección */}
+            <div className="px-1">
+              <p className="text-zinc-400 text-xs">{instruccion.subtitulo}</p>
+              {paradaActiva && (
+                <p className="text-white font-black text-sm truncate">{paradaActiva.direccion}</p>
               )}
-            </button>
-            <button type="button"
-              onClick={() => { setMostrarDetalles(v => !v); setMostrarChat(false); setMostrarSoporte(false); }}
-              className={`flex-1 py-2 rounded-xl text-lg transition ${mostrarDetalles ? "bg-zinc-600" : "bg-zinc-800 hover:bg-zinc-700"}`}>
-              📋
-            </button>
-            <button type="button"
-              onClick={() => {
-                const abriendo = !mostrarSoporte;
-                setMostrarSoporte(abriendo);
-                setMostrarChat(false);
-                setMostrarDetalles(false);
-                if (abriendo) {
-                  setNoLeidosSoporte(0);
-                  setAlertaMensaje(null);
-                  if (alertaTimerRef.current) clearTimeout(alertaTimerRef.current);
-                }
-              }}
-              className={`relative flex-1 py-2 rounded-xl text-lg transition ${mostrarSoporte ? "bg-orange-600" : noLeidosSoporte > 0 ? "bg-orange-900 border border-orange-500" : "bg-zinc-800 hover:bg-zinc-700"}`}>
-              🛟
-              {noLeidosSoporte > 0 && !mostrarSoporte && (
-                <span className="absolute -top-1.5 -right-1.5 bg-red-500 text-white text-xs font-black rounded-full min-w-5 h-5 flex items-center justify-center px-1 animate-pulse">
-                  {noLeidosSoporte}
-                </span>
-              )}
-            </button>
-            {/* Silencio por sector */}
-            <button type="button"
-              onClick={() => setSilenciarChatViaje(v => !v)}
-              title={silenciarChatViaje ? "Activar sonido chat viaje" : "Silenciar chat viaje"}
-              className={`flex-1 py-2 rounded-xl text-base transition ${silenciarChatViaje ? "bg-zinc-700 opacity-60" : "bg-zinc-800 hover:bg-zinc-700"}`}>
-              {silenciarChatViaje ? "💬🔕" : "💬🔔"}
-            </button>
-            <button type="button"
-              onClick={() => setSilenciarSoporteChofer(v => !v)}
-              title={silenciarSoporteChofer ? "Activar sonido soporte" : "Silenciar soporte TILA"}
-              className={`flex-1 py-2 rounded-xl text-base transition ${silenciarSoporteChofer ? "bg-zinc-700 opacity-60" : "bg-zinc-800 hover:bg-zinc-700"}`}>
-              {silenciarSoporteChofer ? "🛟🔕" : "🛟🔔"}
-            </button>
-            {/* Cambiar navegación — disponible siempre, en cualquier estado recuperable */}
-            <button type="button"
-              onClick={() => {
-                const destino = destinoRuta ?? viaje?.destino;
-                if (!destino) return;
-                setDestNavPendiente(destino);
-                setMostrarNavSel(true);
-              }}
-              title="Cambiar navegación"
-              aria-label="Cambiar navegación"
-              className="flex-1 py-2 rounded-xl text-lg bg-zinc-800 hover:bg-zinc-700 transition">
-              🧭
-            </button>
-          </div>
+            </div>
 
-          {/* Cancelar viaje — solo antes de "Carga retirada" */}
-          {viaje && ["Chofer asignado", "En camino"].includes(viaje.estado) && (
-            <div className="pt-1">
+            {/* Confirmar parada */}
+            {paradas.length > 0 && !todasParadasCompletadas && paradaActivaIndex < paradas.length && (
+              <button type="button" onClick={confirmarParadaCompletada} disabled={confirmandoParada}
+                className={`w-full py-3 rounded-2xl font-black text-sm transition ${confirmandoParada ? "bg-zinc-700 text-zinc-400" : "bg-blue-600 hover:bg-blue-500 text-white"}`}>
+                {confirmandoParada ? "Confirmando..." : `✅ Confirmar parada ${LABELS[paradaActivaIndex] || ""}`}
+              </button>
+            )}
+
+            {/* Aviso pago pendiente — solo informativo, no bloquea */}
+            {viaje.pago_estado && viaje.pago_estado !== "pagado" && (
+              <div className={`w-full px-3 py-2 rounded-xl text-xs font-black text-center ${
+                viaje.pago_estado === "rechazado" ? "bg-red-900/60 text-red-300 border border-red-700" :
+                "bg-orange-900/60 text-orange-300 border border-orange-700"
+              }`}>
+                {viaje.pago_estado === "rechazado"
+                  ? "❌ Pago rechazado — el cliente debe reintentar"
+                  : "💳 Pago pendiente del cliente"}
+              </div>
+            )}
+
+            {/* Botón principal */}
+            {botonActivo && (
               <button
                 type="button"
-                onClick={async () => {
-                  const ok = window.confirm("¿Cancelar el viaje? El viaje volverá a estado pendiente y quedará disponible para otro chofer.");
-                  if (!ok) return;
-                  const usuario = usuarioRef.current;
-                  if (!usuario?.id) return;
-                  const res = await fetch("/api/cargas/cancelar-chofer", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json", "x-user-id": String(usuario.id) },
-                    body: JSON.stringify({ carga_id: viaje.id }),
-                  });
-                  if (!res.ok) {
-                    const d = await res.json().catch(() => ({}));
-                    alert("No se pudo cancelar: " + (d?.error ?? res.status));
-                    return;
-                  }
-                  localStorage.removeItem("viajeActivoId");
-                  router.push("/panel-chofer");
-                }}
-                className="w-full py-2.5 rounded-xl font-black text-sm bg-zinc-900 border border-red-700 text-red-400 hover:bg-red-950 transition"
+                disabled={bloqueadoPorParadas}
+                className={`w-full py-4 rounded-2xl font-black text-lg transition ${
+                  bloqueadoPorParadas ? "bg-zinc-800 text-zinc-500 cursor-not-allowed"
+                  : `${botonActivo.color} hover:opacity-90 active:scale-[0.98]`
+                }`}
+                onClick={manejarClickBotonPrincipal}
               >
-                Cancelar viaje
+                {botonActivo.label}{bloqueadoPorParadas ? " 🔒" : ""}
+              </button>
+            )}
+
+            {/* Secundarios — solo íconos */}
+            <div className="flex gap-2 pt-1">
+              <button type="button"
+                onClick={() => {
+                  const abriendo = !mostrarChat;
+                  setMostrarChat(abriendo);
+                  setMostrarSoporte(false);
+                  setMostrarDetalles(false);
+                  if (abriendo) {
+                    setNoLeidosViaje(0);
+                    setAlertaMensaje(null);
+                    if (alertaTimerRef.current) clearTimeout(alertaTimerRef.current);
+                  }
+                }}
+                className={`relative flex-1 py-2 rounded-xl text-lg transition ${mostrarChat ? "bg-blue-600" : noLeidosViaje > 0 ? "bg-blue-900 border border-blue-500" : "bg-zinc-800 hover:bg-zinc-700"}`}>
+                💬
+                {noLeidosViaje > 0 && !mostrarChat && (
+                  <span className="absolute -top-1.5 -right-1.5 bg-red-500 text-white text-xs font-black rounded-full min-w-5 h-5 flex items-center justify-center px-1 animate-pulse">
+                    {noLeidosViaje}
+                  </span>
+                )}
+              </button>
+              <button type="button"
+                onClick={() => { setMostrarDetalles(v => !v); setMostrarChat(false); setMostrarSoporte(false); }}
+                className={`flex-1 py-2 rounded-xl text-lg transition ${mostrarDetalles ? "bg-zinc-600" : "bg-zinc-800 hover:bg-zinc-700"}`}>
+                📋
+              </button>
+              <button type="button"
+                onClick={() => {
+                  const abriendo = !mostrarSoporte;
+                  setMostrarSoporte(abriendo);
+                  setMostrarChat(false);
+                  setMostrarDetalles(false);
+                  if (abriendo) {
+                    setNoLeidosSoporte(0);
+                    setAlertaMensaje(null);
+                    if (alertaTimerRef.current) clearTimeout(alertaTimerRef.current);
+                  }
+                }}
+                className={`relative flex-1 py-2 rounded-xl text-lg transition ${mostrarSoporte ? "bg-orange-600" : noLeidosSoporte > 0 ? "bg-orange-900 border border-orange-500" : "bg-zinc-800 hover:bg-zinc-700"}`}>
+                🛟
+                {noLeidosSoporte > 0 && !mostrarSoporte && (
+                  <span className="absolute -top-1.5 -right-1.5 bg-red-500 text-white text-xs font-black rounded-full min-w-5 h-5 flex items-center justify-center px-1 animate-pulse">
+                    {noLeidosSoporte}
+                  </span>
+                )}
+              </button>
+              {/* Silencio por sector */}
+              <button type="button"
+                onClick={() => setSilenciarChatViaje(v => !v)}
+                title={silenciarChatViaje ? "Activar sonido chat viaje" : "Silenciar chat viaje"}
+                className={`flex-1 py-2 rounded-xl text-base transition ${silenciarChatViaje ? "bg-zinc-700 opacity-60" : "bg-zinc-800 hover:bg-zinc-700"}`}>
+                {silenciarChatViaje ? "💬🔕" : "💬🔔"}
+              </button>
+              <button type="button"
+                onClick={() => setSilenciarSoporteChofer(v => !v)}
+                title={silenciarSoporteChofer ? "Activar sonido soporte" : "Silenciar soporte TILA"}
+                className={`flex-1 py-2 rounded-xl text-base transition ${silenciarSoporteChofer ? "bg-zinc-700 opacity-60" : "bg-zinc-800 hover:bg-zinc-700"}`}>
+                {silenciarSoporteChofer ? "🛟🔕" : "🛟🔔"}
+              </button>
+              {/* Cambiar navegación — disponible siempre, en cualquier estado recuperable */}
+              <button type="button"
+                onClick={() => {
+                  const destino = destinoRuta ?? viaje?.destino;
+                  if (!destino) return;
+                  setDestNavPendiente(destino);
+                  setMostrarNavSel(true);
+                }}
+                title="Cambiar navegación"
+                aria-label="Cambiar navegación"
+                className="flex-1 py-2 rounded-xl text-lg bg-zinc-800 hover:bg-zinc-700 transition">
+                🧭
               </button>
             </div>
-          )}
-        </div>
+
+            {/* Cancelar viaje — solo antes de "Carga retirada" */}
+            {viaje && ["Chofer asignado", "En camino"].includes(viaje.estado) && (
+              <div className="pt-1">
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const ok = window.confirm("¿Cancelar el viaje? El viaje volverá a estado pendiente y quedará disponible para otro chofer.");
+                    if (!ok) return;
+                    const usuario = usuarioRef.current;
+                    if (!usuario?.id) return;
+                    const res = await fetch("/api/cargas/cancelar-chofer", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json", "x-user-id": String(usuario.id) },
+                      body: JSON.stringify({ carga_id: viaje.id }),
+                    });
+                    if (!res.ok) {
+                      const d = await res.json().catch(() => ({}));
+                      alert("No se pudo cancelar: " + (d?.error ?? res.status));
+                      return;
+                    }
+                    localStorage.removeItem("viajeActivoId");
+                    router.push("/panel-chofer");
+                  }}
+                  className="w-full py-2.5 rounded-xl font-black text-sm bg-zinc-900 border border-red-700 text-red-400 hover:bg-red-950 transition"
+                >
+                  Cancelar viaje
+                </button>
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="bg-black/92 backdrop-blur-sm rounded-2xl px-4 py-3 border border-zinc-800 space-y-2">
+
+            {/* Aviso pago pendiente — compacto, sigue visible aunque esté minimizado */}
+            {viaje.pago_estado && viaje.pago_estado !== "pagado" && (
+              <div className={`w-full px-3 py-1.5 rounded-lg text-xs font-black text-center ${
+                viaje.pago_estado === "rechazado" ? "bg-red-900/60 text-red-300 border border-red-700" :
+                "bg-orange-900/60 text-orange-300 border border-orange-700"
+              }`}>
+                {viaje.pago_estado === "rechazado"
+                  ? "❌ Pago rechazado — el cliente debe reintentar"
+                  : "💳 Pago pendiente del cliente"}
+              </div>
+            )}
+
+            {/* Resumen: próxima parada/destino + estado + expandir */}
+            <div className="flex items-center gap-2">
+              <div className="flex-1 min-w-0">
+                <p className="text-zinc-400 text-[11px] truncate">{instruccion.subtitulo}</p>
+                <p className="text-white font-black text-sm truncate">
+                  {paradaActiva?.direccion ?? viaje.destino}
+                </p>
+                {viaje.km_estimados ? (
+                  <p className="text-zinc-500 text-[11px]">{viaje.km_estimados} km restantes</p>
+                ) : null}
+              </div>
+              <span className={`text-xs font-black px-2 py-1 rounded-lg flex-shrink-0 ${colorEstadoBadge()}`}>
+                {viaje.estado || "Asignado"}
+              </span>
+              <button
+                type="button"
+                onClick={() => setPanelExpandido(true)}
+                aria-label="Expandir panel"
+                title="Expandir panel"
+                className="flex-shrink-0 w-9 h-9 rounded-full bg-zinc-800 hover:bg-zinc-700 text-zinc-300 flex items-center justify-center text-base transition"
+              >
+                ▴
+              </button>
+            </div>
+
+            {/* Confirmar parada — acción crítica, sigue visible aunque esté minimizado */}
+            {paradas.length > 0 && !todasParadasCompletadas && paradaActivaIndex < paradas.length && (
+              <button type="button" onClick={confirmarParadaCompletada} disabled={confirmandoParada}
+                className={`w-full py-3 rounded-2xl font-black text-sm transition ${confirmandoParada ? "bg-zinc-700 text-zinc-400" : "bg-blue-600 hover:bg-blue-500 text-white"}`}>
+                {confirmandoParada ? "Confirmando..." : `✅ Confirmar parada ${LABELS[paradaActivaIndex] || ""}`}
+              </button>
+            )}
+
+            {/* Botón principal — acción crítica, sigue visible aunque esté minimizado */}
+            {botonActivo && (
+              <button
+                type="button"
+                disabled={bloqueadoPorParadas}
+                className={`w-full py-3.5 rounded-2xl font-black text-base transition ${
+                  bloqueadoPorParadas ? "bg-zinc-800 text-zinc-500 cursor-not-allowed"
+                  : `${botonActivo.color} hover:opacity-90 active:scale-[0.98]`
+                }`}
+                onClick={manejarClickBotonPrincipal}
+              >
+                {botonActivo.label}{bloqueadoPorParadas ? " 🔒" : ""}
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       {/* ─── CHAT VIAJE — ventana flotante sobre el mapa ────────────────── */}
