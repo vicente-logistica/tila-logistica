@@ -26,20 +26,39 @@ const TILT_NAVEGACION = 45;
 // que el movimiento se perciba fluido, no instantáneo) ni más larga que el máximo (para
 // no "quedarse atrás" si el GPS entrega fixes seguidos). Se ajusta dentro de ese rango
 // según el intervalo real medido entre el fix anterior y el actual — ver animarHaciaPosicion.
+// MAX subido de 500 a 900ms: el GPS típico entrega un fix por segundo, así que con 500ms
+// el marcador llegaba a destino y quedaba "congelado" la otra mitad del ciclo — un patrón
+// de pausa perceptible que contradice "no percibir los ticks del GPS". Con 900ms el
+// movimiento cubre casi todo el intervalo real entre fixes, sin dejar de proteger contra
+// fixes que lleguen más seguido (siguen acortando la duración real usada, no ésta).
 const DURACION_ANIMACION_MIN_MS = 300;
-const DURACION_ANIMACION_MAX_MS = 500;
+const DURACION_ANIMACION_MAX_MS = 900;
+
+// ─── Look-ahead de cámara (comportamiento tipo Google Maps/Waze) ──────────────
+// Mientras se sigue al chofer con rumbo conocido, la cámara no centra exactamente sobre
+// el vehículo: centra un poco más adelante, en la dirección de marcha — así se ve más
+// camino por delante que por detrás, dando la sensación de "ir mirando hacia adelante"
+// en vez de ir literalmente encima del ícono. El marcador del camión sigue estando en
+// su posición GPS real exacta; sólo el PUNTO DE CENTRADO de la cámara se desplaza.
+const LOOK_AHEAD_METROS = 50;
 
 // ─── Rerouting por desvío real de la ruta (no por distancia recorrida) ────────
-// Antes se recalculaba cada 300m recorridos desde el origen del último cálculo, sin
-// importar si el chofer seguía la ruta correctamente. Ahora se mide la distancia real
-// del punto GPS a la polyline vigente (rutaPolylineRef) y sólo se dispara un recálculo
-// si esa distancia supera el umbral durante varias lecturas seguidas (evita falsos
-// positivos por ruido de GPS) y respeta un cooldown mínimo entre recálculos (evita
-// spamear la API de Directions). Valores iniciales conservadores para zona urbana —
-// ajustar libremente tras probar en el teléfono, no son definitivos.
-const UMBRAL_DESVIO_RUTA_METROS    = 40;
-const LECTURAS_CONSECUTIVAS_DESVIO = 3;
-const COOLDOWN_RECALCULO_MS        = 12000;
+// Se mide la distancia real del punto GPS a la polyline vigente (rutaPolylineRef).
+// Dos caminos para confirmar desvío:
+//  1) Desvío "obvio" (UMBRAL_DESVIO_INMEDIATO_METROS): una sola lectura muy lejos de la
+//     ruta ya alcanza — a esa distancia no es ruido de GPS, es un vehículo en otra calle.
+//  2) Desvío "moderado" (UMBRAL_DESVIO_RUTA_METROS): exige LECTURAS_CONSECUTIVAS_DESVIO
+//     lecturas seguidas por encima del umbral, para no reaccionar a un solo salto de GPS.
+// En ambos casos se respeta COOLDOWN_RECALCULO_MS entre recálculos por desvío (evita
+// spamear la API de Directions). Valores ajustados para reaccionar rápido en conducción
+// real, no son definitivos.
+const UMBRAL_DESVIO_RUTA_METROS      = 35;
+const UMBRAL_DESVIO_INMEDIATO_METROS = 120;
+const LECTURAS_CONSECUTIVAS_DESVIO   = 2;
+const COOLDOWN_RECALCULO_MS          = 8000;
+
+// Distancia a la que se anuncia por voz una maniobra próxima ("En X metros doblá...").
+const UMBRAL_AVISO_MANIOBRA_METROS = 150;
 
 // Distancia geodésica simple (haversine) entre dos puntos, en metros.
 const distanciaMetros = (a: google.maps.LatLngLiteral, b: google.maps.LatLngLiteral): number => {
@@ -70,6 +89,30 @@ const calcularBearing = (a: google.maps.LatLngLiteral, b: google.maps.LatLngLite
 // animación de cámara como por el punto de partida de cada tramo interpolado.
 const headingValido = (h: number | null | undefined): number | null =>
   h !== null && h !== undefined && !Number.isNaN(h) ? h : null;
+
+// Punto a `distanciaM` metros de `origen`, en la dirección `headingGrados` — fórmula
+// estándar de "destino por rumbo y distancia" sobre una esfera. Usado para el look-ahead
+// de cámara: desplaza el punto de centrado un poco adelante del vehículo, en la
+// dirección real de marcha (ver pasoAnimacion/restaurarCamaraNavegacion).
+const puntoAdelantado = (
+  origen: google.maps.LatLngLiteral,
+  headingGrados: number,
+  distanciaM: number
+): google.maps.LatLngLiteral => {
+  const R = 6371000;
+  const brng = (headingGrados * Math.PI) / 180;
+  const lat1 = (origen.lat * Math.PI) / 180;
+  const lng1 = (origen.lng * Math.PI) / 180;
+  const angDist = distanciaM / R;
+  const lat2 = Math.asin(
+    Math.sin(lat1) * Math.cos(angDist) + Math.cos(lat1) * Math.sin(angDist) * Math.cos(brng)
+  );
+  const lng2 = lng1 + Math.atan2(
+    Math.sin(brng) * Math.sin(angDist) * Math.cos(lat1),
+    Math.cos(angDist) - Math.sin(lat1) * Math.sin(lat2)
+  );
+  return { lat: (lat2 * 180) / Math.PI, lng: (lng2 * 180) / Math.PI };
+};
 
 // ─── Resolución del tema "Automático" ──────────────────────────────────────
 // google.maps.ColorScheme.FOLLOW_SYSTEM (lo que se usaba antes) delega la decisión
@@ -256,6 +299,14 @@ interface MapaTILAProps {
   mostrarRutaDesdeChofer?: boolean;
   /** Se dispara con distancias/tiempos por tramo cuando mostrarRutaDesdeChofer resuelve la ruta. */
   onResumenRuta?: (resumen: ResumenRuta) => void;
+  /** Estado visual del botón 🔊/🔇 del cluster de controles. Sin esto, el botón no se
+   *  renderiza (comportamiento por defecto sin cambios para quien no lo use). */
+  vozActiva?: boolean;
+  onToggleVoz?: () => void;
+  /** Mensaje de texto listo para hablar (giro próximo, ruta recalculada) — MapaTILA sólo
+   *  detecta el evento y arma el texto; no sabe si la voz está activa ni cómo reproducirla,
+   *  eso lo decide quien la use (ver app/utils/vozNavegacion.ts). */
+  onAnuncioVoz?: (mensaje: string) => void;
 }
 
 const formatearDistancia = (metros: number) =>
@@ -397,6 +448,9 @@ export default function MapaTILA({
   modoNavegacion = false,
   mostrarRutaDesdeChofer = false,
   onResumenRuta,
+  vozActiva = false,
+  onToggleVoz,
+  onAnuncioVoz,
 }: MapaTILAProps) {
   const { isLoaded, loadError } = useJsApiLoader({
     googleMapsApiKey: process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || "",
@@ -737,8 +791,14 @@ export default function MapaTILA({
 
     if (modoNavegacion) {
       if (siguiendoChoferRef.current) {
+        // Look-ahead: si hay rumbo válido, la cámara centra un poco adelante del
+        // vehículo (en su dirección real de marcha), no exactamente sobre él — el
+        // marcador ya se posicionó arriba en la coordenada GPS real, sin desplazar.
+        const centroCamara = headingActual !== null
+          ? puntoAdelantado({ lat: latActual, lng: lngActual }, headingActual, LOOK_AHEAD_METROS)
+          : { lat: latActual, lng: lngActual };
         moverCamara(() => {
-          mapRef.current!.setCenter({ lat: latActual, lng: lngActual });
+          mapRef.current!.setCenter(centroCamara);
           if (headingActual !== null) {
             mapRef.current!.setHeading(headingActual);
             ultimoHeadingNavegacionRef.current = headingActual;
@@ -1176,10 +1236,14 @@ export default function MapaTILA({
     // ruta" contra una polyline que de todos modos está por reemplazarse.
     let desvioConfirmado = false;
     if (!cambioDeParadas && !primerGps) {
-      const distancia  = distanciaMinAPolyline({ lat, lng }, rutaPolylineRef.current);
+      const distancia   = distanciaMinAPolyline({ lat, lng }, rutaPolylineRef.current);
       const fueraDeRuta = distancia !== null && distancia >= UMBRAL_DESVIO_RUTA_METROS;
+      const desvioObvio = distancia !== null && distancia >= UMBRAL_DESVIO_INMEDIATO_METROS;
       lecturasFueraDeRutaRef.current = fueraDeRuta ? lecturasFueraDeRutaRef.current + 1 : 0;
-      if (lecturasFueraDeRutaRef.current >= LECTURAS_CONSECUTIVAS_DESVIO) {
+      // Un desvío obvio (muy lejos de la ruta) no espera las lecturas consecutivas — a
+      // esa distancia ya no es ruido de GPS. Un desvío moderado sí necesita confirmarse
+      // con varias lecturas seguidas, para no recalcular por un salto aislado.
+      if (desvioObvio || lecturasFueraDeRutaRef.current >= LECTURAS_CONSECUTIVAS_DESVIO) {
         const ahora = Date.now();
         if (ahora - ultimoRecalculoDesvioTsRef.current >= COOLDOWN_RECALCULO_MS) {
           desvioConfirmado = true;
@@ -1235,6 +1299,62 @@ export default function MapaTILA({
     indiceRutaVisibleRef.current = indice;
     setRutaVisibleDesdeVehiculo(puntos);
   }, [lat, lng, directions, polylinePuntos, modoNavegacion, modoMultiChofer]);
+
+  // ─── Navegación por voz: giro próximo y ruta recalculada ───────────────────
+  // Sólo LEE estado ya existente (directions, lat/lng) — no toca calcularRuta,
+  // dispararCalculoNav ni la detección de desvío. Si onAnuncioVoz no viene (nadie la
+  // usa), estos efectos no hacen nada.
+  const vozDirectionsPrevRef = useRef<google.maps.DirectionsResult | null>(null);
+  const pasosAnunciadosRef   = useRef<Set<number>>(new Set());
+  const rutaKeyVozRef        = useRef<string | null>(null);
+
+  // "Ruta recalculada" — cualquier cambio de `directions` DESPUÉS del primero (el primer
+  // cálculo es el arranque normal del viaje, no un recálculo real).
+  useEffect(() => {
+    if (!onAnuncioVoz || !modoNavegacion || modoMultiChofer) return;
+    if (!directions) return;
+    const previa = vozDirectionsPrevRef.current;
+    vozDirectionsPrevRef.current = directions;
+    if (previa === null || previa === directions) return;
+    onAnuncioVoz("Ruta recalculada.");
+  }, [directions, modoNavegacion, modoMultiChofer, onAnuncioVoz]);
+
+  // Giros próximos — lee los steps de Directions (datos que calcularRuta ya produce, sin
+  // recalcular nada acá) y anuncia una maniobra por vez cuando la posición actual entra
+  // dentro de UMBRAL_AVISO_MANIOBRA_METROS de su punto de inicio. Sólo derecha/izquierda —
+  // "no quiero mensajes innecesarios". pasosAnunciadosRef se reinicia cuando cambia la
+  // ruta vigente, para poder narrar de nuevo tras un recálculo.
+  useEffect(() => {
+    if (!onAnuncioVoz || !modoNavegacion || modoMultiChofer) return;
+    if (!directions || !lat || !lng) return;
+
+    const pasos = (directions.routes?.[0]?.legs ?? []).flatMap(l => l.steps ?? []);
+    const rutaKey = `${pasos.length}-${directions.routes?.[0]?.overview_path?.length ?? 0}`;
+    if (rutaKeyVozRef.current !== rutaKey) {
+      rutaKeyVozRef.current = rutaKey;
+      pasosAnunciadosRef.current = new Set();
+    }
+
+    for (let i = 1; i < pasos.length; i++) {
+      if (pasosAnunciadosRef.current.has(i)) continue;
+      const inicioPaso = pasos[i].start_location;
+      if (!inicioPaso) continue;
+      const distancia = distanciaMetros({ lat, lng }, { lat: inicioPaso.lat(), lng: inicioPaso.lng() });
+      if (distancia > UMBRAL_AVISO_MANIOBRA_METROS) continue;
+
+      const maniobra = pasos[i].maneuver ?? "";
+      const metros = Math.round(distancia / 10) * 10;
+      if (maniobra.includes("right")) {
+        onAnuncioVoz(`En ${metros} metros doblá a la derecha.`);
+        pasosAnunciadosRef.current.add(i);
+        break; // una sola maniobra anunciada por tick, evita ráfagas
+      } else if (maniobra.includes("left")) {
+        onAnuncioVoz(`En ${metros} metros girá a la izquierda.`);
+        pasosAnunciadosRef.current.add(i);
+        break;
+      }
+    }
+  }, [directions, lat, lng, modoNavegacion, modoMultiChofer, onAnuncioVoz]);
 
   // ─── Marcador chofer ──────────────────────────────────────────────────────
   // Sólo crea el marcador si todavía no existe — ya NO fija su posición (eso lo hace
@@ -1374,8 +1494,14 @@ export default function MapaTILA({
     }
     posicionVisualActualRef.current = { lat, lng, heading: headingFinal ?? posicionVisualActualRef.current?.heading ?? null };
 
+    // Mismo look-ahead que pasoAnimacion — centra un poco adelante en la dirección de
+    // marcha, no exactamente sobre el vehículo (ver LOOK_AHEAD_METROS/puntoAdelantado).
+    const centroCamara = headingFinal !== null
+      ? puntoAdelantado({ lat, lng }, headingFinal, LOOK_AHEAD_METROS)
+      : { lat, lng };
+
     moverCamara(() => {
-      mapRef.current!.setCenter({ lat, lng });
+      mapRef.current!.setCenter(centroCamara);
       mapRef.current!.setZoom(ZOOM_NAVEGACION);
       mapRef.current!.setTilt(TILT_NAVEGACION);
       if (headingFinal !== null) {
@@ -1642,6 +1768,18 @@ export default function MapaTILA({
           >
             {ICONO_TEMA[tema]}
           </button>
+          {onToggleVoz && (
+            <button
+              type="button"
+              onClick={onToggleVoz}
+              title={vozActiva ? "Voz activada — tocá para silenciar" : "Voz silenciada — tocá para activar"}
+              aria-label={vozActiva ? "Silenciar navegación por voz" : "Activar navegación por voz"}
+              aria-pressed={vozActiva}
+              className="w-11 h-11 rounded-full bg-black/85 border border-yellow-400 text-yellow-400 flex items-center justify-center text-lg shadow-lg active:scale-95 transition"
+            >
+              {vozActiva ? "🔊" : "🔇"}
+            </button>
+          )}
         </div>
       )}
 
@@ -1667,19 +1805,24 @@ export default function MapaTILA({
   );
 }
 
-// ─── Pendiente para la próxima iteración de cámara de navegación ───────────────
-// Esta corrección agrega interpolación de marcador/cámara (pasoAnimacion), rerouting
-// por desvío real contra la polyline vigente (en vez de distancia recorrida) y traza de
-// doble capa. Zoom y tilt siguen sin animar (siguen fijos entre ticks, sólo los toca
-// restaurarCamaraNavegacion una vez al reactivar el seguimiento) — a propósito, no
-// pedido en esta etapa. Todavía NO implementa (deliberadamente fuera de esta etapa):
-//   - vehículo en el tercio inferior de la pantalla (requiere desplazar el centro
-//     visual sin falsear la coordenada GPS real — ver map.getProjection());
-//   - centro virtual adelantado sobre el bearing actual (look-ahead);
-//   - look-ahead mínimo de ~100m de ruta visible por delante;
+// ─── Estado del módulo de navegación ────────────────────────────────────────
+// Implementado: interpolación continua de marcador/cámara (pasoAnimacion, sin saltos
+// perceptibles de tick); look-ahead de cámara (LOOK_AHEAD_METROS/puntoAdelantado — centra
+// un poco adelante del vehículo en su rumbo real, no exactamente sobre él); rerouting por
+// desvío real con dos velocidades (obvio = 1 lectura, moderado = confirmación por varias
+// lecturas), no por distancia recorrida; traza recortada de doble capa; navegación por voz
+// (giro próximo derecha/izquierda + "ruta recalculada", vía onAnuncioVoz — "llegaste al
+// destino" se dispara desde viaje-activo/page.tsx, que es quien sabe cuándo llega el viaje);
+// tema Automático por horario, reactivo en vivo. Zoom y tilt siguen sin animar tick a tick
+// (sólo los fija restaurarCamaraNavegacion una vez, al reactivar el seguimiento) — a
+// propósito, no pedido.
+//
+// Deliberadamente NO implementado (fuera de alcance, no pedido):
+//   - vehículo en el tercio inferior de la pantalla (requeriría desplazar el centro visual
+//     vía screen-space, con map.getProjection(), en vez del look-ahead geográfico actual);
 //   - zoom adaptativo según velocidad/contexto (ciudad/ruta/autopista);
-//   - navegación por voz / instrucciones giro a giro;
-//   - cambios de POI (eso vive en Google Cloud Console, no en este archivo).
+//   - cambios de POI (eso vive en Google Cloud Console, no en este archivo — ver
+//     app/docs/google-maps.md para qué categorías se pueden controlar ahí).
 //
 // Tema "Automático": resuelve LIGHT/DARK explícitamente por HORARIO LOCAL únicamente
 // (resolverTemaAutomatico — sin preferencia del sistema operativo, ver el comentario

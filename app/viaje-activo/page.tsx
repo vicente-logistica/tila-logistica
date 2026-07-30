@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "../lib/supabase";
 import { useProtegerRuta } from "../hooks/useProtegerRuta";
@@ -9,6 +9,9 @@ import ChatAsistencia from "../components/ChatAsistencia";
 import ChatToast from "../components/ChatToast";
 import { registrarEvidenciaApi, estadoAEvento } from "../lib/evidencias";
 import { playChatSound } from "../utils/chatSound";
+import { hablar } from "../utils/vozNavegacion";
+
+const LS_VOZ_ACTIVA = "tila_voz_activa";
 
 // ─── Estados y flujo ──────────────────────────────────────────────────────────
 const ESTADOS_ORDEN = [
@@ -80,6 +83,23 @@ export default function ViajeActivoPage() {
   const [bateriaCargando, setBateriaCargando] = useState<boolean | null>(null);
   const [bateriaDisponible, setBateriaDisponible] = useState(false);
   const [ultimaSenal, setUltimaSenal] = useState("");
+  const [vozActiva, setVozActiva] = useState<boolean>(() => {
+    if (typeof window === "undefined") return true;
+    const guardado = localStorage.getItem(LS_VOZ_ACTIVA);
+    return guardado === null ? true : guardado === "1";
+  });
+  const toggleVoz = useCallback(() => {
+    setVozActiva(prev => {
+      const nuevo = !prev;
+      localStorage.setItem(LS_VOZ_ACTIVA, nuevo ? "1" : "0");
+      return nuevo;
+    });
+  }, []);
+  // MapaTILA sólo detecta el evento y arma el texto — acá se decide si efectivamente
+  // se habla (según vozActiva) y se reproduce (ver app/utils/vozNavegacion.ts).
+  const onAnuncioVoz = useCallback((mensaje: string) => {
+    if (vozActiva) hablar(mensaje);
+  }, [vozActiva]);
 
   const [paradas, setParadas]                     = useState<any[]>([]);
   const [paradaActivaIndex, setParadaActivaIndex] = useState(0);
@@ -598,6 +618,11 @@ export default function ViajeActivoPage() {
     const { carga: data } = await res.json();
     setViaje(data);
 
+    // "Llegaste al destino" — arribo al punto final de entrega.
+    if (nuevoEstado === "Descarga completada" && vozActiva) {
+      hablar("Llegaste al destino.");
+    }
+
     // ── Evidencia automática — se omite si el modal ya la registró ───────────
     if (!skipEvidencia) {
       const evento = estadoAEvento(nuevoEstado);
@@ -792,6 +817,9 @@ export default function ViajeActivoPage() {
           paradas={paradasParaMapa.length > 0 ? paradasParaMapa : undefined}
           altura="100dvh"
           modoNavegacion={true}
+          vozActiva={vozActiva}
+          onToggleVoz={toggleVoz}
+          onAnuncioVoz={onAnuncioVoz}
         />
       </div>
 
