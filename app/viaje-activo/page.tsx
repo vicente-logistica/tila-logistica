@@ -111,6 +111,23 @@ export default function ViajeActivoPage() {
   // Arranca minimizado: el mapa debe ser la prioridad visual durante la conducción.
   // Sin localStorage a propósito — sólo dura mientras este viaje siga montado.
   const [panelExpandido, setPanelExpandido]   = useState(false);
+  // Alto real del panel flotante inferior, en píxeles — se lo pasamos a MapaTILA para
+  // que ubique al camión pegado arriba del panel en vez de en el centro de la pantalla
+  // (ver panelAlturaPx en MapaTILA). Medido con ResizeObserver (no derivado de
+  // panelExpandido a mano) para que también reaccione a cambios de contenido dentro del
+  // panel que no vengan de expandir/minimizar (p. ej. el aviso de pago apareciendo).
+  const panelRef = useRef<HTMLDivElement>(null);
+  const [panelAlturaPx, setPanelAlturaPx] = useState(0);
+  useEffect(() => {
+    const el = panelRef.current;
+    if (!el) return;
+    const observer = new ResizeObserver(entries => {
+      const alto = entries[0]?.contentRect.height;
+      if (alto !== undefined) setPanelAlturaPx(alto);
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
   const [mostrarChat, setMostrarChat]         = useState(false);
   const [mostrarDetalles, setMostrarDetalles] = useState(false);
   const [mostrarSoporte, setMostrarSoporte]   = useState(false);
@@ -820,6 +837,7 @@ export default function ViajeActivoPage() {
           vozActiva={vozActiva}
           onToggleVoz={toggleVoz}
           onAnuncioVoz={onAnuncioVoz}
+          panelAlturaPx={panelAlturaPx}
         />
       </div>
 
@@ -844,6 +862,7 @@ export default function ViajeActivoPage() {
 
       {/* ─── BOTTOM FLOTANTE ─────────────────────────────────────────────── */}
       <div
+        ref={panelRef}
         className="absolute bottom-0 left-0 right-0 z-20 p-3"
         style={{ paddingBottom: "max(0.75rem, env(safe-area-inset-bottom))" }}
       >

@@ -15,24 +15,28 @@ const centroArgentina = { lat: -34.6037, lng: -58.3816 };
 const LABELS = ["A", "B", "C", "D", "E", "F"];
 
 // Zoom y tilt aplicados por "Mi ubicación" al restaurar la cámara de navegación.
-// Valores conservadores de primera corrección — ajustar libremente tras probar en
-// el teléfono, no son definitivos. Ya no se reaplican en cada tick de GPS (ver
-// seguirChofer): sólo se fijan una vez, al reactivar el seguimiento.
-const ZOOM_NAVEGACION = 18;
-const TILT_NAVEGACION = 45;
+// Sólo se fijan una vez, al reactivar el seguimiento — no se reaplican en cada tick
+// de GPS. TILT subido de 45 a 65 (cerca del máximo real de Maps con mapId vectorial)
+// para una vista tipo navegador GPS: más "desde atrás, mirando al horizonte" y menos
+// cenital. ZOOM subido de 18 a 18.5 — el camión gana protagonismo sin perder demasiada
+// visión del camino hacia adelante (un salto entero, a 19, dejaba ver muy poca ruta).
+const ZOOM_NAVEGACION = 18.5;
+const TILT_NAVEGACION = 65;
 
 // ─── Suavizado de marcador/cámara (interpolación por requestAnimationFrame) ───
 // Ventana de animación por cada lectura GPS nueva: nunca más corta que el mínimo (para
 // que el movimiento se perciba fluido, no instantáneo) ni más larga que el máximo (para
 // no "quedarse atrás" si el GPS entrega fixes seguidos). Se ajusta dentro de ese rango
 // según el intervalo real medido entre el fix anterior y el actual — ver animarHaciaPosicion.
-// MAX subido de 500 a 900ms: el GPS típico entrega un fix por segundo, así que con 500ms
-// el marcador llegaba a destino y quedaba "congelado" la otra mitad del ciclo — un patrón
-// de pausa perceptible que contradice "no percibir los ticks del GPS". Con 900ms el
-// movimiento cubre casi todo el intervalo real entre fixes, sin dejar de proteger contra
-// fixes que lleguen más seguido (siguen acortando la duración real usada, no ésta).
+// MAX subido de 900 a 3000ms: en conducción real el intervalo entre fixes GPS no es un
+// 1Hz perfecto — varía entre ~1 y ~3s. Con el tope en 900ms, cualquier intervalo mayor
+// se comprimía en sólo 900ms de movimiento y el resto del intervalo quedaba "congelado"
+// (marcador y cámara quietos) hasta el próximo fix — exactamente el patrón de "salto
+// cada 1-3 segundos" reportado. Con 3000ms la animación cubre el intervalo real completo
+// en casi todos los casos, sin dejar de proteger contra fixes que lleguen más seguido
+// (la duración real usada sigue acortándose sola, ver animarHaciaPosicion).
 const DURACION_ANIMACION_MIN_MS = 300;
-const DURACION_ANIMACION_MAX_MS = 900;
+const DURACION_ANIMACION_MAX_MS = 3000;
 
 // ─── Look-ahead de cámara (comportamiento tipo Google Maps/Waze) ──────────────
 // Mientras se sigue al chofer con rumbo conocido, la cámara no centra exactamente sobre
@@ -40,7 +44,14 @@ const DURACION_ANIMACION_MAX_MS = 900;
 // camino por delante que por detrás, dando la sensación de "ir mirando hacia adelante"
 // en vez de ir literalmente encima del ícono. El marcador del camión sigue estando en
 // su posición GPS real exacta; sólo el PUNTO DE CENTRADO de la cámara se desplaza.
-const LOOK_AHEAD_METROS = 50;
+// Subido de 50 a 70m junto con el mayor tilt: con la cámara más inclinada e "detrás"
+// del camión, hace falta desplazar un poco más el centrado para seguir mostrando
+// bastante camino por delante.
+const LOOK_AHEAD_METROS = 70;
+
+// Separación (píxeles de pantalla) entre el camión y el borde superior del panel
+// flotante inferior — ver puntoConOffsetVerticalPx/calcularOffsetVerticalCamara.
+const MARGEN_SOBRE_PANEL_PX = 20;
 
 // ─── Rerouting por desvío real de la ruta (no por distancia recorrida) ────────
 // Se mide la distancia real del punto GPS a la polyline vigente (rutaPolylineRef).
@@ -112,6 +123,31 @@ const puntoAdelantado = (
     Math.cos(angDist) - Math.sin(lat1) * Math.sin(lat2)
   );
   return { lat: (lat2 * 180) / Math.PI, lng: (lng2 * 180) / Math.PI };
+};
+
+// Desplaza el CENTRO de la cámara por píxeles de pantalla (no por grados) — técnica
+// estándar de Maps JS API: convierte `punto` a coordenadas de mundo (independientes del
+// zoom), resta el offset ya escalado por el zoom vigente, y convierte de vuelta a
+// LatLng. Se usa para que el camión no quede en el centro geométrico del contenedor del
+// mapa, sino más abajo — "corriendo" el centro real de la cámara hacia arriba en la
+// misma medida (ver calcularOffsetVerticalCamara, que calcula offsetYPx). null si el
+// mapa todavía no tiene proyección/zoom listos (arranque) — el llamador cae a `punto`
+// sin offset en ese caso, nunca rompe.
+const puntoConOffsetVerticalPx = (
+  mapa: google.maps.Map,
+  punto: google.maps.LatLngLiteral,
+  offsetYPx: number
+): google.maps.LatLngLiteral | null => {
+  if (offsetYPx === 0) return punto;
+  const proyeccion = mapa.getProjection();
+  const zoom = mapa.getZoom();
+  if (!proyeccion || zoom === undefined) return null;
+  const escala = Math.pow(2, zoom);
+  const puntoMundo = proyeccion.fromLatLngToPoint(new google.maps.LatLng(punto.lat, punto.lng));
+  if (!puntoMundo) return null;
+  const nuevoPuntoMundo = new google.maps.Point(puntoMundo.x, puntoMundo.y - offsetYPx / escala);
+  const nuevoLatLng = proyeccion.fromPointToLatLng(nuevoPuntoMundo);
+  return nuevoLatLng ? { lat: nuevoLatLng.lat(), lng: nuevoLatLng.lng() } : null;
 };
 
 // ─── Resolución del tema "Automático" ──────────────────────────────────────
@@ -307,6 +343,11 @@ interface MapaTILAProps {
    *  detecta el evento y arma el texto; no sabe si la voz está activa ni cómo reproducirla,
    *  eso lo decide quien la use (ver app/utils/vozNavegacion.ts). */
   onAnuncioVoz?: (mensaje: string) => void;
+  /** Alto real en píxeles del panel flotante inferior (viaje-activo) — usado sólo en
+   *  modoNavegacion para que el camión no quede centrado en la pantalla completa, sino
+   *  pegado arriba del panel (ver puntoConOffsetVerticalPx/calcularOffsetVerticalCamara).
+   *  Sin este prop (0 por defecto), el comportamiento es el de siempre: centrado. */
+  panelAlturaPx?: number;
 }
 
 const formatearDistancia = (metros: number) =>
@@ -371,54 +412,84 @@ const construirIconoParada = (
     : { url, scaledSize: new google.maps.Size(32, 32), anchor: new google.maps.Point(16, 16) };
 };
 
-// Camión con semirremolque visto desde arriba — sin letra, no reemplaza ningún punto
-// del recorrido, sólo indica la posición real del chofer. Tercer rediseño: cabina
-// gris casi negro + caja azul marino muy oscuro (tono distinto de la cabina, ninguna
-// superficie grande blanca ni amarilla — la versión blanca se perdía contra mapas en
-// modo claro), contorno negro bien definido, parabrisas azul vivo, luces traseras
-// rojo intenso, halo claro (en vez de sombra oscura) para recortar la silueta también
-// sobre mapas en modo oscuro, acento amarillo TILA reducido a un detalle mínimo.
-// Mismo viewBox, scaledSize y anchor que antes — no cambia el tamaño de referencia
-// usado por el resto del código (posicionamiento, hit-area).
-const construirIconoChofer = (): google.maps.Icon => {
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="36" height="56" viewBox="0 0 36 56">
+// Sexto rediseño: sólo paleta de color (tamaño/perspectiva/anchor sin cambios) — gris
+// grafito (caja/cuerpo) + amarillo TILA (cabina/detalle principal) en vez de azul,
+// mejor contraste e identidad visual de marca. Franjas más oscuras sobre el borde
+// derecho de cabina y caja simulan una cara lateral en sombra, dando sensación de
+// volumen sin ser una ilustración 3D real. Sombra elíptica debajo, en vez de un halo
+// claro alrededor de toda la silueta. El "frente" sigue siendo el borde de
+// arriba del ícono: como el mapa rota con el heading real (ver pasoAnimacion/
+// restaurarCamaraNavegacion, mapa.setHeading), un ícono con orientación fija que
+// siempre "mira hacia arriba" ya queda apuntando en la dirección de marcha en pantalla
+// — no hace falta rotar el ícono en sí mismo, alcanza con esta convención.
+// esNoche: sólo cambia si los faros delanteros se ven encendidos (con halo) o apagados
+// (lente gris, sin brillo) — de día apagados, de noche encendidos. Nada más del ícono
+// depende de esto. Ver el efecto más abajo que llama a choferMarkerRef.current.setIcon()
+// cuando autoResuelto cambia, para que el faro prenda/apague en vivo sin esperar un
+// remount del mapa.
+const construirIconoChofer = (esNoche: boolean): google.maps.Icon => {
+  const colorFaro = esNoche ? "#fef9c3" : "#a1a1aa";
+  const strokeFaro = esNoche ? "#fde68a" : "#111827";
+  const glowFaros = esNoche
+    ? `<circle cx="10.5" cy="2.2" r="4.2" fill="#fde68a" opacity="0.4"/>
+       <circle cx="29.5" cy="2.2" r="4.2" fill="#fde68a" opacity="0.4"/>`
+    : "";
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="40" height="62" viewBox="0 0 40 62">
     <defs>
-      <linearGradient id="tilaCajaGrad3" x1="0" y1="0" x2="0" y2="1">
-        <stop offset="0" stop-color="#1e293b"/>
-        <stop offset="1" stop-color="#0f172a"/>
+      <linearGradient id="tilaCajaGrad6" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#71717a"/>
+        <stop offset="1" stop-color="#52525b"/>
       </linearGradient>
-      <linearGradient id="tilaCabinaGrad3" x1="0" y1="0" x2="0" y2="1">
-        <stop offset="0" stop-color="#3f3f46"/>
-        <stop offset="1" stop-color="#18181b"/>
+      <linearGradient id="tilaCabinaGrad6" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#facc15"/>
+        <stop offset="1" stop-color="#eab308"/>
       </linearGradient>
     </defs>
 
-    <!-- Halo claro: recorta la silueta también sobre mapas en modo oscuro -->
-    <ellipse cx="19.5" cy="31" rx="15" ry="23" fill="#f4f4f5" opacity="0.42"/>
+    <!-- Sombra de contacto con el suelo — da volumen, no es un halo alrededor de toda la silueta -->
+    <ellipse cx="20" cy="57" rx="15" ry="4.5" fill="#000000" opacity="0.3"/>
 
-    <rect x="4" y="21" width="28" height="32" rx="3" fill="url(#tilaCajaGrad3)" stroke="#000000" stroke-width="1.75"/>
-    <rect x="4" y="31" width="28" height="1" fill="#ffffff" opacity="0.1"/>
-    <rect x="4" y="41" width="28" height="1" fill="#ffffff" opacity="0.1"/>
+    <!-- Ejes de ruedas: trasero (semirremolque) y delantero (tracción), oscuros -->
+    <rect x="2" y="50" width="5" height="9" rx="1.3" fill="#111827"/>
+    <rect x="33" y="50" width="5" height="9" rx="1.3" fill="#111827"/>
+    <rect x="2" y="29.5" width="4.5" height="7" rx="1.2" fill="#111827"/>
+    <rect x="33.5" y="29.5" width="4.5" height="7" rx="1.2" fill="#111827"/>
 
-    <rect x="1.5" y="46" width="4.5" height="7" rx="1.2" fill="#18181b"/>
-    <rect x="30" y="46" width="4.5" height="7" rx="1.2" fill="#18181b"/>
+    <!-- Caja/semirremolque: gris grafito, con franja lateral derecha más oscura (cara en sombra) -->
+    <rect x="5" y="17" width="30" height="35" rx="3" fill="url(#tilaCajaGrad6)" stroke="#111827" stroke-width="1.75"/>
+    <rect x="28" y="17" width="7" height="35" rx="3" fill="#000000" opacity="0.3"/>
+    <rect x="5" y="28" width="30" height="1" fill="#ffffff" opacity="0.2"/>
+    <rect x="5" y="40" width="30" height="1" fill="#ffffff" opacity="0.2"/>
 
-    <rect x="5.5" y="49.5" width="3.5" height="3" rx="1" fill="#dc2626" stroke="#fecaca" stroke-width="0.6"/>
-    <rect x="27" y="49.5" width="3.5" height="3" rx="1" fill="#dc2626" stroke="#fecaca" stroke-width="0.6"/>
+    <!-- Luces traseras — más grandes que antes (5x5.5, era 3.5x3) -->
+    <rect x="5" y="47" width="5" height="5.5" rx="1.5" fill="#dc2626" stroke="#fecaca" stroke-width="0.7"/>
+    <rect x="30" y="47" width="5" height="5.5" rx="1.5" fill="#dc2626" stroke="#fecaca" stroke-width="0.7"/>
 
-    <rect x="15" y="18.5" width="6" height="4" fill="#000000"/>
+    <rect x="16" y="15" width="8" height="3" fill="#000000"/>
 
-    <rect x="7" y="1.5" width="22" height="19" rx="3.5" fill="url(#tilaCabinaGrad3)" stroke="#000000" stroke-width="1.75"/>
-    <rect x="10" y="4.5" width="16" height="6.5" rx="1.5" fill="#2563eb"/>
-    <rect x="11" y="5.2" width="6" height="2" rx="1" fill="#ffffff" opacity="0.3"/>
-    <rect x="4.5" y="7" width="2.5" height="4" rx="1" fill="#000000"/>
-    <rect x="29" y="7" width="2.5" height="4" rx="1" fill="#000000"/>
+    <!-- Cabina: amarillo TILA, con la misma franja lateral en sombra que la caja -->
+    <rect x="8" y="1" width="24" height="21" rx="3.5" fill="url(#tilaCabinaGrad6)" stroke="#111827" stroke-width="1.75"/>
+    <rect x="26" y="1" width="6" height="21" rx="3.5" fill="#000000" opacity="0.25"/>
+    <rect x="11" y="4" width="18" height="7.5" rx="1.5" fill="#7dd3fc"/>
+    <rect x="12" y="4.8" width="7" height="2.2" rx="1" fill="#ffffff" opacity="0.4"/>
+    <rect x="5" y="6.5" width="2.5" height="4" rx="1" fill="#111827"/>
+    <rect x="32.5" y="6.5" width="2.5" height="4" rx="1" fill="#111827"/>
 
-    <!-- Acento TILA — detalle mínimo, sin superficie grande -->
-    <rect x="15.5" y="0.4" width="5" height="1.8" rx="0.9" fill="#facc15"/>
+    <!-- Faros delanteros: halo sólo de noche, lente apagada (gris) de día -->
+    ${glowFaros}
+    <circle cx="10.5" cy="2.2" r="1.9" fill="${colorFaro}" stroke="${strokeFaro}" stroke-width="0.6"/>
+    <circle cx="29.5" cy="2.2" r="1.9" fill="${colorFaro}" stroke="${strokeFaro}" stroke-width="0.6"/>
+
+    <!-- Acento — pequeño detalle en gris grafito sobre la cabina amarilla -->
+    <rect x="17" y="0.2" width="6" height="1.8" rx="0.9" fill="#27272a"/>
   </svg>`;
   const url = `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
-  return { url, scaledSize: new google.maps.Size(30, 46), anchor: new google.maps.Point(15, 23) };
+  // scaledSize dentro del rango pedido (~64-80px de alto) — 72px. Anchor YA NO es el
+  // centro geométrico del ícono: va en el centro inferior, sobre el eje de ruedas
+  // traseras (y=57 en el viewBox, justo arriba del punto más bajo de la sombra), para
+  // que sea ese punto —no el centro visual de toda la silueta— el que caiga exactamente
+  // sobre la posición GPS real y "pise" la ruta en vez de flotar sobre ella.
+  return { url, scaledSize: new google.maps.Size(46, 72), anchor: new google.maps.Point(23, 66) };
 };
 
 // ─── Tema del mapa (modoNavegacion) ─────────────────────────────────────────
@@ -451,6 +522,7 @@ export default function MapaTILA({
   vozActiva = false,
   onToggleVoz,
   onAnuncioVoz,
+  panelAlturaPx = 0,
 }: MapaTILAProps) {
   const { isLoaded, loadError } = useJsApiLoader({
     googleMapsApiKey: process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || "",
@@ -487,6 +559,11 @@ export default function MapaTILA({
   // Último heading que efectivamente se aplicó a la cámara de navegación — último
   // recurso del fallback de heading; nunca se fuerza 0 por defecto.
   const ultimoHeadingNavegacionRef = useRef<number | null>(null);
+  // Espejo en ref del prop panelAlturaPx — permite que pasoAnimacion/restaurarCamaraNavegacion
+  // (callbacks estables) lean siempre el valor MÁS RECIENTE sin tener que ir en sus arrays
+  // de dependencias (mismo patrón que autoResueltoRef más abajo).
+  const panelAlturaPxRef = useRef(panelAlturaPx);
+  useEffect(() => { panelAlturaPxRef.current = panelAlturaPx; }, [panelAlturaPx]);
 
   // ─── Animación de marcador/cámara (interpolación GPS) ──────────────────────
   // Un único loop de requestAnimationFrame anima marcador y cámara juntos, desde la
@@ -753,6 +830,24 @@ export default function MapaTILA({
     moverCamara(() => aplicarEncuadre(puntos));
   }, [moverCamara, aplicarEncuadre]);
 
+  // Cuánto desplazar (en píxeles de pantalla) el centro real de la cámara para que el
+  // camión no quede en el centro geométrico del contenedor del mapa, sino pegado arriba
+  // del panel flotante inferior — como un navegador GPS real. Lee el alto real del div
+  // del mapa (mapRef.current!.getDiv().clientHeight — el mismo contenedor sea cual sea
+  // la unidad CSS de `altura`) y panelAlturaPxRef (el prop más reciente, ver el efecto
+  // que lo sincroniza). Si el panel ocupa poco o nada, el resultado tiende a 0 y la
+  // cámara queda centrada como siempre — nunca vuelve a un valor "peor" que el centro.
+  const calcularOffsetVerticalCamara = useCallback((): number => {
+    if (!mapRef.current) return 0;
+    const alturaMapaPx = mapRef.current.getDiv().clientHeight;
+    if (!alturaMapaPx) return 0;
+    const yDeseadoDesdeArriba = Math.max(
+      alturaMapaPx / 2,
+      alturaMapaPx - panelAlturaPxRef.current - MARGEN_SOBRE_PANEL_PX
+    );
+    return yDeseadoDesdeArriba - alturaMapaPx / 2;
+  }, []);
+
   // ─── Paso de animación (un solo loop de rAF para marcador + cámara) ───────
   // Interpola linealmente lat/lng entre animacionInicioRef y animacionDestinoRef (a
   // las distancias de dos fixes GPS consecutivos, decenas de metros, una interpolación
@@ -798,7 +893,12 @@ export default function MapaTILA({
           ? puntoAdelantado({ lat: latActual, lng: lngActual }, headingActual, LOOK_AHEAD_METROS)
           : { lat: latActual, lng: lngActual };
         moverCamara(() => {
-          mapRef.current!.setCenter(centroCamara);
+          // Desplaza el centro real hacia arriba en pantalla, para que el camión
+          // (en centroCamara) quede pegado arriba del panel, no en el centro geométrico.
+          const centroFinal = puntoConOffsetVerticalPx(
+            mapRef.current!, centroCamara, calcularOffsetVerticalCamara()
+          ) ?? centroCamara;
+          mapRef.current!.setCenter(centroFinal);
           if (headingActual !== null) {
             mapRef.current!.setHeading(headingActual);
             ultimoHeadingNavegacionRef.current = headingActual;
@@ -814,7 +914,7 @@ export default function MapaTILA({
     } else {
       animacionFrameRef.current = null;
     }
-  }, [modoNavegacion, moverCamara]);
+  }, [modoNavegacion, moverCamara, calcularOffsetVerticalCamara]);
   useEffect(() => {
     pasoAnimacionRef.current = pasoAnimacion;
   }, [pasoAnimacion]);
@@ -935,6 +1035,14 @@ export default function MapaTILA({
       (result, status) => {
         if (miRequestId !== rutaRequestIdRef.current) return; // respuesta obsoleta
         setDiagnostico(d => ({ ...d, directionsStatus: status }));
+        // Cualquier ruta nueva que efectivamente se aplica (éxito o fallback) reinicia
+        // la ventana de gracia del detector de desvío — el cooldown pasa a contarse
+        // desde que la ruta ATERRIZÓ, no desde que se detectó el desvío original. Sin
+        // esto, el propio delay de red hacía que la posición (ya más adelante para
+        // cuando la respuesta llega) pareciera "todavía desviada" de la ruta recién
+        // calculada y disparara otro recálculo enseguida (ver el gate de arriba).
+        lecturasFueraDeRutaRef.current = 0;
+        ultimoRecalculoDesvioTsRef.current = Date.now();
         if (status === "OK" && result) {
           rutaPolylineRef.current = (result.routes?.[0]?.overview_path ?? []).map(p => ({ lat: p.lat(), lng: p.lng() }));
           setDirections(result);
@@ -1231,6 +1339,21 @@ export default function MapaTILA({
     const cambioDeParadas = paradasPendientesKeyRef.current !== key;
     const primerGps       = !primerGpsMultietapaRef.current;
 
+    // Mientras ya haya un recálculo en vuelo, un desvío que se siga detectando en el
+    // medio NO dispara uno nuevo en cadena — ésta era la causa real del "bucle de Ruta
+    // recalculada": cada recálculo tardaba el viaje de ida y vuelta a Directions, el
+    // chofer seguía moviéndose mientras tanto y llegaba a destino todavía "desviado"
+    // de la ruta recién aplicada, disparando inmediatamente otro. Cambio de paradas /
+    // primer GPS sí se respetan siempre (motivos legítimos que nunca deben perderse —
+    // quedan encolados vía dispararCalculoNav/recalculoPendienteNavRef).
+    if (calculandoRutaNavRef.current) {
+      if (cambioDeParadas || primerGps) {
+        primerGpsMultietapaRef.current = true;
+        dispararCalculoNav();
+      }
+      return;
+    }
+
     // El desvío sólo se evalúa cuando no hay ya un motivo legítimo distinto para
     // recalcular (cambio de paradas / primer GPS) — evita contar lecturas "fuera de
     // ruta" contra una polyline que de todos modos está por reemplazarse.
@@ -1364,13 +1487,21 @@ export default function MapaTILA({
     if (!choferMarkerRef.current) {
       choferMarkerRef.current = new google.maps.Marker({
         map: mapa,
-        icon: construirIconoChofer(),
+        icon: construirIconoChofer(autoResuelto === "noche"),
         title: "Posición actual",
         zIndex: 10,
       });
     }
     return choferMarkerRef.current;
-  }, []);
+  }, [autoResuelto]);
+
+  // Prende/apaga los faros delanteros en vivo (setIcon), sin esperar un remount del
+  // mapa — sólo cuando ya hay un marcador creado; si todavía no existe, onMapLoad ya lo
+  // va a crear con el valor de autoResuelto vigente en ese momento (ver arriba).
+  useEffect(() => {
+    if (!choferMarkerRef.current) return;
+    choferMarkerRef.current.setIcon(construirIconoChofer(autoResuelto === "noche"));
+  }, [autoResuelto]);
 
   const onMapLoad = useCallback((mapa: google.maps.Map) => {
     mapRef.current = mapa;
@@ -1501,7 +1632,10 @@ export default function MapaTILA({
       : { lat, lng };
 
     moverCamara(() => {
-      mapRef.current!.setCenter(centroCamara);
+      const centroFinal = puntoConOffsetVerticalPx(
+        mapRef.current!, centroCamara, calcularOffsetVerticalCamara()
+      ) ?? centroCamara;
+      mapRef.current!.setCenter(centroFinal);
       mapRef.current!.setZoom(ZOOM_NAVEGACION);
       mapRef.current!.setTilt(TILT_NAVEGACION);
       if (headingFinal !== null) {
@@ -1509,7 +1643,29 @@ export default function MapaTILA({
         ultimoHeadingNavegacionRef.current = headingFinal;
       }
     });
-  }, [lat, lng, heading, moverCamara, actualizarSeguimiento]);
+  }, [lat, lng, heading, moverCamara, actualizarSeguimiento, calcularOffsetVerticalCamara]);
+
+  // Reaplica el centrado con offset ya mismo cuando cambia panelAlturaPx, sin esperar al
+  // próximo tick de GPS — así "Cuando cambia la altura del panel" el camión se reacomoda
+  // en el momento (p. ej. al expandir/minimizar), no recién cuando llegue el siguiente fix.
+  // Sólo actúa si ya se está siguiendo al chofer y hay una posición visual conocida; si no,
+  // no hace nada (el próximo restaurarCamaraNavegacion/pasoAnimacion ya van a leer el valor
+  // actualizado de panelAlturaPxRef de todos modos).
+  useEffect(() => {
+    if (!modoNavegacion || !siguiendoChoferRef.current || !mapRef.current) return;
+    const posicion = posicionVisualActualRef.current;
+    if (!posicion) return;
+    const centroCamara = posicion.heading !== null
+      ? puntoAdelantado({ lat: posicion.lat, lng: posicion.lng }, posicion.heading, LOOK_AHEAD_METROS)
+      : { lat: posicion.lat, lng: posicion.lng };
+    moverCamara(() => {
+      const centroFinal = puntoConOffsetVerticalPx(
+        mapRef.current!, centroCamara, calcularOffsetVerticalCamara()
+      ) ?? centroCamara;
+      mapRef.current!.setCenter(centroFinal);
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [panelAlturaPx, modoNavegacion, moverCamara, calcularOffsetVerticalCamara]);
 
   // Este useMemo debe ejecutarse SIEMPRE, incluso mientras el script de Maps
   // todavía no cargó (isLoaded === false). Antes vivía después de los dos
@@ -1583,16 +1739,19 @@ export default function MapaTILA({
   // renderizan dos instancias con la misma `directions`/`path`: una más gruesa y oscura
   // debajo (zIndex 1) y una más angosta y amarilla encima (zIndex 2) — sigue siendo UNA
   // sola ruta/decisión de datos, sólo con dos trazos visuales para más contraste.
+  // Casing: sólo un halo sutil (antes 16/0.5, mucho más marcado) para que la línea
+  // amarilla sea la protagonista y se sigan leyendo los nombres de calle debajo.
+  // Principal: color/grosor/opacidad ajustados a spec (#FFD54F, 16px, 0.65).
   const rutaCasingOptions = useMemo<google.maps.PolylineOptions>(() => ({
     strokeColor: "#18181b",
-    strokeWeight: 10,
-    strokeOpacity: 0.85,
+    strokeWeight: 20,
+    strokeOpacity: 0.3,
     zIndex: 1,
   }), []);
   const rutaPrincipalOptions = useMemo<google.maps.PolylineOptions>(() => ({
-    strokeColor: "#facc15",
-    strokeWeight: 6,
-    strokeOpacity: 1,
+    strokeColor: "#FFD54F",
+    strokeWeight: 16,
+    strokeOpacity: 0.65,
     zIndex: 2,
   }), []);
   const directionsCasingOptions = useMemo<google.maps.DirectionsRendererOptions>(() => ({
