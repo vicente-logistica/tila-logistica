@@ -343,11 +343,12 @@ interface MapaTILAProps {
    *  detecta el evento y arma el texto; no sabe si la voz está activa ni cómo reproducirla,
    *  eso lo decide quien la use (ver app/utils/vozNavegacion.ts). */
   onAnuncioVoz?: (mensaje: string) => void;
-  /** Alto real en píxeles del panel flotante inferior (viaje-activo) — usado sólo en
-   *  modoNavegacion para que el camión no quede centrado en la pantalla completa, sino
-   *  pegado arriba del panel (ver puntoConOffsetVerticalPx/calcularOffsetVerticalCamara).
-   *  Sin este prop (0 por defecto), el comportamiento es el de siempre: centrado. */
-  panelAlturaPx?: number;
+  /** Coordenada Y real (viewport, getBoundingClientRect().top) del borde superior del
+   *  panel flotante inferior (viaje-activo) — usado sólo en modoNavegacion para que el
+   *  camión no quede centrado en la pantalla completa, sino pegado arriba del panel (ver
+   *  puntoConOffsetVerticalPx/calcularOffsetVerticalCamara). undefined (por defecto): sin
+   *  panel conocido, comportamiento de siempre — centrado, sin offset. */
+  panelTopPx?: number;
 }
 
 const formatearDistancia = (metros: number) =>
@@ -522,7 +523,7 @@ export default function MapaTILA({
   vozActiva = false,
   onToggleVoz,
   onAnuncioVoz,
-  panelAlturaPx = 0,
+  panelTopPx,
 }: MapaTILAProps) {
   const { isLoaded, loadError } = useJsApiLoader({
     googleMapsApiKey: process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || "",
@@ -550,6 +551,9 @@ export default function MapaTILA({
   // movimientos programáticos seguidos podían dejar timeouts superpuestos y liberar
   // programaticoRef en medio de una actualización todavía en curso.
   const programaticoTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Mismo motivo que programaticoTimeoutRef, pero para restaurandoCamaraRef — cancela el
+  // timeout anterior si llega una nueva restauración antes de que se cumpla.
+  const restaurandoCamaraTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Últimas dos posiciones conocidas — respaldo para calcular un bearing cuando el
   // heading del GPS no está disponible (ver restaurarCamaraNavegacion).
   const historialPosicionRef = useRef<{
@@ -559,11 +563,16 @@ export default function MapaTILA({
   // Último heading que efectivamente se aplicó a la cámara de navegación — último
   // recurso del fallback de heading; nunca se fuerza 0 por defecto.
   const ultimoHeadingNavegacionRef = useRef<number | null>(null);
-  // Espejo en ref del prop panelAlturaPx — permite que pasoAnimacion/restaurarCamaraNavegacion
+  // Espejo en ref del prop panelTopPx — permite que pasoAnimacion/restaurarCamaraNavegacion
   // (callbacks estables) lean siempre el valor MÁS RECIENTE sin tener que ir en sus arrays
   // de dependencias (mismo patrón que autoResueltoRef más abajo).
-  const panelAlturaPxRef = useRef(panelAlturaPx);
-  useEffect(() => { panelAlturaPxRef.current = panelAlturaPx; }, [panelAlturaPx]);
+  const panelTopPxRef = useRef(panelTopPx);
+  useEffect(() => { panelTopPxRef.current = panelTopPx; }, [panelTopPx]);
+  // true mientras restaurarCamaraNavegacion ("Mi ubicación") está aplicando su propia
+  // actualización atómica de cámara — pasoAnimacion y el efecto de panelTopPx NO escriben
+  // sobre center/heading mientras esto sea true, para que exista una única autoridad de
+  // cámara en cada momento (evita que compitan y produzcan el "viaje" errático reportado).
+  const restaurandoCamaraRef = useRef(false);
 
   // ─── Animación de marcador/cámara (interpolación GPS) ──────────────────────
   // Un único loop de requestAnimationFrame anima marcador y cámara juntos, desde la
@@ -788,6 +797,9 @@ export default function MapaTILA({
       if (programaticoTimeoutRef.current !== null) {
         clearTimeout(programaticoTimeoutRef.current);
       }
+      if (restaurandoCamaraTimeoutRef.current !== null) {
+        clearTimeout(restaurandoCamaraTimeoutRef.current);
+      }
       if (animacionFrameRef.current !== null) {
         cancelAnimationFrame(animacionFrameRef.current);
       }
@@ -832,20 +844,29 @@ export default function MapaTILA({
 
   // Cuánto desplazar (en píxeles de pantalla) el centro real de la cámara para que el
   // camión no quede en el centro geométrico del contenedor del mapa, sino pegado arriba
-  // del panel flotante inferior — como un navegador GPS real. Lee el alto real del div
-  // del mapa (mapRef.current!.getDiv().clientHeight — el mismo contenedor sea cual sea
-  // la unidad CSS de `altura`) y panelAlturaPxRef (el prop más reciente, ver el efecto
-  // que lo sincroniza). Si el panel ocupa poco o nada, el resultado tiende a 0 y la
-  // cámara queda centrada como siempre — nunca vuelve a un valor "peor" que el centro.
+  // del panel flotante inferior — como un navegador GPS real. Usa el RECTÁNGULO REAL del
+  // contenedor del mapa (getBoundingClientRect, no sólo su alto) y la posición REAL del
+  // borde superior del panel (panelTopPxRef — ver el efecto que la sincroniza, medida en
+  // el padre con getBoundingClientRect también) para calcular el área visible efectiva:
+  //   visibleTop    = mapRect.top
+  //   visibleBottom = panelTopPx (el panel puede no empezar exactamente en el borde
+  //                   inferior del contenedor del mapa; por eso no alcanza con restar
+  //                   sólo una altura, hace falta la posición real).
+  // El objetivo es "justo arriba del panel, con margen" — clamp para que NUNCA quede por
+  // encima del propio borde superior del mapa (cortado) ni, si el panel es muy alto,
+  // vuelva a caer cerca del centro (eso fue exactamente el bug: preferir "cerca del
+  // centro" antes que "arriba del panel" dejaba al camión tapado cuando el panel crecía).
+  // Sin panelTopPx conocido (undefined): 0 — sin offset, centrado, comportamiento de siempre.
   const calcularOffsetVerticalCamara = useCallback((): number => {
     if (!mapRef.current) return 0;
-    const alturaMapaPx = mapRef.current.getDiv().clientHeight;
-    if (!alturaMapaPx) return 0;
-    const yDeseadoDesdeArriba = Math.max(
-      alturaMapaPx / 2,
-      alturaMapaPx - panelAlturaPxRef.current - MARGEN_SOBRE_PANEL_PX
-    );
-    return yDeseadoDesdeArriba - alturaMapaPx / 2;
+    const panelTop = panelTopPxRef.current;
+    if (panelTop === undefined) return 0;
+    const mapRect = mapRef.current.getDiv().getBoundingClientRect();
+    if (mapRect.height <= 0) return 0;
+    const visibleTop = mapRect.top;
+    const yObjetivo = Math.max(visibleTop + MARGEN_SOBRE_PANEL_PX, panelTop - MARGEN_SOBRE_PANEL_PX);
+    const centroMapaY = mapRect.top + mapRect.height / 2;
+    return yObjetivo - centroMapaY;
   }, []);
 
   // ─── Paso de animación (un solo loop de rAF para marcador + cámara) ───────
@@ -885,7 +906,10 @@ export default function MapaTILA({
     }
 
     if (modoNavegacion) {
-      if (siguiendoChoferRef.current) {
+      // Mientras restaurarCamaraNavegacion ("Mi ubicación") está aplicando su propia
+      // actualización atómica, este tick NO toca la cámara — evita la doble escritura
+      // que producía el "viaje" errático de zoom/encuadre reportado.
+      if (siguiendoChoferRef.current && !restaurandoCamaraRef.current) {
         // Look-ahead: si hay rumbo válido, la cámara centra un poco adelante del
         // vehículo (en su dirección real de marcha), no exactamente sobre él — el
         // marcador ya se posicionó arriba en la coordenada GPS real, sin desplazar.
@@ -1631,28 +1655,51 @@ export default function MapaTILA({
       ? puntoAdelantado({ lat, lng }, headingFinal, LOOK_AHEAD_METROS)
       : { lat, lng };
 
+    // Bloquea a pasoAnimacion y al efecto de panelTopPx mientras esta restauración está
+    // en curso — una única autoridad de cámara a la vez. Se libera solo, con timeout
+    // (mismo patrón que programaticoTimeoutRef): 600ms alcanza de sobra para el vuelo
+    // que hace moveCamera, incluso con cambios grandes de zoom/tilt/heading a la vez.
+    if (restaurandoCamaraTimeoutRef.current !== null) {
+      clearTimeout(restaurandoCamaraTimeoutRef.current);
+    }
+    restaurandoCamaraRef.current = true;
+    restaurandoCamaraTimeoutRef.current = setTimeout(() => {
+      restaurandoCamaraRef.current = false;
+      restaurandoCamaraTimeoutRef.current = null;
+    }, 600);
+
     moverCamara(() => {
       const centroFinal = puntoConOffsetVerticalPx(
         mapRef.current!, centroCamara, calcularOffsetVerticalCamara()
       ) ?? centroCamara;
-      mapRef.current!.setCenter(centroFinal);
-      mapRef.current!.setZoom(ZOOM_NAVEGACION);
-      mapRef.current!.setTilt(TILT_NAVEGACION);
+      // Una sola llamada atómica (moveCamera) en vez de setCenter/setZoom/setTilt/
+      // setHeading por separado: con mapas vectoriales (tilt 3D), llamar a esos setters
+      // uno por uno hace que Google anime cada propiedad como un "vuelo" independiente —
+      // con un cambio grande de zoom/tilt/heading a la vez (típico al volver de "Ver
+      // recorrido completo" o del encuadre inicial, muy alejado, a la vista de
+      // navegación), eso producía el alejamiento-y-vuelta reportado. moveCamera aplica
+      // las cuatro propiedades como una única transición coordinada.
       if (headingFinal !== null) {
-        mapRef.current!.setHeading(headingFinal);
         ultimoHeadingNavegacionRef.current = headingFinal;
       }
+      mapRef.current!.moveCamera({
+        center: centroFinal,
+        zoom: ZOOM_NAVEGACION,
+        tilt: TILT_NAVEGACION,
+        heading: headingFinal ?? mapRef.current!.getHeading() ?? 0,
+      });
     });
   }, [lat, lng, heading, moverCamara, actualizarSeguimiento, calcularOffsetVerticalCamara]);
 
-  // Reaplica el centrado con offset ya mismo cuando cambia panelAlturaPx, sin esperar al
-  // próximo tick de GPS — así "Cuando cambia la altura del panel" el camión se reacomoda
-  // en el momento (p. ej. al expandir/minimizar), no recién cuando llegue el siguiente fix.
-  // Sólo actúa si ya se está siguiendo al chofer y hay una posición visual conocida; si no,
-  // no hace nada (el próximo restaurarCamaraNavegacion/pasoAnimacion ya van a leer el valor
-  // actualizado de panelAlturaPxRef de todos modos).
+  // Reaplica el centrado con offset ya mismo cuando cambia panelTopPx (expandir/minimizar,
+  // cambio de orientación, resize — lo que sea que haya movido el borde superior del
+  // panel), sin esperar al próximo tick de GPS. Sólo actúa si ya se está siguiendo al
+  // chofer, hay una posición visual conocida, y NO hay una restauración de cámara en
+  // curso (restaurandoCamaraRef) — si no, no hace nada (el próximo
+  // restaurarCamaraNavegacion/pasoAnimacion ya van a leer el panelTopPxRef actualizado).
   useEffect(() => {
     if (!modoNavegacion || !siguiendoChoferRef.current || !mapRef.current) return;
+    if (restaurandoCamaraRef.current) return;
     const posicion = posicionVisualActualRef.current;
     if (!posicion) return;
     const centroCamara = posicion.heading !== null
@@ -1665,7 +1712,7 @@ export default function MapaTILA({
       mapRef.current!.setCenter(centroFinal);
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [panelAlturaPx, modoNavegacion, moverCamara, calcularOffsetVerticalCamara]);
+  }, [panelTopPx, modoNavegacion, moverCamara, calcularOffsetVerticalCamara]);
 
   // Este useMemo debe ejecutarse SIEMPRE, incluso mientras el script de Maps
   // todavía no cargó (isLoaded === false). Antes vivía después de los dos

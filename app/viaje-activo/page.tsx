@@ -111,22 +111,28 @@ export default function ViajeActivoPage() {
   // Arranca minimizado: el mapa debe ser la prioridad visual durante la conducción.
   // Sin localStorage a propósito — sólo dura mientras este viaje siga montado.
   const [panelExpandido, setPanelExpandido]   = useState(false);
-  // Alto real del panel flotante inferior, en píxeles — se lo pasamos a MapaTILA para
-  // que ubique al camión pegado arriba del panel en vez de en el centro de la pantalla
-  // (ver panelAlturaPx en MapaTILA). Medido con ResizeObserver (no derivado de
-  // panelExpandido a mano) para que también reaccione a cambios de contenido dentro del
-  // panel que no vengan de expandir/minimizar (p. ej. el aviso de pago apareciendo).
+  // Posición Y real (viewport, getBoundingClientRect().top) del borde superior del panel
+  // flotante inferior — se la pasamos a MapaTILA para que ubique al camión pegado arriba
+  // del panel, no sólo restando una altura (ver panelTopPx en MapaTILA). Se remide con
+  // ResizeObserver (cambios de tamaño del panel — expandir/minimizar, contenido nuevo
+  // como el aviso de pago) y también en resize/orientationchange (cambios del viewport
+  // que no necesariamente redimensionan el panel en sí).
   const panelRef = useRef<HTMLDivElement>(null);
-  const [panelAlturaPx, setPanelAlturaPx] = useState(0);
+  const [panelTopPx, setPanelTopPx] = useState<number | undefined>(undefined);
   useEffect(() => {
     const el = panelRef.current;
     if (!el) return;
-    const observer = new ResizeObserver(entries => {
-      const alto = entries[0]?.contentRect.height;
-      if (alto !== undefined) setPanelAlturaPx(alto);
-    });
+    const medir = () => setPanelTopPx(el.getBoundingClientRect().top);
+    const observer = new ResizeObserver(medir);
     observer.observe(el);
-    return () => observer.disconnect();
+    window.addEventListener("resize", medir);
+    window.addEventListener("orientationchange", medir);
+    medir();
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", medir);
+      window.removeEventListener("orientationchange", medir);
+    };
   }, []);
   const [mostrarChat, setMostrarChat]         = useState(false);
   const [mostrarDetalles, setMostrarDetalles] = useState(false);
@@ -837,7 +843,7 @@ export default function ViajeActivoPage() {
           vozActiva={vozActiva}
           onToggleVoz={toggleVoz}
           onAnuncioVoz={onAnuncioVoz}
-          panelAlturaPx={panelAlturaPx}
+          panelTopPx={panelTopPx}
         />
       </div>
 
