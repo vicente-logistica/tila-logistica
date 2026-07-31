@@ -38,6 +38,16 @@ const TILT_NAVEGACION = 65;
 const DURACION_ANIMACION_MIN_MS = 300;
 const DURACION_ANIMACION_MAX_MS = 3000;
 
+// Predicción limitada (dead-reckoning acotado): a 80-120km/h, un solo hueco entre fixes
+// GPS más largo que DURACION_ANIMACION_MAX_MS ya representa decenas de metros — con la
+// duración fija de antes, la animación llegaba al destino y el vehículo quedaba
+// congelado el resto del hueco, y el siguiente fix producía un salto de "alcance".
+// En vez de eso, pasoAnimacion sigue avanzando más allá del destino usando el último
+// heading+velocidad reales conocidos (ver velocidadMPorMsRef), acotado a este máximo —
+// pasado este límite sin un fix nuevo, recién ahí se queda quieto de verdad (mejor eso
+// que "inventar" posición indefinidamente si el GPS realmente se cortó).
+const EXTRAPOLACION_MAX_MS = 2000;
+
 // ─── Look-ahead de cámara (comportamiento tipo Google Maps/Waze) ──────────────
 // Mientras se sigue al chofer con rumbo conocido, la cámara no centra exactamente sobre
 // el vehículo: centra un poco más adelante, en la dirección de marcha — así se ve más
@@ -585,6 +595,10 @@ export default function MapaTILA({
   const animacionInicioTsRef    = useRef(0);
   const animacionDuracionRef    = useRef(DURACION_ANIMACION_MAX_MS);
   const posicionVisualActualRef = useRef<{ lat: number; lng: number; heading: number | null } | null>(null);
+  // Velocidad real (metros/milisegundo) entre los últimos dos fixes GPS reales — se
+  // recalcula en cada animarHaciaPosicion y sólo se usa para la extrapolación acotada de
+  // pasoAnimacion cuando el PRÓXIMO fix tarda más que la animación en curso.
+  const velocidadMPorMsRef      = useRef(0);
   const ultimoTickTsRef         = useRef<number | null>(null);
   // Ref-al-callback-más-reciente: permite que pasoAnimacion se re-programe a sí mismo
   // (vía requestAnimationFrame) sin una auto-referencia directa a su propia const (evita
@@ -886,17 +900,37 @@ export default function MapaTILA({
       return;
     }
     const ahora = performance.now();
-    const t = Math.min(1, (ahora - animacionInicioTsRef.current) / animacionDuracionRef.current);
+    const msTranscurridos = ahora - animacionInicioTsRef.current;
 
-    const latActual = inicio.lat + (destino.lat - inicio.lat) * t;
-    const lngActual = inicio.lng + (destino.lng - inicio.lng) * t;
-    let headingActual: number | null;
-    if (destino.heading === null) {
-      headingActual = inicio.heading;
-    } else if (inicio.heading === null) {
-      headingActual = destino.heading;
+    let latActual: number, lngActual: number, headingActual: number | null;
+
+    if (msTranscurridos <= animacionDuracionRef.current) {
+      // Interpolación normal entre el último fix real conocido y el actual.
+      const t = Math.min(1, msTranscurridos / animacionDuracionRef.current);
+      latActual = inicio.lat + (destino.lat - inicio.lat) * t;
+      lngActual = inicio.lng + (destino.lng - inicio.lng) * t;
+      if (destino.heading === null) {
+        headingActual = inicio.heading;
+      } else if (inicio.heading === null) {
+        headingActual = destino.heading;
+      } else {
+        headingActual = interpolarHeading(inicio.heading, destino.heading, t);
+      }
     } else {
-      headingActual = interpolarHeading(inicio.heading, destino.heading, t);
+      // Ya se llegó al destino real y el PRÓXIMO fix todavía no llegó — predicción
+      // limitada (ver EXTRAPOLACION_MAX_MS): seguir avanzando con el último rumbo y
+      // velocidad reales conocidos, en vez de congelarse a esperar.
+      const msExtrapolados = Math.min(msTranscurridos - animacionDuracionRef.current, EXTRAPOLACION_MAX_MS);
+      headingActual = destino.heading ?? inicio.heading;
+      if (velocidadMPorMsRef.current > 0 && headingActual !== null) {
+        const distanciaExtra = velocidadMPorMsRef.current * msExtrapolados;
+        const puntoExtra = puntoAdelantado({ lat: destino.lat, lng: destino.lng }, headingActual, distanciaExtra);
+        latActual = puntoExtra.lat;
+        lngActual = puntoExtra.lng;
+      } else {
+        latActual = destino.lat;
+        lngActual = destino.lng;
+      }
     }
 
     posicionVisualActualRef.current = { lat: latActual, lng: lngActual, heading: headingActual };
@@ -933,7 +967,10 @@ export default function MapaTILA({
       moverCamara(() => { mapRef.current!.setCenter({ lat: latActual, lng: lngActual }); });
     }
 
-    if (t < 1) {
+    // Sigue animando durante la interpolación normal Y durante la ventana de
+    // extrapolación acotada — recién más allá de eso (ningún fix nuevo llegó en todo
+    // ese tiempo) se corta el loop y el vehículo se queda quieto de verdad.
+    if (msTranscurridos < animacionDuracionRef.current + EXTRAPOLACION_MAX_MS) {
       animacionFrameRef.current = requestAnimationFrame(() => pasoAnimacionRef.current());
     } else {
       animacionFrameRef.current = null;
@@ -951,11 +988,22 @@ export default function MapaTILA({
   // desde donde el ojo lo ve, en vez de saltar hacia atrás al último punto "oficial".
   const animarHaciaPosicion = useCallback((latDestino: number, lngDestino: number, headingDestino: number | null) => {
     const ahora = performance.now();
-    const intervalo = ultimoTickTsRef.current === null ? DURACION_ANIMACION_MAX_MS : ahora - ultimoTickTsRef.current;
-    const duracion = Math.min(DURACION_ANIMACION_MAX_MS, Math.max(DURACION_ANIMACION_MIN_MS, intervalo));
+    const intervaloReal = ultimoTickTsRef.current === null ? null : ahora - ultimoTickTsRef.current;
     ultimoTickTsRef.current = ahora;
 
-    animacionInicioRef.current  = posicionVisualActualRef.current ?? { lat: latDestino, lng: lngDestino, heading: headingDestino };
+    const origen = posicionVisualActualRef.current ?? { lat: latDestino, lng: lngDestino, heading: headingDestino };
+
+    // Velocidad real (metros/ms) entre la última posición visual y este fix — sólo se
+    // recalcula con intervalos reales (>100ms, para no amplificar ruido de fixes casi
+    // simultáneos) y sólo se usa como respaldo si el PRÓXIMO fix tarda (ver pasoAnimacion).
+    if (intervaloReal !== null && intervaloReal > 100) {
+      const distanciaReal = distanciaMetros(origen, { lat: latDestino, lng: lngDestino });
+      velocidadMPorMsRef.current = distanciaReal / intervaloReal;
+    }
+
+    const duracion = Math.min(DURACION_ANIMACION_MAX_MS, Math.max(DURACION_ANIMACION_MIN_MS, intervaloReal ?? DURACION_ANIMACION_MAX_MS));
+
+    animacionInicioRef.current  = origen;
     animacionDestinoRef.current = { lat: latDestino, lng: lngDestino, heading: headingDestino };
     animacionInicioTsRef.current = ahora;
     animacionDuracionRef.current = duracion;
@@ -1429,6 +1477,14 @@ export default function MapaTILA({
   useEffect(() => {
     if (!modoNavegacion || modoMultiChofer) return;
     if (!lat || !lng) return;
+    // Mientras haya un recálculo en vuelo, rutaPolylineRef todavía es la ruta VIEJA (está
+    // por reemplazarse) — seguir recortándola contra la posición actual sólo mostraría un
+    // trazo cada vez más alejado/incorrecto durante la espera a Directions, mucho más
+    // notorio a alta velocidad (el vehículo se aleja más rápido mientras se espera la
+    // respuesta). Se congela la última traza ya mostrada; en cuanto la ruta nueva
+    // reemplace a rutaPolylineRef, este efecto corre de nuevo (dispara por el cambio de
+    // `directions`) y muestra sólo la ruta nueva, nunca una mezcla de ambas.
+    if (calculandoRutaNavRef.current) return;
     const polyline = rutaPolylineRef.current;
     if (polyline.length < 2) {
       setRutaVisibleDesdeVehiculo([]);
