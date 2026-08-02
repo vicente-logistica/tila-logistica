@@ -41,6 +41,16 @@ const TILT_NAVEGACION = 65;
 const DURACION_ANIMACION_MIN_MS = 300;
 const DURACION_ANIMACION_MAX_MS = 3000;
 
+// pasoAnimacion corre una vez por frame de rAF — en pantallas de 90-120Hz eso es
+// escribir center/heading de la cámara hasta ~120 veces por segundo (confirmado con
+// evidencia real: moverCamaraPasoAnimPorSeg/eventosCenterPorSeg ~118-119 en la prueba
+// en dispositivo). El marcador puede/debe seguir así de fluido, pero la CÁMARA no
+// necesita esa frecuencia — cada setCenter dispara su propia transición interna en el
+// mapa vectorial, y actualizarla muy por encima de lo perceptible sólo agrega ruido.
+// Limitada a 12.5Hz (80ms): dentro del rango 10-15Hz pedido, muy por encima del
+// umbral de movimiento fluido percibido por el ojo (~24fps).
+const INTERVALO_MIN_CAMARA_MS = 80;
+
 // Predicción limitada (dead-reckoning acotado): a 80-120km/h, un solo hueco entre fixes
 // GPS más largo que DURACION_ANIMACION_MAX_MS ya representa decenas de metros — con la
 // duración fija de antes, la animación llegaba al destino y el vehículo quedaba
@@ -603,6 +613,10 @@ export default function MapaTILA({
   // pasoAnimacion cuando el PRÓXIMO fix tarda más que la animación en curso.
   const velocidadMPorMsRef      = useRef(0);
   const ultimoTickTsRef         = useRef<number | null>(null);
+  // Última vez (performance.now()) que pasoAnimacion efectivamente escribió sobre la
+  // cámara — gate de frecuencia, ver INTERVALO_MIN_CAMARA_MS. El marcador/
+  // posicionVisualActualRef NO pasan por este gate: siguen actualizándose en cada frame.
+  const ultimaActualizacionCamaraTsRef = useRef(0);
   // Ref-al-callback-más-reciente: permite que pasoAnimacion se re-programe a sí mismo
   // (vía requestAnimationFrame) sin una auto-referencia directa a su propia const (evita
   // el ciclo de declaración) y sin quedar nunca con una versión vieja del closure — mismo
@@ -996,7 +1010,12 @@ export default function MapaTILA({
       // Mientras restaurarCamaraNavegacion ("Mi ubicación") está aplicando su propia
       // actualización atómica, este tick NO toca la cámara — evita la doble escritura
       // que producía el "viaje" errático de zoom/encuadre reportado.
-      if (siguiendoChoferRef.current && !restaurandoCamaraRef.current) {
+      if (
+        siguiendoChoferRef.current
+        && !restaurandoCamaraRef.current
+        && ahora - ultimaActualizacionCamaraTsRef.current >= INTERVALO_MIN_CAMARA_MS
+      ) {
+        ultimaActualizacionCamaraTsRef.current = ahora;
         // Look-ahead: si hay rumbo válido, la cámara centra un poco adelante del
         // vehículo (en su dirección real de marcha), no exactamente sobre él — el
         // marcador ya se posicionó arriba en la coordenada GPS real, sin desplazar.
