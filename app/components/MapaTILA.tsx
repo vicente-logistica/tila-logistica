@@ -8,6 +8,9 @@ import {
   Polyline,
 } from "@react-google-maps/api";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+// TILA_NAV_DIAG — logger temporal en memoria, ver app/utils/diagLoggerNav.ts. Borrar
+// este import junto con el resto de la instrumentación cuando se retire el diagnóstico.
+import { diagLog, diagObtenerTexto, diagContarEventos, diagLimpiar } from "../utils/diagLoggerNav";
 
 const LIBRARIES: ("places" | "geometry" | "drawing")[] = [];
 
@@ -669,6 +672,11 @@ export default function MapaTILA({
     modoActivo: "iniciando",
   });
 
+  // TILA_NAV_DIAG: estado de la pantalla de diagnóstico temporal — quitar junto con
+  // el resto de la instrumentación.
+  const [mostrarDiagNav, setMostrarDiagNav] = useState(false);
+  const [, setDiagRefrescoTick] = useState(0);
+
   const modoMultiChofer = choferes && choferes.length > 0;
   const tieneParadas    = paradas && paradas.length >= 2;
   const contenedorEstilo = {
@@ -736,6 +744,7 @@ export default function MapaTILA({
     // operar sobre una instancia destruida; choferMarkerRef.current en null hace
     // que asegurarMarcadorChofer cree un marcador nuevo en vez de reusar uno
     // atado al mapa viejo ya destruido.
+    diagLog(`[TILA_NAV_DIAG] TEARDOWN marcador (prepararRemountTema) t=${Math.round(performance.now())}`);
     mapRef.current = null;
     choferMarkerRef.current = null;
     // Cancela cualquier animación en vuelo: seguiría escribiendo sobre un marcador/mapa
@@ -781,9 +790,37 @@ export default function MapaTILA({
     return () => clearInterval(intervalo);
   }, [tema, prepararRemountTema]);
 
+  // TILA_NAV_DIAG: contadores de diagnóstico temporal — no cambian ninguna lógica,
+  // sólo se leen/incrementan para el heartbeat de instrumentación. Remover junto con
+  // el resto del diagnóstico una vez conseguida la evidencia pedida.
+  const diagContadoresRef = useRef({
+    moverCamaraPasoAnim: 0,
+    moverCamaraOtros: 0,
+    eventoCenterChanged: 0,
+    eventoHeadingChanged: 0,
+    eventoZoomChanged: 0,
+    eventoTiltChanged: 0,
+    eventoIdle: 0,
+    marcadorFaltante: 0,
+    posicionNoFinita: 0,
+  });
+  // TILA_NAV_DIAG: valores para el heartbeat de 1s — sólo lectura, ninguno decide nada.
+  const diagUltimoHeadingAplicadoRef  = useRef<number | null>(null);
+  const diagUltimaFuenteHeadingRef    = useRef<string>("?");
+  const diagHeadingCalculadoRef       = useRef<number | null>(null);
+  const diagDistanciaGpsVisualRef     = useRef<number | null>(null);
+  const diagExtrapolandoRef           = useRef(false);
+
   // ─── Único punto que puede tocar el mapa imperativamente ──────────────────
-  const moverCamara = useCallback((mover: () => void) => {
+  const moverCamara = useCallback((mover: () => void, origen: string = "?") => {
     if (!mapRef.current) return;
+    // TILA_NAV_DIAG: sólo cuenta/loguea, no cambia ninguna decisión.
+    if (origen === "pasoAnimacion") {
+      diagContadoresRef.current.moverCamaraPasoAnim++;
+    } else {
+      diagContadoresRef.current.moverCamaraOtros++;
+      diagLog(`[TILA_NAV_DIAG] moverCamara origen=${origen} t=${Math.round(performance.now())}`);
+    }
     // Si ya había un timeout pendiente de una llamada anterior, se cancela: así dos
     // moverCamara() seguidos no dejan timeouts superpuestos que liberen
     // programaticoRef en medio de una actualización todavía en curso.
@@ -846,14 +883,14 @@ export default function MapaTILA({
       if (encuadreInicialHechoRef.current) return;
       encuadreInicialHechoRef.current = true;
     }
-    moverCamara(() => aplicarEncuadre(puntos));
+    moverCamara(() => aplicarEncuadre(puntos), "encuadrarPuntos");
   }, [modoNavegacion, moverCamara, aplicarEncuadre]);
 
   // Encuadre bajo demanda — botón "Ver recorrido completo". Ignora el flag de una-sola-vez
   // porque es una acción explícita del usuario, no un recentrado automático.
   const encuadrarPuntosForzado = useCallback((puntos: google.maps.LatLngLiteral[]) => {
     if (puntos.length === 0) return;
-    moverCamara(() => aplicarEncuadre(puntos));
+    moverCamara(() => aplicarEncuadre(puntos), "encuadrarPuntosForzado");
   }, [moverCamara, aplicarEncuadre]);
 
   // Cuánto desplazar (en píxeles de pantalla) el centro real de la cámara para que el
@@ -933,10 +970,26 @@ export default function MapaTILA({
       }
     }
 
+    // TILA_NAV_DIAG: no cambia ninguna decisión, sólo alimenta el heartbeat.
+    diagExtrapolandoRef.current = msTranscurridos > animacionDuracionRef.current;
+    const ultimoGpsRealDiag = historialPosicionRef.current.actual;
+    if (ultimoGpsRealDiag) {
+      diagDistanciaGpsVisualRef.current = distanciaMetros(ultimoGpsRealDiag, { lat: latActual, lng: lngActual });
+    }
+    if (!Number.isFinite(latActual) || !Number.isFinite(lngActual)) {
+      diagContadoresRef.current.posicionNoFinita++;
+      diagLog(`[TILA_NAV_DIAG] ALERTA posición no finita lat=${latActual} lng=${lngActual} t=${Math.round(performance.now())}`);
+    }
+
     posicionVisualActualRef.current = { lat: latActual, lng: lngActual, heading: headingActual };
 
     if (choferMarkerRef.current) {
       choferMarkerRef.current.setPosition({ lat: latActual, lng: lngActual });
+    } else {
+      // TILA_NAV_DIAG: evidencia directa de "el marcador desaparece" — si esto se ve en
+      // logcat durante la prueba, el marcador realmente no existe en ese momento.
+      diagContadoresRef.current.marcadorFaltante++;
+      diagLog(`[TILA_NAV_DIAG] ALERTA choferMarkerRef.current es null en pasoAnimacion t=${Math.round(performance.now())}`);
     }
 
     if (modoNavegacion) {
@@ -960,11 +1013,14 @@ export default function MapaTILA({
           if (headingActual !== null) {
             mapRef.current!.setHeading(headingActual);
             ultimoHeadingNavegacionRef.current = headingActual;
+            // TILA_NAV_DIAG
+            diagUltimoHeadingAplicadoRef.current = headingActual;
+            diagUltimaFuenteHeadingRef.current = "pasoAnimacion";
           }
-        });
+        }, "pasoAnimacion");
       }
     } else {
-      moverCamara(() => { mapRef.current!.setCenter({ lat: latActual, lng: lngActual }); });
+      moverCamara(() => { mapRef.current!.setCenter({ lat: latActual, lng: lngActual }); }, "pasoAnimacion-lectura");
     }
 
     // Sigue animando durante la interpolación normal Y durante la ventana de
@@ -1002,6 +1058,24 @@ export default function MapaTILA({
     }
 
     const duracion = Math.min(DURACION_ANIMACION_MAX_MS, Math.max(DURACION_ANIMACION_MIN_MS, intervaloReal ?? DURACION_ANIMACION_MAX_MS));
+
+    // TILA_NAV_DIAG: heading calculado por bearing entre los dos últimos fixes GPS REALES
+    // (no se usa para nada, sólo se loguea/guarda para comparar contra el heading crudo y
+    // el heading finalmente aplicado). historialPosicionRef ya se actualizó antes de
+    // llamar a esta función (ver el efecto que la invoca).
+    const { previa: gpsPrevioDiag, actual: gpsActualDiag } = historialPosicionRef.current;
+    let headingCalculadoDiag: number | null = null;
+    if (gpsPrevioDiag && gpsActualDiag) {
+      const distGpsDiag = distanciaMetros(gpsPrevioDiag, gpsActualDiag);
+      if (distGpsDiag >= 3) headingCalculadoDiag = calcularBearing(gpsPrevioDiag, gpsActualDiag);
+    }
+    diagHeadingCalculadoRef.current = headingCalculadoDiag;
+    diagLog(
+      `[TILA_NAV_DIAG] fixGPS lat=${latDestino.toFixed(6)} lng=${lngDestino.toFixed(6)} `
+      + `headingCrudo=${headingDestino ?? "null"} headingCalculado=${headingCalculadoDiag ?? "null"} `
+      + `intervaloRealMs=${intervaloReal ?? "null"} velocidadMs=${(velocidadMPorMsRef.current * 1000).toFixed(2)} `
+      + `t=${Math.round(ahora)}`
+    );
 
     animacionInicioRef.current  = origen;
     animacionDestinoRef.current = { lat: latDestino, lng: lngDestino, heading: headingDestino };
@@ -1096,6 +1170,10 @@ export default function MapaTILA({
     const miRequestId = ++rutaRequestIdRef.current;
     setDiagnostico(d => ({ ...d, directionsStatus: "calculando..." }));
 
+    // TILA_NAV_DIAG: origen/destino EXACTOS enviados a Directions para este pedido.
+    const origenDiag = typeof origin === "string" ? origin : `${origin.lat.toFixed(6)},${origin.lng.toFixed(6)}`;
+    diagLog(`[TILA_NAV_DIAG] calcularRuta requestId=${miRequestId} origen=${origenDiag} destino=${destinationStr} waypoints=${waypoints.length} t=${Math.round(performance.now())}`);
+
     directionsServiceRef.current.route(
       {
         origin,
@@ -1105,6 +1183,7 @@ export default function MapaTILA({
         travelMode: google.maps.TravelMode.DRIVING,
       },
       (result, status) => {
+        diagLog(`[TILA_NAV_DIAG] respuesta Directions requestId=${miRequestId} status=${status} obsoleta=${miRequestId !== rutaRequestIdRef.current} t=${Math.round(performance.now())}`);
         if (miRequestId !== rutaRequestIdRef.current) return; // respuesta obsoleta
         setDiagnostico(d => ({ ...d, directionsStatus: status }));
         // Cualquier ruta nueva que efectivamente se aplica (éxito o fallback) reinicia
@@ -1420,6 +1499,7 @@ export default function MapaTILA({
     // quedan encolados vía dispararCalculoNav/recalculoPendienteNavRef).
     if (calculandoRutaNavRef.current) {
       if (cambioDeParadas || primerGps) {
+        diagLog(`[TILA_NAV_DIAG] desvio-efecto: recálculo en vuelo pero cambioDeParadas/primerGps → encola t=${Math.round(performance.now())}`);
         primerGpsMultietapaRef.current = true;
         dispararCalculoNav();
       }
@@ -1446,10 +1526,12 @@ export default function MapaTILA({
           lecturasFueraDeRutaRef.current = 0;
         }
       }
+      diagLog(`[TILA_NAV_DIAG] desvio-efecto distanciaAPolyline=${distancia === null ? "null" : Math.round(distancia)} lecturasFueraDeRuta=${lecturasFueraDeRutaRef.current} desvioConfirmado=${desvioConfirmado} t=${Math.round(performance.now())}`);
     }
 
     if (!cambioDeParadas && !primerGps && !desvioConfirmado) return; // nada relevante cambió
 
+    diagLog(`[TILA_NAV_DIAG] desvio-efecto DISPARANDO dispararCalculoNav cambioDeParadas=${cambioDeParadas} primerGps=${primerGps} desvioConfirmado=${desvioConfirmado} t=${Math.round(performance.now())}`);
     primerGpsMultietapaRef.current = true;
     dispararCalculoNav();
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1502,6 +1584,46 @@ export default function MapaTILA({
     indiceRutaVisibleRef.current = indice;
     setRutaVisibleDesdeVehiculo(puntos);
   }, [lat, lng, directions, polylinePuntos, modoNavegacion, modoMultiChofer]);
+
+  // ─── TILA_NAV_DIAG: heartbeat de diagnóstico (1s) ──────────────────────────
+  // Snapshot consolidado de todo lo pedido para el diagnóstico — no lee nada que no
+  // exista ya, no cambia ninguna decisión, no toca cámara/marcador/ruta. Quitar junto
+  // con el resto de la instrumentación una vez conseguida la evidencia.
+  useEffect(() => {
+    if (!modoNavegacion || modoMultiChofer) return;
+    const contadorPrevio = { ...diagContadoresRef.current };
+    const intervalo = setInterval(() => {
+      const ahora = performance.now();
+      const gpsReal = historialPosicionRef.current.actual;
+      const visual = posicionVisualActualRef.current;
+      const edadFixMs = ultimoTickTsRef.current === null ? "null" : Math.round(ahora - ultimoTickTsRef.current);
+      const c = diagContadoresRef.current;
+      const marcador = choferMarkerRef.current;
+      diagLog(
+        `[TILA_NAV_DIAG] HEARTBEAT `
+        + `gpsReal=${gpsReal ? `${gpsReal.lat.toFixed(6)},${gpsReal.lng.toFixed(6)}` : "null"} `
+        + `visual=${visual ? `${visual.lat.toFixed(6)},${visual.lng.toFixed(6)}` : "null"} `
+        + `distGpsVisualM=${diagDistanciaGpsVisualRef.current === null ? "null" : diagDistanciaGpsVisualRef.current.toFixed(1)} `
+        + `edadFixMs=${edadFixMs} extrapolando=${diagExtrapolandoRef.current} `
+        + `headingGps=${headingValido(heading) ?? "null"} headingCalculado=${diagHeadingCalculadoRef.current ?? "null"} `
+        + `headingAplicado=${diagUltimoHeadingAplicadoRef.current ?? "null"}(${diagUltimaFuenteHeadingRef.current}) `
+        + `mapHeadingReal=${mapRef.current?.getHeading() ?? "null"} `
+        + `siguiendoChofer=${siguiendoChoferRef.current} restaurandoCamara=${restaurandoCamaraRef.current} calculandoRuta=${calculandoRutaNavRef.current} `
+        + `marcadorExiste=${!!marcador} marcadorAdjunto=${marcador ? !!marcador.getMap() : "n/a"} `
+        + `moverCamaraPasoAnimPorSeg=${c.moverCamaraPasoAnim - contadorPrevio.moverCamaraPasoAnim} `
+        + `eventosCenterPorSeg=${c.eventoCenterChanged - contadorPrevio.eventoCenterChanged} `
+        + `eventosHeadingPorSeg=${c.eventoHeadingChanged - contadorPrevio.eventoHeadingChanged} `
+        + `eventosZoomPorSeg=${c.eventoZoomChanged - contadorPrevio.eventoZoomChanged} `
+        + `eventosTiltPorSeg=${c.eventoTiltChanged - contadorPrevio.eventoTiltChanged} `
+        + `eventosIdlePorSeg=${c.eventoIdle - contadorPrevio.eventoIdle} `
+        + `marcadorFaltanteTotal=${c.marcadorFaltante} posicionNoFinitaTotal=${c.posicionNoFinita} `
+        + `t=${Math.round(ahora)}`
+      );
+      Object.assign(contadorPrevio, c);
+    }, 1000);
+    return () => clearInterval(intervalo);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [modoNavegacion, modoMultiChofer, heading]);
 
   // ─── Navegación por voz: giro próximo y ruta recalculada ───────────────────
   // Sólo LEE estado ya existente (directions, lat/lng) — no toca calcularRuta,
@@ -1565,6 +1687,7 @@ export default function MapaTILA({
   // sí se posiciona una vez, sin animar, para el primer paint / cada remount de tema.
   const asegurarMarcadorChofer = useCallback((mapa: google.maps.Map): google.maps.Marker => {
     if (!choferMarkerRef.current) {
+      diagLog(`[TILA_NAV_DIAG] CREANDO marcador nuevo t=${Math.round(performance.now())}`);
       choferMarkerRef.current = new google.maps.Marker({
         map: mapa,
         icon: construirIconoChofer(autoResuelto === "noche"),
@@ -1584,9 +1707,11 @@ export default function MapaTILA({
   }, [autoResuelto]);
 
   const onMapLoad = useCallback((mapa: google.maps.Map) => {
+    diagLog(`[TILA_NAV_DIAG] onMapLoad (mount/remount) t=${Math.round(performance.now())} teniaSnapshot=${!!camaraSnapshotRef.current}`);
     mapRef.current = mapa;
     if (!modoMultiChofer) {
       const marker = asegurarMarcadorChofer(mapa);
+      diagLog(`[TILA_NAV_DIAG] asegurarMarcadorChofer devolvió marker existente=${!!choferMarkerRef.current} t=${Math.round(performance.now())}`);
       if (lat && lng) {
         // Posicionamiento instantáneo, sin animar: es el primer paint del mapa (o un
         // remount por cambio de tema) — no hay una posición visual previa desde la cual
@@ -1602,6 +1727,9 @@ export default function MapaTILA({
     // comentario junto a `opciones` más abajo) y `setOptions` los reaplicaría sin
     // parar, pisando cualquier gesto manual o el heading real de marcha.
     if (camaraSnapshotRef.current) {
+      // TILA_NAV_DIAG: esta escritura de heading/tilt NO pasa por moverCamara — se
+      // loguea acá aparte porque es el tercer punto que toca el mapa imperativamente.
+      diagLog(`[TILA_NAV_DIAG] moverCamara origen=onMapLoad-remount(fuera de moverCamara) heading=${camaraSnapshotRef.current.heading} tilt=${camaraSnapshotRef.current.tilt} t=${Math.round(performance.now())}`);
       mapa.setHeading(camaraSnapshotRef.current.heading);
       mapa.setTilt(camaraSnapshotRef.current.tilt);
     }
@@ -1621,6 +1749,16 @@ export default function MapaTILA({
       mapa.addListener("tilt_changed", () => {
         if (!programaticoRef.current) actualizarSeguimiento(false);
       });
+
+      // TILA_NAV_DIAG: listeners ADICIONALES, sólo para contar — no tocan
+      // actualizarSeguimiento ni ninguna otra lógica existente. Sirven para ver si
+      // Google dispara MÁS eventos de cámara que las veces que nosotros llamamos a
+      // setCenter/setHeading/moveCamera (evidencia de animación interna encadenada).
+      mapa.addListener("center_changed", () => { diagContadoresRef.current.eventoCenterChanged++; });
+      mapa.addListener("heading_changed", () => { diagContadoresRef.current.eventoHeadingChanged++; });
+      mapa.addListener("zoom_changed", () => { diagContadoresRef.current.eventoZoomChanged++; });
+      mapa.addListener("tilt_changed", () => { diagContadoresRef.current.eventoTiltChanged++; });
+      mapa.addListener("idle", () => { diagContadoresRef.current.eventoIdle++; });
     }
   }, [asegurarMarcadorChofer, lat, lng, heading, modoMultiChofer, modoNavegacion, actualizarSeguimiento]);
 
@@ -1684,16 +1822,23 @@ export default function MapaTILA({
     actualizarSeguimiento(true);
 
     let headingFinal: number | null = null;
+    let diagFuenteHeading = "ninguna";
     if (heading !== null && heading !== undefined && !Number.isNaN(heading)) {
       headingFinal = normalizarHeading(heading);
+      diagFuenteHeading = "gps";
     } else {
       const { previa, actual } = historialPosicionRef.current;
       if (previa && actual && distanciaMetros(previa, actual) >= 3) {
         headingFinal = calcularBearing(previa, actual);
+        diagFuenteHeading = "bearing";
       } else if (ultimoHeadingNavegacionRef.current !== null) {
         headingFinal = ultimoHeadingNavegacionRef.current;
+        diagFuenteHeading = "ultimoUsado";
       }
     }
+    diagLog(`[TILA_NAV_DIAG] restaurarCamaraNavegacion headingFinal=${headingFinal ?? "null"} fuente=${diagFuenteHeading} t=${Math.round(performance.now())}`);
+    diagUltimoHeadingAplicadoRef.current = headingFinal;
+    diagUltimaFuenteHeadingRef.current = `restaurarCamaraNavegacion:${diagFuenteHeading}`;
 
     // Esta es una reposición instantánea y explícita del usuario — no una animación de
     // GPS — así que cancela cualquier interpolación todavía en vuelo (si no, el próximo
@@ -1744,7 +1889,7 @@ export default function MapaTILA({
         tilt: TILT_NAVEGACION,
         heading: headingFinal ?? mapRef.current!.getHeading() ?? 0,
       });
-    });
+    }, "restaurarCamaraNavegacion");
   }, [lat, lng, heading, moverCamara, actualizarSeguimiento, calcularOffsetVerticalCamara]);
 
   // Reaplica el centrado con offset ya mismo cuando cambia panelTopPx (expandir/minimizar,
@@ -1766,7 +1911,7 @@ export default function MapaTILA({
         mapRef.current!, centroCamara, calcularOffsetVerticalCamara()
       ) ?? centroCamara;
       mapRef.current!.setCenter(centroFinal);
-    });
+    }, "panelTopPx-efecto");
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [panelTopPx, modoNavegacion, moverCamara, calcularOffsetVerticalCamara]);
 
@@ -2042,6 +2187,83 @@ export default function MapaTILA({
               {vozActiva ? "🔊" : "🔇"}
             </button>
           )}
+          {/* TILA_NAV_DIAG: botón temporal — abre la pantalla de diagnóstico en memoria.
+              Quitar junto con el resto de la instrumentación. */}
+          <button
+            type="button"
+            onClick={() => setMostrarDiagNav(true)}
+            title="Diagnóstico de navegación"
+            aria-label="Abrir diagnóstico de navegación"
+            className="w-11 h-11 rounded-full bg-pink-600 border border-pink-300 text-white flex items-center justify-center text-lg shadow-lg active:scale-95 transition"
+          >
+            🐞
+          </button>
+        </div>
+      )}
+
+      {/* TILA_NAV_DIAG: pantalla de diagnóstico — texto seleccionable de todo lo
+          registrado en memoria, copiar y descargar. Temporal, quitar junto con el
+          resto de la instrumentación. */}
+      {mostrarDiagNav && (
+        <div className="absolute inset-0 z-50 bg-black/95 flex flex-col p-3">
+          <div className="flex items-center justify-between mb-2 gap-2">
+            <p className="text-yellow-400 font-black text-sm">
+              🐞 Diagnóstico navegación — {diagContarEventos()} eventos
+            </p>
+            <button
+              type="button"
+              onClick={() => setMostrarDiagNav(false)}
+              className="text-zinc-300 font-black text-sm px-3 py-1 rounded-lg bg-zinc-800"
+            >
+              Cerrar ✕
+            </button>
+          </div>
+          <div className="flex gap-2 mb-2">
+            <button
+              type="button"
+              onClick={async () => {
+                try {
+                  await navigator.clipboard.writeText(diagObtenerTexto());
+                } catch {
+                  // Sin Clipboard API disponible — el textarea de abajo sigue
+                  // permitiendo seleccionar todo y copiar a mano.
+                }
+              }}
+              className="flex-1 bg-yellow-400 text-black font-black text-xs py-2 rounded-lg"
+            >
+              Copiar todo
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                const blob = new Blob([diagObtenerTexto()], { type: "text/plain" });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = `tila_nav_diag_${Date.now()}.txt`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+              }}
+              className="flex-1 bg-zinc-700 text-white font-black text-xs py-2 rounded-lg"
+            >
+              Descargar .txt
+            </button>
+            <button
+              type="button"
+              onClick={() => { diagLimpiar(); setDiagRefrescoTick(t => t + 1); }}
+              className="flex-1 bg-red-700 text-white font-black text-xs py-2 rounded-lg"
+            >
+              Limpiar
+            </button>
+          </div>
+          <textarea
+            readOnly
+            value={diagObtenerTexto()}
+            className="flex-1 w-full bg-zinc-900 text-zinc-200 text-[10px] font-mono p-2 rounded-lg border border-zinc-700 resize-none"
+            onFocus={e => e.currentTarget.select()}
+          />
         </div>
       )}
 
