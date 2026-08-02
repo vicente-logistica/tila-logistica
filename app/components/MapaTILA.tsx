@@ -94,6 +94,12 @@ const COOLDOWN_RECALCULO_MS          = 8000;
 // Distancia a la que se anuncia por voz una maniobra próxima ("En X metros doblá...").
 const UMBRAL_AVISO_MANIOBRA_METROS = 150;
 
+// Salidas/bifurcaciones de autopista (maneuver "ramp-*"/"fork-*") — dos avisos en vez
+// de uno, con umbrales propios (no comparten UMBRAL_AVISO_MANIOBRA_METROS): uno lejano
+// para dar tiempo a ubicarse en el carril, uno cercano ya casi en la salida.
+const UMBRAL_AVISO_SALIDA_LEJANO_METROS  = 200;
+const UMBRAL_AVISO_SALIDA_CERCANO_METROS = 65;
+
 // Distancia geodésica simple (haversine) entre dos puntos, en metros.
 const distanciaMetros = (a: google.maps.LatLngLiteral, b: google.maps.LatLngLiteral): number => {
   const R = 6371000;
@@ -1651,6 +1657,11 @@ export default function MapaTILA({
   const vozDirectionsPrevRef = useRef<google.maps.DirectionsResult | null>(null);
   const pasosAnunciadosRef   = useRef<Set<number>>(new Set());
   const rutaKeyVozRef        = useRef<string | null>(null);
+  // Salidas/bifurcaciones de autopista (maneuver "ramp-*"/"fork-*") — dos avisos por
+  // step en vez de uno: 0 = ninguno todavía, 1 = aviso lejano ya dado, 2 = aviso
+  // cercano ya dado (no se vuelve a anunciar). Set aparte de pasosAnunciadosRef porque
+  // acá cada step puede pasar por dos anuncios, no uno solo.
+  const pasosSalidaAvisadosRef = useRef<Map<number, 0 | 1 | 2>>(new Map());
 
   // "Ruta recalculada" — cualquier cambio de `directions` DESPUÉS del primero (el primer
   // cálculo es el arranque normal del viaje, no un recálculo real).
@@ -1677,16 +1688,39 @@ export default function MapaTILA({
     if (rutaKeyVozRef.current !== rutaKey) {
       rutaKeyVozRef.current = rutaKey;
       pasosAnunciadosRef.current = new Set();
+      pasosSalidaAvisadosRef.current = new Map();
     }
 
     for (let i = 1; i < pasos.length; i++) {
+      const maniobra = pasos[i].maneuver ?? "";
+      const esSalida = maniobra.startsWith("ramp-") || maniobra.startsWith("fork-");
+
+      if (esSalida) {
+        const estado = pasosSalidaAvisadosRef.current.get(i) ?? 0;
+        if (estado >= 2) continue; // ya se dieron los dos avisos para este step
+        const inicioPaso = pasos[i].start_location;
+        if (!inicioPaso) continue;
+        const lado = maniobra.includes("right") ? "derecha" : maniobra.includes("left") ? "izquierda" : null;
+        if (!lado) continue;
+        const distancia = distanciaMetros({ lat, lng }, { lat: inicioPaso.lat(), lng: inicioPaso.lng() });
+        if (estado === 0 && distancia <= UMBRAL_AVISO_SALIDA_LEJANO_METROS) {
+          onAnuncioVoz(`En 200 metros, tomá la salida a la ${lado}.`);
+          pasosSalidaAvisadosRef.current.set(i, 1);
+          break; // una sola maniobra anunciada por tick, evita ráfagas
+        } else if (estado === 1 && distancia <= UMBRAL_AVISO_SALIDA_CERCANO_METROS) {
+          onAnuncioVoz(`En 65 metros, tomá la salida a la ${lado}.`);
+          pasosSalidaAvisadosRef.current.set(i, 2);
+          break;
+        }
+        continue;
+      }
+
       if (pasosAnunciadosRef.current.has(i)) continue;
       const inicioPaso = pasos[i].start_location;
       if (!inicioPaso) continue;
       const distancia = distanciaMetros({ lat, lng }, { lat: inicioPaso.lat(), lng: inicioPaso.lng() });
       if (distancia > UMBRAL_AVISO_MANIOBRA_METROS) continue;
 
-      const maniobra = pasos[i].maneuver ?? "";
       const metros = Math.round(distancia / 10) * 10;
       if (maniobra.includes("right")) {
         onAnuncioVoz(`En ${metros} metros doblá a la derecha.`);
