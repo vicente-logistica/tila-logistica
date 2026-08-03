@@ -91,6 +91,39 @@ const UMBRAL_DESVIO_INMEDIATO_METROS = 120;
 const LECTURAS_CONSECUTIVAS_DESVIO   = 2;
 const COOLDOWN_RECALCULO_MS          = 8000;
 
+// ─── Validación defensiva de fixes GPS (velocidad + consistencia de rumbo) ────
+// No se valida accuracy (page.tsx no la expone todavía). Filtros, en orden:
+//  0) Intervalo demasiado corto para confiar en una velocidad calculada (denominador
+//     inestable, dtMs < INTERVALO_MIN_VALIDACION_VELOCIDAD_MS): NUNCA se acepta un salto
+//     grande sólo porque llegó rápido. Si además la distancia es mínima (ruido de GPS de
+//     alta frecuencia, no un fix nuevo real) se acepta pero sin adelantar la base
+//     temporal — si la distancia es mayor, se rechaza directo como outlier, sin
+//     necesidad de calcular una velocidad implícita para justificarlo.
+//  1) Velocidad implícita (con dt ya confiable): techo físico absoluto. Un salto de
+//     posición grande con un dt igual de grande (p.ej. GPS mudo en un túnel) da una
+//     velocidad implícita baja y se acepta sin problema — sólo se rechaza distancia
+//     grande + tiempo corto.
+//  2) Consistencia de rumbo: la velocidad sola no alcanza — un salto lateral de varias
+//     decenas de metros puede quedar POR DEBAJO del techo de velocidad y aun así ser un
+//     fix erróneo (GPS multipath/rebote), si su dirección no coincide ni con el heading
+//     que reportó el GPS para ese fix ni con el rumbo de los últimos fixes YA ACEPTADOS
+//     (la trayectoria real reciente). Sólo se exige para saltos de cierto tamaño — a
+//     pocos metros el rumbo de un salto de GPS es ruido, no señal, incluso con el
+//     vehículo detenido. Ver evaluarConsistenciaFix / el useEffect junto a
+//     animarHaciaPosicion.
+const INTERVALO_MIN_VALIDACION_VELOCIDAD_MS = 300; // debajo de esto, la velocidad implícita no es confiable
+const UMBRAL_DUPLICADO_METROS               = 3;   // debajo de esto, con dt corto, se trata como ruido/duplicado
+const VELOCIDAD_MAX_FIX_MPS                 = 60;  // ~216 km/h, techo de lo físicamente plausible
+const UMBRAL_DISTANCIA_CONSISTENCIA_METROS  = 15;  // por debajo, no se exige coherencia de rumbo
+const UMBRAL_INCONSISTENCIA_RUMBO_GRADOS    = 90;  // por encima de esto respecto de AMBAS referencias, se rechaza
+
+// ─── Progreso monotónico sobre la ruta (compartido entre desvío y recorte visual) ──
+// Tolerancia de retroceso del índice de progreso: la búsqueda del punto más cercano
+// puede mirar hasta esta cantidad de tramos ANTES del índice actual (no sólo desde él
+// en adelante), para no quedar "clavada" si una lectura momentáneamente imprecisa la
+// adelantó de más. Nunca es un retroceso grande (toda la ruta), sólo estos tramos.
+const VENTANA_ATRAS_SEGMENTOS = 3;
+
 // Distancia a la que se anuncia por voz una maniobra próxima ("En X metros doblá...").
 const UMBRAL_AVISO_MANIOBRA_METROS = 150;
 
@@ -129,6 +162,83 @@ const calcularBearing = (a: google.maps.LatLngLiteral, b: google.maps.LatLngLite
 // animación de cámara como por el punto de partida de cada tramo interpolado.
 const headingValido = (h: number | null | undefined): number | null =>
   h !== null && h !== undefined && !Number.isNaN(h) ? h : null;
+
+// Diferencia angular absoluta entre dos rumbos, siempre en el rango 0-180°.
+const diferenciaAngularGrados = (a: number, b: number): number =>
+  Math.abs(((a - b + 540) % 360) - 180);
+
+// Evalúa si `nuevo` es un fix GPS plausible dado el último fix ACEPTADO (`anterior`,
+// con su timestamp) y, si existe, el aceptado antes de ése (`penultimo` — para poder
+// calcular el rumbo de la trayectoria reciente real). Filtros en cadena: intervalo
+// demasiado corto (duplicado vs. outlier — nunca se acepta un salto grande sólo porque
+// llegó rápido), velocidad implícita (techo físico absoluto) y, sólo para saltos de
+// cierta distancia, consistencia de rumbo contra el heading que reportó el GPS para
+// este fix y/o contra el rumbo de los últimos fixes ya aceptados — si NINGUNA
+// referencia disponible coincide con la dirección del salto, se rechaza. Si no hay
+// ninguna referencia de rumbo disponible (sin heading y sin fix previo al anterior),
+// no se puede evaluar consistencia y se acepta con sólo el filtro de velocidad.
+// `actualizarBase` en la respuesta positiva indica si el llamador debe correr
+// ultimoFixValidoRef/ultimoFixValidoTsRef a este fix (false sólo para duplicados de
+// alta frecuencia, ver más abajo). No decide nada sobre cámara/heading/voz — sólo si
+// este fix se usa o se descarta.
+const evaluarConsistenciaFix = (
+  anterior: google.maps.LatLngLiteral | null,
+  anteriorTs: number | null,
+  penultimo: google.maps.LatLngLiteral | null,
+  nuevo: google.maps.LatLngLiteral,
+  ahora: number,
+  headingGpsNuevo: number | null
+): { aceptado: true; actualizarBase: boolean } | { aceptado: false; motivo: string } => {
+  if (!anterior || anteriorTs === null) return { aceptado: true, actualizarBase: true }; // primer fix: nada contra qué comparar
+
+  const dtMs = ahora - anteriorTs;
+  const distancia = distanciaMetros(anterior, nuevo);
+
+  if (dtMs < INTERVALO_MIN_VALIDACION_VELOCIDAD_MS) {
+    // Intervalo demasiado corto para que una velocidad calculada sea confiable — nunca
+    // se acepta un salto grande sólo porque llegó rápido, así que acá NO se calcula
+    // velocidad implícita para decidir: sólo se mira la distancia.
+    if (distancia <= UMBRAL_DUPLICADO_METROS) {
+      // Fix casi idéntico llegado casi de inmediato — ruido/duplicado de alta
+      // frecuencia, no información nueva. Se acepta (se puede usar su posición) pero
+      // SIN adelantar la base temporal: si se adelantara, una ráfaga de duplicados
+      // podría ir "reseteando el reloj" indefinidamente y nunca acumular el dt
+      // necesario para poder evaluar velocidad/rumbo contra el próximo fix real.
+      return { aceptado: true, actualizarBase: false };
+    }
+    return {
+      aceptado: false,
+      motivo: `saltoRapido distancia=${Math.round(distancia)}m dtMs=${dtMs} (< ${INTERVALO_MIN_VALIDACION_VELOCIDAD_MS}ms)`,
+    };
+  }
+
+  const velocidadImplicita = distancia / (dtMs / 1000);
+  if (velocidadImplicita > VELOCIDAD_MAX_FIX_MPS) {
+    return {
+      aceptado: false,
+      motivo: `velocidadImplicita=${velocidadImplicita.toFixed(1)}m/s distancia=${Math.round(distancia)}m dtMs=${dtMs}`,
+    };
+  }
+
+  if (distancia < UMBRAL_DISTANCIA_CONSISTENCIA_METROS) return { aceptado: true, actualizarBase: true }; // salto chico: el rumbo no es señal confiable
+
+  const rumboSalto = calcularBearing(anterior, nuevo);
+  const referencias: number[] = [];
+  if (headingGpsNuevo !== null) referencias.push(headingGpsNuevo);
+  if (penultimo) referencias.push(calcularBearing(penultimo, anterior));
+  if (referencias.length === 0) return { aceptado: true, actualizarBase: true }; // sin heading ni tendencia previa: no se puede evaluar rumbo
+
+  const coincideConAlguna = referencias.some(
+    r => diferenciaAngularGrados(rumboSalto, r) <= UMBRAL_INCONSISTENCIA_RUMBO_GRADOS
+  );
+  if (!coincideConAlguna) {
+    return {
+      aceptado: false,
+      motivo: `rumboInconsistente salto=${Math.round(rumboSalto)}° referencias=[${referencias.map(r => Math.round(r)).join(",")}]° distancia=${Math.round(distancia)}m dtMs=${dtMs}`,
+    };
+  }
+  return { aceptado: true, actualizarBase: true };
+};
 
 // Punto a `distanciaM` metros de `origen`, en la dirección `headingGrados` — fórmula
 // estándar de "destino por rumbo y distancia" sobre una esfera. Usado para el look-ahead
@@ -222,19 +332,26 @@ const distanciaPuntoASegmentoMetros = (
   return Math.hypot(px - t * bx, py - t * by);
 };
 
-// Distancia mínima de un punto a una polyline (mínimo entre la distancia a cada tramo).
+// Distancia mínima de un punto a una polyline, buscando SÓLO desde `indiceDesde` menos
+// un pequeño margen de retroceso (VENTANA_ATRAS_SEGMENTOS) hacia adelante — no siempre
+// desde el principio de la ruta. Devuelve también el índice del tramo donde se encontró
+// la distancia mínima, para que el llamador pueda avanzar su progreso monotónico.
 // null si la polyline todavía no tiene al menos 2 puntos (ninguna ruta calculada aún).
+// `indiceDesde` en 0 (valor por defecto) reproduce un escaneo completo, útil cuando
+// todavía no hay progreso previo (primer GPS de una ruta nueva).
 const distanciaMinAPolyline = (
   p: google.maps.LatLngLiteral,
-  puntos: google.maps.LatLngLiteral[]
-): number | null => {
+  puntos: google.maps.LatLngLiteral[],
+  indiceDesde: number = 0
+): { distancia: number; indice: number } | null => {
   if (puntos.length < 2) return null;
-  let minimo = Infinity;
-  for (let i = 0; i < puntos.length - 1; i++) {
+  const desde = Math.min(Math.max(indiceDesde - VENTANA_ATRAS_SEGMENTOS, 0), puntos.length - 2);
+  let minimo = Infinity, mejorIndice = desde;
+  for (let i = desde; i < puntos.length - 1; i++) {
     const d = distanciaPuntoASegmentoMetros(p, puntos[i], puntos[i + 1]);
-    if (d < minimo) minimo = d;
+    if (d < minimo) { minimo = d; mejorIndice = i; }
   }
-  return minimo;
+  return { distancia: minimo, indice: mejorIndice };
 };
 
 // ─── Recorte visual de la traza (SOLO representación — rutaPolylineRef sigue intacta
@@ -275,7 +392,7 @@ const recortarRutaDesdeVehiculo = (
   indiceMinimo: number
 ): { puntos: google.maps.LatLngLiteral[]; indice: number } => {
   if (polyline.length < 2) return { puntos: polyline, indice: 0 };
-  const desde = Math.min(Math.max(indiceMinimo, 0), polyline.length - 2);
+  const desde = Math.min(Math.max(indiceMinimo - VENTANA_ATRAS_SEGMENTOS, 0), polyline.length - 2);
   let mejorIndice = desde, mejorDistancia = Infinity, mejorPunto = polyline[desde];
   for (let i = desde; i < polyline.length - 1; i++) {
     const { distancia, punto } = proyeccionEnSegmento(posicion, polyline[i], polyline[i + 1]);
@@ -1221,6 +1338,7 @@ export default function MapaTILA({
         ultimoRecalculoDesvioTsRef.current = Date.now();
         if (status === "OK" && result) {
           rutaPolylineRef.current = (result.routes?.[0]?.overview_path ?? []).map(p => ({ lat: p.lat(), lng: p.lng() }));
+          diagLog(`[TILA_NAV_DIAG] rutaPolylineRef REEMPLAZADA (referencia nueva) puntos=${rutaPolylineRef.current.length} requestId=${miRequestId} t=${Math.round(performance.now())}`);
           setDirections(result);
           setPolylinePuntos([]); // limpiar fallback si Directions funcionó
           encuadrarDesdeRuta(result);
@@ -1443,6 +1561,59 @@ export default function MapaTILA({
   const paradasPendientesKeyRef  = useRef<string | null>(null);
   const primerGpsMultietapaRef   = useRef(false);
 
+  // ─── Validación defensiva de fixes GPS (ver evaluarConsistenciaFix más arriba) ─────
+  // ultimoFixValidoRef/ultimoFixValidoTsRef: último fix ACEPTADO y cuándo. penultimoFixValidoRef:
+  // el aceptado antes de ése — sólo para poder calcular el rumbo de la trayectoria
+  // reciente real (independiente del heading que reporte el GPS). fixValidoActualRef: el
+  // resultado del tick de GPS actual (el fix si se aceptó, null si se rechazó) — todo lo
+  // que consume GPS (marcador/interpolación, desvío, progreso de ruta, recálculo) lee
+  // esto en vez de las props lat/lng crudas.
+  const ultimoFixValidoRef    = useRef<google.maps.LatLngLiteral | null>(null);
+  const ultimoFixValidoTsRef  = useRef<number | null>(null);
+  const penultimoFixValidoRef = useRef<google.maps.LatLngLiteral | null>(null);
+  const fixValidoActualRef    = useRef<google.maps.LatLngLiteral | null>(null);
+
+  // Corre PRIMERO en cada commit (declarado antes que el resto de los efectos que leen
+  // GPS: desvío, recorte visual, marcador/cámara), así fixValidoActualRef ya está
+  // actualizado para este tick cuando ellos se ejecutan — React corre los efectos en el
+  // orden en que se declaran dentro del componente. Delega la decisión de aceptar/
+  // rechazar en evaluarConsistenciaFix (velocidad + rumbo) — no toca cámara/interpolación
+  // en sí, sólo decide si este tick se procesa o se ignora por completo (igual que si el
+  // GPS no hubiera emitido nada en ese instante — la extrapolación acotada ya cubre esos
+  // huecos). El heading que se pasa es el que reportó el GPS PARA ESTE fix (prop `heading`,
+  // no se altera ni se usa para nada más acá).
+  useEffect(() => {
+    if (!lat || !lng) { fixValidoActualRef.current = null; return; }
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+      fixValidoActualRef.current = null;
+      diagLog(`[TILA_NAV_DIAG] gps-validacion RECHAZADO no-finito lat=${lat} lng=${lng}`);
+      return;
+    }
+    const nuevo  = { lat, lng };
+    const ahora  = Date.now();
+    const resultado = evaluarConsistenciaFix(
+      ultimoFixValidoRef.current,
+      ultimoFixValidoTsRef.current,
+      penultimoFixValidoRef.current,
+      nuevo,
+      ahora,
+      headingValido(heading)
+    );
+    if (!resultado.aceptado) {
+      fixValidoActualRef.current = null;
+      diagLog(`[TILA_NAV_DIAG] gps-validacion RECHAZADO ${resultado.motivo}`);
+      return;
+    }
+    // El fix se usa siempre que fue aceptado — sólo cambia si además adelanta la base
+    // (ver actualizarBase=false para duplicados de alta frecuencia en evaluarConsistenciaFix).
+    fixValidoActualRef.current = nuevo;
+    if (resultado.actualizarBase) {
+      penultimoFixValidoRef.current = ultimoFixValidoRef.current;
+      ultimoFixValidoRef.current    = nuevo;
+      ultimoFixValidoTsRef.current  = ahora;
+    }
+  }, [lat, lng, heading]);
+
   // Protección contra cálculos simultáneos: mientras calculandoRutaNavRef es true,
   // cualquier disparador nuevo sólo marca recalculoPendienteNavRef en vez de lanzar
   // una segunda llamada a Directions en paralelo. Al terminar la llamada en curso
@@ -1480,6 +1651,7 @@ export default function MapaTILA({
     if (pendientes.length === 0) return; // no queda ningún tramo por recorrer
 
     calculandoRutaNavRef.current    = true;
+    diagLog(`[TILA_NAV_DIAG] dispararCalculoNav: calculandoRutaNavRef=true origen=${latLng.lat.toFixed(6)},${latLng.lng.toFixed(6)} t=${Math.round(performance.now())}`);
     paradasPendientesKeyRef.current = pendientes.map(p => p.direccion).join("|");
 
     const destino   = pendientes[pendientes.length - 1].direccion;
@@ -1501,11 +1673,14 @@ export default function MapaTILA({
 
   useEffect(() => {
     if (!isLoaded || !modoNavegacion || !tieneParadas || modoMultiChofer) return;
-    if (!lat || !lng) return;
+    const fix = fixValidoActualRef.current;
+    if (!fix) return; // fix rechazado este tick — ni desvío ni recálculo lo usan
 
     // Siempre al día, se use o no en este tick — es lo que lee dispararCalculoNav
     // cuando drena un recálculo pendiente después de que termine el que está en vuelo.
-    ultimoLatLngConocidoRef.current    = { lat, lng };
+    // Se guarda el fix ya VALIDADO — así el origen de un recálculo nunca es un salto
+    // de GPS imposible.
+    ultimoLatLngConocidoRef.current    = fix;
     ultimasParadasConocidasRef.current = paradas!;
 
     const pendientes = paradas!.filter(p => p.estado !== "completada");
@@ -1536,9 +1711,14 @@ export default function MapaTILA({
     // ruta" contra una polyline que de todos modos está por reemplazarse.
     let desvioConfirmado = false;
     if (!cambioDeParadas && !primerGps) {
-      const distancia   = distanciaMinAPolyline({ lat, lng }, rutaPolylineRef.current);
+      // Búsqueda con progreso: sólo desde unos tramos antes del índice compartido en
+      // adelante (VENTANA_ATRAS_SEGMENTOS), no la polyline completa desde el principio —
+      // evita que un tramo ya recorrido o una calle paralela "gane" la distancia mínima.
+      const resultado   = distanciaMinAPolyline(fix, rutaPolylineRef.current, indiceRutaVisibleRef.current);
+      const distancia    = resultado?.distancia ?? null;
       const fueraDeRuta = distancia !== null && distancia >= UMBRAL_DESVIO_RUTA_METROS;
       const desvioObvio = distancia !== null && distancia >= UMBRAL_DESVIO_INMEDIATO_METROS;
+      if (resultado) indiceRutaVisibleRef.current = resultado.indice;
       lecturasFueraDeRutaRef.current = fueraDeRuta ? lecturasFueraDeRutaRef.current + 1 : 0;
       // Un desvío obvio (muy lejos de la ruta) no espera las lecturas consecutivas — a
       // esa distancia ya no es ruido de GPS. Un desvío moderado sí necesita confirmarse
@@ -1583,7 +1763,11 @@ export default function MapaTILA({
   // ni la detección de desvío o maniobras (que siguen leyendo rutaPolylineRef completa).
   useEffect(() => {
     if (!modoNavegacion || modoMultiChofer) return;
-    if (!lat || !lng) return;
+    // Congela la traza también ante un fix rechazado (mismo criterio que "recálculo en
+    // vuelo" más abajo): mejor mantener el último trazo válido que recortar contra una
+    // posición GPS descartada por implausible.
+    const fix = fixValidoActualRef.current;
+    if (!fix) return;
     // Mientras haya un recálculo en vuelo, rutaPolylineRef todavía es la ruta VIEJA (está
     // por reemplazarse) — seguir recortándola contra la posición actual sólo mostraría un
     // trazo cada vez más alejado/incorrecto durante la espera a Directions, mucho más
@@ -1598,16 +1782,19 @@ export default function MapaTILA({
       return;
     }
     // Ruta realmente nueva (referencia distinta — rutaPolylineRef se reasigna a un
-    // array nuevo en cada recálculo, ver calcularRuta) → reinicia el índice monotónico.
+    // array nuevo en cada recálculo, ver calcularRuta) → reinicia el índice monotónico
+    // COMPARTIDO (también usado por la detección de desvío, ver ese efecto más arriba).
     if (polyline !== ultimaRutaRefVistaRef.current) {
       ultimaRutaRefVistaRef.current = polyline;
       indiceRutaVisibleRef.current = 0;
+      diagLog(`[TILA_NAV_DIAG] recorte-efecto: ruta nueva detectada, indiceRutaVisibleRef reseteado a 0 puntosRuta=${polyline.length} t=${Math.round(performance.now())}`);
     }
     const { puntos, indice } = recortarRutaDesdeVehiculo(
-      polyline, { lat, lng }, MARGEN_RUTA_DETRAS_METROS, indiceRutaVisibleRef.current
+      polyline, fix, MARGEN_RUTA_DETRAS_METROS, indiceRutaVisibleRef.current
     );
     indiceRutaVisibleRef.current = indice;
     setRutaVisibleDesdeVehiculo(puntos);
+    diagLog(`[TILA_NAV_DIAG] recorte-efecto: rutaVisibleDesdeVehiculo REEMPLAZADA puntosVisibles=${puntos.length} indice=${indice} primerPunto=${puntos[0] ? `${puntos[0].lat.toFixed(6)},${puntos[0].lng.toFixed(6)}` : "n/a"} t=${Math.round(performance.now())}`);
   }, [lat, lng, directions, polylinePuntos, modoNavegacion, modoMultiChofer]);
 
   // ─── TILA_NAV_DIAG: heartbeat de diagnóstico (1s) ──────────────────────────
@@ -1833,18 +2020,20 @@ export default function MapaTILA({
   }, [choferes, moverCamara]);
 
   useEffect(() => {
-    if (!mapRef.current || !lat || !lng || modoMultiChofer) return;
+    if (!mapRef.current || modoMultiChofer) return;
+    const fix = fixValidoActualRef.current;
+    if (!fix) return; // fix rechazado este tick — no se mueve marcador/cámara con él
     // Historial de posiciones — respaldo para calcular un bearing en
     // restaurarCamaraNavegacion cuando el heading del GPS no esté disponible.
-    // Se mantiene al día siempre, con la posición GPS cruda (no la interpolada),
-    // independientemente de si el seguimiento está activo o pausado.
+    // Se mantiene al día siempre, con la posición GPS cruda validada (no la
+    // interpolada), independientemente de si el seguimiento está activo o pausado.
     historialPosicionRef.current = {
       previa: historialPosicionRef.current.actual,
-      actual: { lat, lng },
+      actual: fix,
     };
     // El marcador y la cámara (si corresponde) se actualizan juntos, de forma suave,
     // a través del único loop de animación — ya no hay un salto instantáneo acá.
-    animarHaciaPosicion(lat, lng, headingValido(heading));
+    animarHaciaPosicion(fix.lat, fix.lng, headingValido(heading));
   }, [lat, lng, heading, modoMultiChofer, animarHaciaPosicion]);
 
   // ─── Botones de control manual de cámara (solo modoNavegacion) ────────────

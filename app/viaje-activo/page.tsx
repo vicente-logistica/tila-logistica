@@ -9,7 +9,7 @@ import ChatAsistencia from "../components/ChatAsistencia";
 import ChatToast from "../components/ChatToast";
 import { registrarEvidenciaApi, estadoAEvento } from "../lib/evidencias";
 import { playChatSound } from "../utils/chatSound";
-import { hablar } from "../utils/vozNavegacion";
+import { hablar, detenerVoz } from "../utils/vozNavegacion";
 
 const LS_VOZ_ACTIVA = "tila_voz_activa";
 
@@ -92,6 +92,10 @@ export default function ViajeActivoPage() {
     setVozActiva(prev => {
       const nuevo = !prev;
       localStorage.setItem(LS_VOZ_ACTIVA, nuevo ? "1" : "0");
+      // Al silenciar, corta también cualquier locución YA en curso — sin esto, un
+      // anuncio que estaba hablando en el momento de tocar el botón seguía hasta
+      // terminar solo, dando la impresión de que el botón "no apaga realmente".
+      if (!nuevo) detenerVoz();
       return nuevo;
     });
   }, []);
