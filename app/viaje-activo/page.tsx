@@ -10,6 +10,7 @@ import ChatToast from "../components/ChatToast";
 import { registrarEvidenciaApi, estadoAEvento } from "../lib/evidencias";
 import { playChatSound } from "../utils/chatSound";
 import { hablar, detenerVoz } from "../utils/vozNavegacion";
+import { diagLog } from "../utils/diagLoggerNav";
 
 const LS_VOZ_ACTIVA = "tila_voz_activa";
 
@@ -83,6 +84,26 @@ export default function ViajeActivoPage() {
   const [bateriaCargando, setBateriaCargando] = useState<boolean | null>(null);
   const [bateriaDisponible, setBateriaDisponible] = useState(false);
   const [ultimaSenal, setUltimaSenal] = useState("");
+  // ─── GPS fresco vs. posición persistida ───────────────────────────────────
+  // viaje.lat/lng se pisa tanto por la carga inicial desde la base (última posición
+  // guardada de una sesión anterior, potencialmente vieja) como por watchPosition (GPS
+  // real de ESTA sesión) — MapaTILA no podía distinguir el origen. Mientras
+  // gpsFrescoDisponible sea false, NO se le pasa ninguna posición de navegación a
+  // MapaTILA (lat/lng van en null): más vale esperar unos segundos al primer fix real
+  // que arrancar el filtro GPS/detector de desvío/origen de recálculo anclados a una
+  // posición de la base de datos.
+  const [gpsFrescoDisponible, setGpsFrescoDisponible] = useState(false);
+  const [ultimoGpsFresco, setUltimoGpsFresco]         = useState<{ lat: number; lng: number } | null>(null);
+  // accuracy/timestamp del último GPS fresco: sólo se usan para loguear evidencia en el
+  // momento en que llegan (ver watchPosition más abajo), nada los vuelve a leer después
+  // ni dependen de disparar un re-render — van en refs, no en estado.
+  const accuracyGpsFrescoRef  = useRef<number | null>(null);
+  const timestampGpsFrescoRef = useRef<number | null>(null);
+  // Ref espejo de gpsFrescoDisponible: el callback de watchPosition vive dentro de un
+  // useEffect de larga duración (no se recrea en cada tick) — leer el STATE ahí adentro
+  // quedaría con el valor de cuando el efecto se armó (siempre false), marcando cada
+  // tick como "primero". El ref, en cambio, siempre está al día.
+  const gpsFrescoRecibidoRef = useRef(false);
   const [vozActiva, setVozActiva] = useState<boolean>(() => {
     if (typeof window === "undefined") return true;
     const guardado = localStorage.getItem(LS_VOZ_ACTIVA);
@@ -486,6 +507,24 @@ export default function ViajeActivoPage() {
         setGpsEstado("🟢"); setVelocidadGps(vel);
         setUltimaSenal(new Date(now).toLocaleTimeString("es-AR", { hour:"2-digit", minute:"2-digit" }));
         setViaje((prev: any) => prev ? { ...prev, lat, lng, velocidad: vel, gps_actualizado: now } : prev);
+
+        // GPS fresco de ESTA sesión (ver comentario junto a gpsFrescoDisponible más
+        // arriba) — es lo único que se le pasa a MapaTILA como posición de navegación.
+        if (Number.isFinite(lat) && Number.isFinite(lng)) {
+          const esPrimero = !gpsFrescoRecibidoRef.current;
+          gpsFrescoRecibidoRef.current = true;
+          setUltimoGpsFresco({ lat, lng });
+          accuracyGpsFrescoRef.current  = Number.isFinite(pos.coords.accuracy) ? pos.coords.accuracy : null;
+          timestampGpsFrescoRef.current = pos.timestamp;
+          if (esPrimero) setGpsFrescoDisponible(true);
+          diagLog(
+            `[TILA_NAV_DIAG] viaje-activo GPS_FRESCO_RECIBIDO primero=${esPrimero} `
+            + `accuracy=${Number.isFinite(pos.coords.accuracy) ? Math.round(pos.coords.accuracy) + "m" : "n/a"} `
+            + `timestamp=${pos.timestamp} `
+            + `latLngPersistida=${viaje?.lat ?? "n/a"},${viaje?.lng ?? "n/a"} `
+            + `latLngEnviadaAMapa=${lat.toFixed(6)},${lng.toFixed(6)}`
+          );
+        }
         if (usuarioRef.current?.id) {
           fetch("/api/cargas/gps", {
             method:  "PATCH",
@@ -838,7 +877,9 @@ export default function ViajeActivoPage() {
       {/* ─── MAPA ────────────────────────────────────────────────────────── */}
       <div className="absolute inset-0" style={{ height: "100dvh", width: "100vw" }}>
         <MapaTILA
-          lat={viaje?.lat} lng={viaje?.lng} heading={headingChofer}
+          lat={gpsFrescoDisponible ? ultimoGpsFresco?.lat ?? null : null}
+          lng={gpsFrescoDisponible ? ultimoGpsFresco?.lng ?? null : null}
+          heading={headingChofer}
           origen={viaje.origen} destino={viaje.destino}
           paradaActivaDireccion={destinoRuta}
           paradas={paradasParaMapa.length > 0 ? paradasParaMapa : undefined}
