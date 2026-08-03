@@ -332,6 +332,36 @@ const distanciaPuntoASegmentoMetros = (
   return Math.hypot(px - t * bx, py - t * by);
 };
 
+// Polyline DETALLADA de una respuesta de Directions, concatenando la geometría real de
+// cada step (leg.steps[].path[]) en vez de result.routes[0].overview_path. overview_path
+// es una versión simplificada (Douglas-Peucker) pensada para dibujar el mapa general a
+// bajo zoom — Google NO garantiza que su primer punto coincida con el origen real de la
+// ruta: un tramo inicial corto (p.ej. maniobra de entrada a la calle principal) puede
+// quedar "suavizado" y el primer punto del overview terminar a varias decenas de metros
+// del origen enviado. step.path[], en cambio, es la geometría densa y precisa de cada
+// tramo, y su primer punto coincide con legs[0].start_location (el origen real/snapeado).
+// Se deduplica el punto de unión entre steps consecutivos (el último punto de un step es
+// el mismo que el primero del siguiente) para no dejar segmentos de longitud cero que
+// puedan "ganar" espuriamente una búsqueda de distancia mínima.
+const construirPolylineDetalladaDesdeRuta = (
+  result: google.maps.DirectionsResult
+): google.maps.LatLngLiteral[] => {
+  const legs = result.routes?.[0]?.legs ?? [];
+  const puntos: google.maps.LatLngLiteral[] = [];
+  legs.forEach(leg => {
+    (leg.steps ?? []).forEach(step => {
+      (step.path ?? []).forEach(p => {
+        const punto = { lat: p.lat(), lng: p.lng() };
+        const anterior = puntos[puntos.length - 1];
+        if (!anterior || anterior.lat !== punto.lat || anterior.lng !== punto.lng) {
+          puntos.push(punto);
+        }
+      });
+    });
+  });
+  return puntos;
+};
+
 // Distancia mínima de un punto a una polyline, buscando SÓLO desde `indiceDesde` menos
 // un pequeño margen de retroceso (VENTANA_ATRAS_SEGMENTOS) hacia adelante — no siempre
 // desde el principio de la ruta. Devuelve también el índice del tramo donde se encontró
@@ -1337,8 +1367,28 @@ export default function MapaTILA({
         lecturasFueraDeRutaRef.current = 0;
         ultimoRecalculoDesvioTsRef.current = Date.now();
         if (status === "OK" && result) {
-          rutaPolylineRef.current = (result.routes?.[0]?.overview_path ?? []).map(p => ({ lat: p.lat(), lng: p.lng() }));
-          diagLog(`[TILA_NAV_DIAG] rutaPolylineRef REEMPLAZADA (referencia nueva) puntos=${rutaPolylineRef.current.length} requestId=${miRequestId} t=${Math.round(performance.now())}`);
+          // Geometría DETALLADA (steps[].path[]), no overview_path — ver
+          // construirPolylineDetalladaDesdeRuta más arriba: overview_path puede arrancar
+          // varias decenas de metros lejos del origen real por la simplificación de
+          // Google, lo que dejaba la traza nueva "despegada" del vehículo justo después
+          // de recalcular. Fallback a overview_path sólo si por algún motivo la ruta no
+          // trajera steps (no debería pasar con travelMode DRIVING).
+          const puntosOverview  = (result.routes?.[0]?.overview_path ?? []).map(p => ({ lat: p.lat(), lng: p.lng() }));
+          const puntosDetallados = construirPolylineDetalladaDesdeRuta(result);
+          rutaPolylineRef.current = puntosDetallados.length >= 2 ? puntosDetallados : puntosOverview;
+          const origenLatLng = typeof origin === "string" ? null : origin;
+          const primerPuntoNuevo = rutaPolylineRef.current[0] ?? null;
+          const distanciaOrigenAPrimerPunto = origenLatLng && primerPuntoNuevo
+            ? distanciaMetros(origenLatLng, primerPuntoNuevo)
+            : null;
+          diagLog(
+            `[TILA_NAV_DIAG] rutaPolylineRef REEMPLAZADA (referencia nueva) `
+            + `overviewPath=${puntosOverview.length}pts detallada=${puntosDetallados.length}pts `
+            + `origenGps=${origenDiag} `
+            + `primerPuntoUsado=${primerPuntoNuevo ? `${primerPuntoNuevo.lat.toFixed(6)},${primerPuntoNuevo.lng.toFixed(6)}` : "n/a"} `
+            + `distanciaOrigenAPrimerPunto=${distanciaOrigenAPrimerPunto !== null ? `${Math.round(distanciaOrigenAPrimerPunto)}m` : "n/a"} `
+            + `requestId=${miRequestId} t=${Math.round(performance.now())}`
+          );
           setDirections(result);
           setPolylinePuntos([]); // limpiar fallback si Directions funcionó
           encuadrarDesdeRuta(result);
@@ -1735,6 +1785,13 @@ export default function MapaTILA({
     }
 
     if (!cambioDeParadas && !primerGps && !desvioConfirmado) return; // nada relevante cambió
+
+    // Al confirmarse un desvío real, se limpia la traza visible YA, antes de pedirle la
+    // ruta nueva a Directions — así no queda ningún resto de la ruta anterior dibujado
+    // durante el (breve) viaje de ida y vuelta a la API. El efecto de recorte visual
+    // vuelve a dibujar en cuanto la ruta nueva aterriza (dispara por el cambio de
+    // `directions`/`polylinePuntos`).
+    if (desvioConfirmado) setRutaVisibleDesdeVehiculo([]);
 
     diagLog(`[TILA_NAV_DIAG] desvio-efecto DISPARANDO dispararCalculoNav cambioDeParadas=${cambioDeParadas} primerGps=${primerGps} desvioConfirmado=${desvioConfirmado} t=${Math.round(performance.now())}`);
     primerGpsMultietapaRef.current = true;
