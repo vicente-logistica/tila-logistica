@@ -117,6 +117,21 @@ const VELOCIDAD_MAX_FIX_MPS                 = 60;  // ~216 km/h, techo de lo fí
 const UMBRAL_DISTANCIA_CONSISTENCIA_METROS  = 15;  // por debajo, no se exige coherencia de rumbo
 const UMBRAL_INCONSISTENCIA_RUMBO_GRADOS    = 90;  // por encima de esto respecto de AMBAS referencias, se rechaza
 
+// ─── Reenganche controlado de la base de validación ───────────────────────────
+// Si la base (ultimoFixValidoRef) quedó anclada a un fix que en realidad no era un GPS
+// real y confiable de ESTA sesión (p.ej. la posición previa que trae el viaje desde la
+// base de datos, ya desactualizada), todos los fixes reales posteriores se rechazan
+// para siempre por velocidad/rumbo — no hay forma de que la base se autocorrija sola.
+// Este mecanismo es la salida de emergencia: si pasan muchos segundos sin aceptar
+// NINGÚN fix (UMBRAL_MS_SIN_ACEPTAR_PARA_REENGANCHE) y llegan varias lecturas RECHAZADAS
+// pero coherentes entre sí (a poca distancia una de la siguiente), se asume que esas
+// lecturas son el GPS real y la base vieja la que está mal — se reemplaza la base por
+// la última de esas lecturas. Nunca alcanza con una sola lectura rechazada (eso seguiría
+// siendo ruido); hacen falta varias seguidas y mutuamente cercanas.
+const UMBRAL_MS_SIN_ACEPTAR_PARA_REENGANCHE = 10000; // 10s sin aceptar ningún fix
+const UMBRAL_DISTANCIA_REENGANCHE_METROS    = 30;    // candidatos consecutivos deben estar a esta distancia entre sí
+const FIXES_REENGANCHE_REQUERIDOS           = 3;     // cantidad de candidatos coherentes seguidos para reemplazar la base
+
 // ─── Progreso monotónico sobre la ruta (compartido entre desvío y recorte visual) ──
 // Tolerancia de retroceso del índice de progreso: la búsqueda del punto más cercano
 // puede mirar hasta esta cantidad de tramos ANTES del índice actual (no sólo desde él
@@ -1622,6 +1637,22 @@ export default function MapaTILA({
   const ultimoFixValidoTsRef  = useRef<number | null>(null);
   const penultimoFixValidoRef = useRef<google.maps.LatLngLiteral | null>(null);
   const fixValidoActualRef    = useRef<google.maps.LatLngLiteral | null>(null);
+  // Candidatos a reenganche: fixes RECHAZADOS pero coherentes entre sí, acumulados sólo
+  // mientras hace mucho que no se acepta ninguno — ver UMBRAL_MS_SIN_ACEPTAR_PARA_REENGANCHE.
+  const candidatosReenganceRef = useRef<google.maps.LatLngLiteral[]>([]);
+
+  // Reset explícito al montar: la base de validación NUNCA debe arrancar desde lat/lng
+  // (que en el primer render puede ser la última posición conocida guardada en la base de
+  // datos del viaje, no un fix GPS real de ESTA sesión — ver el bug real: la base quedaba
+  // anclada a esa posición vieja y todo GPS real posterior se rechazaba para siempre por
+  // estar a miles de metros). Los refs ya nacen en null por useRef(null); este efecto lo
+  // deja explícito y a salvo de cualquier reutilización de instancia.
+  useEffect(() => {
+    ultimoFixValidoRef.current    = null;
+    ultimoFixValidoTsRef.current  = null;
+    penultimoFixValidoRef.current = null;
+    candidatosReenganceRef.current = [];
+  }, []);
 
   // Corre PRIMERO en cada commit (declarado antes que el resto de los efectos que leen
   // GPS: desvío, recorte visual, marcador/cámara), así fixValidoActualRef ya está
@@ -1641,6 +1672,20 @@ export default function MapaTILA({
     }
     const nuevo  = { lat, lng };
     const ahora  = Date.now();
+
+    // Primer fix real de la sesión (todavía no hay base): se acepta incondicionalmente
+    // si es finito, y se convierte en la base — no pasa por evaluarConsistenciaFix
+    // (que de todos modos ya trata anterior=null como "aceptar", esto sólo lo hace
+    // explícito y logueado con su propio tag, como pediste).
+    if (!ultimoFixValidoRef.current) {
+      ultimoFixValidoRef.current    = nuevo;
+      ultimoFixValidoTsRef.current  = ahora;
+      fixValidoActualRef.current    = nuevo;
+      candidatosReenganceRef.current = [];
+      diagLog(`[TILA_NAV_DIAG] gps-bootstrap PRIMER_FIX_ACEPTADO lat=${lat.toFixed(6)} lng=${lng.toFixed(6)} t=${Math.round(performance.now())}`);
+      return;
+    }
+
     const resultado = evaluarConsistenciaFix(
       ultimoFixValidoRef.current,
       ultimoFixValidoTsRef.current,
@@ -1652,6 +1697,34 @@ export default function MapaTILA({
     if (!resultado.aceptado) {
       fixValidoActualRef.current = null;
       diagLog(`[TILA_NAV_DIAG] gps-validacion RECHAZADO ${resultado.motivo}`);
+
+      // Reenganche controlado: sólo se evalúa si hace mucho que ningún fix fue aceptado
+      // (la base actual es sospechosa de estar mal, no un simple ruido pasajero).
+      const msSinAceptar = ultimoFixValidoTsRef.current !== null ? ahora - ultimoFixValidoTsRef.current : Infinity;
+      if (msSinAceptar < UMBRAL_MS_SIN_ACEPTAR_PARA_REENGANCHE) {
+        candidatosReenganceRef.current = [];
+        return;
+      }
+      const candidatos = candidatosReenganceRef.current;
+      const ultimoCandidato = candidatos[candidatos.length - 1] ?? null;
+      const esCoherente = !ultimoCandidato || distanciaMetros(ultimoCandidato, nuevo) <= UMBRAL_DISTANCIA_REENGANCHE_METROS;
+      if (!esCoherente) candidatos.length = 0; // rompió la cadena — reinicia el conteo desde este fix
+      candidatos.push(nuevo);
+      diagLog(`[TILA_NAV_DIAG] gps-reenganche candidato n=${candidatos.length}/${FIXES_REENGANCHE_REQUERIDOS} lat=${lat.toFixed(6)} lng=${lng.toFixed(6)} msSinAceptar=${msSinAceptar} t=${Math.round(performance.now())}`);
+      if (candidatos.length >= FIXES_REENGANCHE_REQUERIDOS) {
+        const baseAnterior = ultimoFixValidoRef.current;
+        const distanciaReemplazo = distanciaMetros(baseAnterior, nuevo);
+        penultimoFixValidoRef.current = null; // sin tendencia previa confiable tras un reenganche
+        ultimoFixValidoRef.current    = nuevo;
+        ultimoFixValidoTsRef.current  = ahora;
+        fixValidoActualRef.current    = nuevo;
+        candidatosReenganceRef.current = [];
+        diagLog(
+          `[TILA_NAV_DIAG] gps-reenganche BASE_REEMPLAZADA `
+          + `baseAnterior=${baseAnterior.lat.toFixed(6)},${baseAnterior.lng.toFixed(6)} `
+          + `baseNueva=${lat.toFixed(6)},${lng.toFixed(6)} distancia=${Math.round(distanciaReemplazo)}m t=${Math.round(performance.now())}`
+        );
+      }
       return;
     }
     // El fix se usa siempre que fue aceptado — sólo cambia si además adelanta la base
@@ -1661,6 +1734,7 @@ export default function MapaTILA({
       penultimoFixValidoRef.current = ultimoFixValidoRef.current;
       ultimoFixValidoRef.current    = nuevo;
       ultimoFixValidoTsRef.current  = ahora;
+      candidatosReenganceRef.current = []; // ya se aceptó un fix real; no hace falta reenganche
     }
   }, [lat, lng, heading]);
 
