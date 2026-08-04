@@ -402,8 +402,14 @@ const distanciaMinAPolyline = (
 // ─── Recorte visual de la traza (SOLO representación — rutaPolylineRef sigue intacta
 // para rerouting/maniobras/llegada, ver el efecto que usa esto más abajo) ──────────
 // Distancia detrás del vehículo que se mantiene visible, para dar continuidad — la
-// traza no debe cortar exactamente debajo del ícono del camión.
-const MARGEN_RUTA_DETRAS_METROS = 20;
+// traza no debe cortar exactamente debajo del ícono del camión. Bajado de 20 a 8:
+// con la geometría DETALLADA (steps[].path[], muchos puntos densos y cortos — ver
+// construirPolylineDetalladaDesdeRuta) un margen de 20m recorría varios de esos puntos
+// cortos en cada tick, y el punto de arranque de la "colita" saltaba de forma visible
+// entre ellos en vez de recortar suave — confirmado en prueba real ("colita" que se
+// corta por partes y desaparece). Un margen más chico da menos tramos sobre los que
+// saltar, sin perder la continuidad visual bajo el ícono.
+const MARGEN_RUTA_DETRAS_METROS = 8;
 
 // Proyección de un punto sobre el segmento a-b: distancia y el punto proyectado (no
 // sólo la distancia, a diferencia de distanciaPuntoASegmentoMetros de arriba — se
@@ -676,12 +682,13 @@ const construirIconoChofer = (esNoche: boolean): google.maps.Icon => {
     <rect x="17" y="0.2" width="6" height="1.8" rx="0.9" fill="#27272a"/>
   </svg>`;
   const url = `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
-  // scaledSize dentro del rango pedido (~64-80px de alto) — 72px. Anchor YA NO es el
-  // centro geométrico del ícono: va en el centro inferior, sobre el eje de ruedas
-  // traseras (y=57 en el viewBox, justo arriba del punto más bajo de la sombra), para
-  // que sea ese punto —no el centro visual de toda la silueta— el que caiga exactamente
-  // sobre la posición GPS real y "pise" la ruta en vez de flotar sobre ella.
-  return { url, scaledSize: new google.maps.Size(46, 72), anchor: new google.maps.Point(23, 66) };
+  // scaledSize dentro del rango pedido (~64-80px de alto) — 72px. Anchor en el centro
+  // geométrico del ícono (23,36 de 46×72) — no en el eje de ruedas traseras como antes:
+  // con el anchor corrido hacia abajo, el cuerpo largo del camión (cabina+caja) quedaba
+  // visualmente "colgando" hacia un lado del trazo en curvas/bifurcaciones, aunque el
+  // punto de anclaje en sí cayera sobre la posición GPS real — confirmado en prueba real
+  // (captura: camión corrido a la izquierda del trazo en un desvío de autopista).
+  return { url, scaledSize: new google.maps.Size(46, 72), anchor: new google.maps.Point(23, 36) };
 };
 
 // ─── Tema del mapa (modoNavegacion) ─────────────────────────────────────────
