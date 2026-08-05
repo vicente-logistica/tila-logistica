@@ -490,8 +490,17 @@ export default function ViajeActivoPage() {
     if (!viaje?.id) return;
     if (!navigator.geolocation) { setGpsEstado("Sin GPS"); return; }
     setGpsEstado("...");
+    diagLog(`[TILA_NAV_DIAG] viaje-activo WATCH_POSITION_INICIADO viajeId=${viaje.id} t=${Math.round(performance.now())}`);
     const wid = navigator.geolocation.watchPosition(
       async (pos) => {
+        // Se loguea ANTES que cualquier otra cosa (incluso antes del guard de
+        // viajeTerminado) — así queda evidencia de que el callback de éxito de
+        // watchPosition realmente se ejecutó, sin importar qué pase después.
+        diagLog(
+          `[TILA_NAV_DIAG] viaje-activo WATCH_POSITION_FIX_RECIBIDO `
+          + `latLngEnviadaAMapa=${pos.coords.latitude.toFixed(6)},${pos.coords.longitude.toFixed(6)} `
+          + `viajeTerminado=${viajeTerminado.current} t=${Math.round(performance.now())}`
+        );
         if (viajeTerminado.current) return;
         const lat = pos.coords.latitude, lng = pos.coords.longitude;
         const vel = pos.coords.speed ? Math.round(pos.coords.speed * 3.6) : 0;
@@ -536,10 +545,16 @@ export default function ViajeActivoPage() {
           await supabase.from("usuarios").update({ ultima_senal_at: now, bateria_nivel: bateriaNivel, bateria_cargando: bateriaCargando }).eq("id", usuarioRef.current.id);
         }
       },
-      (err) => { setGpsEstado(err.code === 1 ? "🔴 Denegado" : "🔴 Error"); },
+      (err) => {
+        setGpsEstado(err.code === 1 ? "🔴 Denegado" : "🔴 Error");
+        diagLog(`[TILA_NAV_DIAG] viaje-activo WATCH_POSITION_ERROR code=${err.code} message=${err.message} t=${Math.round(performance.now())}`);
+      },
       { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 }
     );
-    return () => navigator.geolocation.clearWatch(wid);
+    return () => {
+      diagLog(`[TILA_NAV_DIAG] viaje-activo WATCH_POSITION_CLEANUP viajeId=${viaje.id} t=${Math.round(performance.now())}`);
+      navigator.geolocation.clearWatch(wid);
+    };
   }, [viaje?.id, bateriaNivel, bateriaCargando]);
 
   const cargarViajeActivo = async () => {
