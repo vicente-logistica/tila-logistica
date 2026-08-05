@@ -51,6 +51,14 @@ const DURACION_ANIMACION_MAX_MS = 3000;
 // umbral de movimiento fluido percibido por el ojo (~24fps).
 const INTERVALO_MIN_CAMARA_MS = 80;
 
+// Misma cadencia que la cámara (12.5Hz) — ver ultimaActualizacionRecorteTsRef en el
+// componente: la traza visible se recalcula con la posición INTERPOLADA (la misma que
+// ya usa el marcador en cada frame), throtteada a este intervalo, en vez de sólo una
+// vez por fix GPS real (~1/seg). Antes de este cambio, entre un fix y el siguiente el
+// marcador avanzaba animado mientras la traza quedaba fija en el punto crudo anterior
+// — un hueco que crecía y se reseteaba de golpe con cada fix (offset + "colita").
+const INTERVALO_MIN_RECORTE_MS = 80;
+
 // Predicción limitada (dead-reckoning acotado): a 80-120km/h, un solo hueco entre fixes
 // GPS más largo que DURACION_ANIMACION_MAX_MS ya representa decenas de metros — con la
 // duración fija de antes, la animación llegaba al destino y el vehículo quedaba
@@ -792,6 +800,9 @@ export default function MapaTILA({
   // cámara — gate de frecuencia, ver INTERVALO_MIN_CAMARA_MS. El marcador/
   // posicionVisualActualRef NO pasan por este gate: siguen actualizándose en cada frame.
   const ultimaActualizacionCamaraTsRef = useRef(0);
+  // Gate de frecuencia gemelo, para el recorte visual de la traza — ver
+  // INTERVALO_MIN_RECORTE_MS más arriba y el bloque dentro de pasoAnimacion.
+  const ultimaActualizacionRecorteTsRef = useRef(0);
   // Ref-al-callback-más-reciente: permite que pasoAnimacion se re-programe a sí mismo
   // (vía requestAnimationFrame) sin una auto-referencia directa a su propia const (evita
   // el ciclo de declaración) y sin quedar nunca con una versión vieja del closure — mismo
@@ -1212,6 +1223,28 @@ export default function MapaTILA({
             diagUltimaFuenteHeadingRef.current = "pasoAnimacion";
           }
         }, "pasoAnimacion");
+      }
+
+      // Traza visible: recortada con la MISMA posición interpolada de este frame (no
+      // con el último fix crudo) y throtteada a la misma cadencia que la cámara — así
+      // el arranque de la línea se mueve en sincronía con el marcador en vez de quedar
+      // fijo entre un fix GPS y el siguiente. El efecto por-fix-GPS (más abajo en el
+      // componente) sigue siendo el único que detecta ruta nueva, resetea el índice y
+      // congela durante un recálculo en vuelo — acá sólo se dibuja con el índice que
+      // ese efecto ya dejó al día, nunca se decide nada de eso.
+      if (
+        !calculandoRutaNavRef.current
+        && ahora - ultimaActualizacionRecorteTsRef.current >= INTERVALO_MIN_RECORTE_MS
+      ) {
+        ultimaActualizacionRecorteTsRef.current = ahora;
+        const polyline = rutaPolylineRef.current;
+        if (polyline.length >= 2) {
+          const { puntos, indice } = recortarRutaDesdeVehiculo(
+            polyline, { lat: latActual, lng: lngActual }, MARGEN_RUTA_DETRAS_METROS, indiceRutaVisibleRef.current
+          );
+          indiceRutaVisibleRef.current = indice;
+          setRutaVisibleDesdeVehiculo(puntos);
+        }
       }
     } else {
       moverCamara(() => { mapRef.current!.setCenter({ lat: latActual, lng: lngActual }); }, "pasoAnimacion-lectura");
@@ -1851,6 +1884,12 @@ export default function MapaTILA({
       const desvioObvio = distancia !== null && distancia >= UMBRAL_DESVIO_INMEDIATO_METROS;
       if (resultado) indiceRutaVisibleRef.current = resultado.indice;
       lecturasFueraDeRutaRef.current = fueraDeRuta ? lecturasFueraDeRutaRef.current + 1 : 0;
+      // Capturado ANTES de un posible reset por confirmación (más abajo) — si no, el log
+      // de este mismo tick mostraría 0 (el valor YA reseteado) aunque la confirmación se
+      // haya basado en 2+ lecturas reales. Puramente para diagnóstico, no cambia la
+      // decisión: la lógica de desvío sigue leyendo/escribiendo lecturasFueraDeRutaRef
+      // exactamente igual que antes.
+      const lecturasFueraDeRutaParaLog = lecturasFueraDeRutaRef.current;
       // Un desvío obvio (muy lejos de la ruta) no espera las lecturas consecutivas — a
       // esa distancia ya no es ruido de GPS. Un desvío moderado sí necesita confirmarse
       // con varias lecturas seguidas, para no recalcular por un salto aislado.
@@ -1862,7 +1901,7 @@ export default function MapaTILA({
           lecturasFueraDeRutaRef.current = 0;
         }
       }
-      diagLog(`[TILA_NAV_DIAG] desvio-efecto distanciaAPolyline=${distancia === null ? "null" : Math.round(distancia)} lecturasFueraDeRuta=${lecturasFueraDeRutaRef.current} desvioConfirmado=${desvioConfirmado} t=${Math.round(performance.now())}`);
+      diagLog(`[TILA_NAV_DIAG] desvio-efecto distanciaAPolyline=${distancia === null ? "null" : Math.round(distancia)} lecturasFueraDeRuta=${lecturasFueraDeRutaParaLog} desvioConfirmado=${desvioConfirmado} t=${Math.round(performance.now())}`);
     }
 
     if (!cambioDeParadas && !primerGps && !desvioConfirmado) return; // nada relevante cambió
@@ -1895,27 +1934,32 @@ export default function MapaTILA({
     encuadrarPuntos(puntos);
   }, [modoNavegacion, modoMultiChofer, lat, lng, paradasCoords, destinoCoords, encuadrarPuntos]);
 
-  // ─── Recorte visual de la traza (sólo representación) ──────────────────────
-  // Sólo lee rutaPolylineRef.current (no la modifica) y recalcula la porción visible
-  // en cada tick de GPS — nada de esto toca calcularRuta/dispararCalculoNav/rerouting,
-  // ni la detección de desvío o maniobras (que siguen leyendo rutaPolylineRef completa).
+  // ─── Recorte visual de la traza: bookkeeping (detectar ruta nueva / congelar) ──────
+  // El DIBUJO en sí (recortarRutaDesdeVehiculo + setRutaVisibleDesdeVehiculo) ya NO pasa
+  // por acá — se mueve al bloque throtteado dentro de pasoAnimacion, que usa la posición
+  // INTERPOLADA (la misma del marcador) en vez del último fix crudo, para que la traza
+  // no quede fija entre un fix GPS y el siguiente (ver INTERVALO_MIN_RECORTE_MS). Este
+  // efecto sigue siendo la única fuente de verdad para: detectar que aterrizó una ruta
+  // realmente nueva y resetear el índice compartido a 0, y congelar (no tocar nada) toda
+  // esta bookkeeping mientras haya un recálculo en vuelo — nunca escribe
+  // rutaVisibleDesdeVehiculo directamente, así ningún otro lugar compite por esa escritura.
   useEffect(() => {
     if (!modoNavegacion || modoMultiChofer) return;
-    // Congela la traza también ante un fix rechazado (mismo criterio que "recálculo en
-    // vuelo" más abajo): mejor mantener el último trazo válido que recortar contra una
-    // posición GPS descartada por implausible.
+    // Congela también ante un fix rechazado (mismo criterio que "recálculo en vuelo" más
+    // abajo) — no hay nada confiable con qué decidir si la ruta cambió en este tick.
     const fix = fixValidoActualRef.current;
     if (!fix) return;
     // Mientras haya un recálculo en vuelo, rutaPolylineRef todavía es la ruta VIEJA (está
-    // por reemplazarse) — seguir recortándola contra la posición actual sólo mostraría un
-    // trazo cada vez más alejado/incorrecto durante la espera a Directions, mucho más
-    // notorio a alta velocidad (el vehículo se aleja más rápido mientras se espera la
-    // respuesta). Se congela la última traza ya mostrada; en cuanto la ruta nueva
-    // reemplace a rutaPolylineRef, este efecto corre de nuevo (dispara por el cambio de
-    // `directions`) y muestra sólo la ruta nueva, nunca una mezcla de ambas.
+    // por reemplazarse) — no tiene sentido evaluar "¿es una ruta nueva?" contra ella. En
+    // cuanto la ruta nueva reemplace a rutaPolylineRef, este efecto corre de nuevo
+    // (dispara por el cambio de `directions`) y recién ahí detecta el cambio.
     if (calculandoRutaNavRef.current) return;
     const polyline = rutaPolylineRef.current;
     if (polyline.length < 2) {
+      // Sin ruta todavía (o Directions falló sin fallback) — nada que recortar. Único
+      // caso en que este efecto sí limpia rutaVisibleDesdeVehiculo directamente: el
+      // bloque en pasoAnimacion sólo DIBUJA cuando ya hay una polyline de 2+ puntos, así
+      // que no le compete decidir el estado "todavía no hay ruta".
       setRutaVisibleDesdeVehiculo([]);
       return;
     }
@@ -1927,12 +1971,6 @@ export default function MapaTILA({
       indiceRutaVisibleRef.current = 0;
       diagLog(`[TILA_NAV_DIAG] recorte-efecto: ruta nueva detectada, indiceRutaVisibleRef reseteado a 0 puntosRuta=${polyline.length} t=${Math.round(performance.now())}`);
     }
-    const { puntos, indice } = recortarRutaDesdeVehiculo(
-      polyline, fix, MARGEN_RUTA_DETRAS_METROS, indiceRutaVisibleRef.current
-    );
-    indiceRutaVisibleRef.current = indice;
-    setRutaVisibleDesdeVehiculo(puntos);
-    diagLog(`[TILA_NAV_DIAG] recorte-efecto: rutaVisibleDesdeVehiculo REEMPLAZADA puntosVisibles=${puntos.length} indice=${indice} primerPunto=${puntos[0] ? `${puntos[0].lat.toFixed(6)},${puntos[0].lng.toFixed(6)}` : "n/a"} t=${Math.round(performance.now())}`);
   }, [lat, lng, directions, polylinePuntos, modoNavegacion, modoMultiChofer]);
 
   // ─── TILA_NAV_DIAG: heartbeat de diagnóstico (1s) ──────────────────────────
@@ -2349,11 +2387,13 @@ export default function MapaTILA({
     // presente, Google ignora `styles` por completo.
     mapId: process.env.NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID,
     colorScheme: colorSchemeActual,
-    // Inclinación/rotación por gesto sólo en Viaje Activo — en las vistas de
-    // sólo lectura (panel-cliente/panel-chofer) modoNavegacion es false y el
-    // mapa queda plano, sin necesidad de ninguna regla de estilo adicional.
-    tiltInteractionEnabled: modoNavegacion,
-    headingInteractionEnabled: modoNavegacion,
+    // Inclinación/rotación SIEMPRE deshabilitadas como gesto manual (dos dedos podían
+    // rotar/inclinar el mapa sin querer durante la conducción) — tilt/heading siguen
+    // cambiando normalmente por código (restaurarCamaraNavegacion/pasoAnimacion usan
+    // setTilt/setHeading/moveCamera, que no pasan por estos flags, sólo gatean gestos
+    // del usuario). Pan y zoom quedan intactos vía gestureHandling más abajo.
+    tiltInteractionEnabled: false,
+    headingInteractionEnabled: false,
     // Arrastre/zoom libres, sin el modo cooperativo (que exigiría dos dedos
     // incluso para arrastrar) en esta vista de mapa a pantalla completa.
     gestureHandling: "greedy",
