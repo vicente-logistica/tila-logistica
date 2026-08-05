@@ -14,6 +14,22 @@ import { diagLog } from "../utils/diagLoggerNav";
 
 const LS_VOZ_ACTIVA = "tila_voz_activa";
 
+// ─── GPS: arranque, reintento y watchdog ───────────────────────────────────────
+// maximumAge del watch: 5s (antes 0, fresco siempre). Un fix cacheado de hasta 5s
+// alcanza para mostrar camión/ruta de inmediato al abrir Viaje Activo; los próximos
+// callbacks del mismo watch siguen llegando con posiciones reales según las vaya
+// entregando el proveedor de ubicación — maximumAge no "cachea" los siguientes fixes,
+// sólo afecta si el primero puede resolverse con uno reciente en vez de esperar un GPS
+// fix 100% nuevo.
+const GPS_MAXIMUM_AGE_ARRANQUE_MS = 5000;
+// Backoff antes de reintentar armar el watch después de un timeout (code===3) — evita
+// reintentar instantáneamente en loop si el GPS sigue sin responder.
+const GPS_REINTENTO_BACKOFF_MS = 1500;
+// Si pasan estos ms sin ningún fix desde que se armó el watcher (o desde el último fix
+// real), se asume que el watcher "murió" en silencio (sin más callbacks de éxito NI de
+// error — el caso observado en la prueba real) y se lo reinicia por las suyas.
+const GPS_WATCHDOG_SIN_FIX_MS = 15000;
+
 // ─── Estados y flujo ──────────────────────────────────────────────────────────
 const ESTADOS_ORDEN = [
   { nombre: "En camino",           color: "bg-yellow-400 text-black",  label: "INICIAR VIAJE",          abreNav: true  },
@@ -485,77 +501,171 @@ export default function ViajeActivoPage() {
     }
   }, [cargando, viaje?.estado, viaje?.destino, destinoRuta]);
 
+  // ─── GPS: refs espejo de batería ────────────────────────────────────────────
+  // El efecto de GPS ya NO depende de bateriaNivel/bateriaCargando (ver por qué en el
+  // comentario del efecto principal, más abajo) — estos refs le dan al callback de
+  // watchPosition acceso al valor MÁS RECIENTE sin necesitar esa dependencia.
+  const bateriaNivelRef    = useRef<number | null>(null);
+  const bateriaCargandoRef = useRef<boolean | null>(null);
+  useEffect(() => { bateriaNivelRef.current = bateriaNivel; }, [bateriaNivel]);
+  useEffect(() => { bateriaCargandoRef.current = bateriaCargando; }, [bateriaCargando]);
+
   // ─── GPS ──────────────────────────────────────────────────────────────────
+  // watchIdRef: el watcher activo (nunca más de uno — iniciarWatch() siempre limpia el
+  // anterior antes de crear uno nuevo). intentoRef: sólo para numerar logs.
+  // ultimoFixTsRef: cuándo llegó el último fix real, lo usa el watchdog. reintentoRef/
+  // watchdogRef: timers pendientes, para poder cancelarlos (evita que sobrevivan al
+  // cleanup o se superpongan entre sí). desmontadoRef: true desde que el efecto se
+  // desmonta (cambia viaje.id o se desmonta el componente) — cualquier timer que
+  // dispare después no debe poder armar un watcher nuevo.
+  const watchIdRef          = useRef<number | null>(null);
+  const intentoWatchRef     = useRef(0);
+  const ultimoFixTsRef      = useRef<number | null>(null);
+  const reintentoTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const watchdogTimeoutRef  = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const gpsDesmontadoRef    = useRef(false);
+
   useEffect(() => {
     if (!viaje?.id) return;
     if (!navigator.geolocation) { setGpsEstado("Sin GPS"); return; }
-    setGpsEstado("...");
-    diagLog(`[TILA_NAV_DIAG] viaje-activo WATCH_POSITION_INICIADO viajeId=${viaje.id} t=${Math.round(performance.now())}`);
-    const wid = navigator.geolocation.watchPosition(
-      async (pos) => {
-        // Se loguea ANTES que cualquier otra cosa (incluso antes del guard de
-        // viajeTerminado) — así queda evidencia de que el callback de éxito de
-        // watchPosition realmente se ejecutó, sin importar qué pase después.
-        diagLog(
-          `[TILA_NAV_DIAG] viaje-activo WATCH_POSITION_FIX_RECIBIDO `
-          + `latLngEnviadaAMapa=${pos.coords.latitude.toFixed(6)},${pos.coords.longitude.toFixed(6)} `
-          + `viajeTerminado=${viajeTerminado.current} t=${Math.round(performance.now())}`
-        );
-        if (viajeTerminado.current) return;
-        const lat = pos.coords.latitude, lng = pos.coords.longitude;
-        const vel = pos.coords.speed ? Math.round(pos.coords.speed * 3.6) : 0;
-        // heading viene null cuando el GPS no puede inferir dirección (vehículo
-        // detenido, primera lectura, señal débil) — sólo se actualiza el estado con
-        // valores válidos, así se conserva el último rumbo conocido en vez de
-        // pasarle null a MapaTILA (que "resetearía" la orientación de la cámara).
-        const rumbo = pos.coords.heading;
-        if (rumbo !== null && !Number.isNaN(rumbo)) {
-          setHeadingChofer(rumbo);
-        }
-        const now = new Date().toISOString();
-        setGpsEstado("🟢"); setVelocidadGps(vel);
-        setUltimaSenal(new Date(now).toLocaleTimeString("es-AR", { hour:"2-digit", minute:"2-digit" }));
-        setViaje((prev: any) => prev ? { ...prev, lat, lng, velocidad: vel, gps_actualizado: now } : prev);
+    const viajeId = viaje.id;
+    gpsDesmontadoRef.current = false;
+    intentoWatchRef.current = 0;
 
-        // GPS fresco de ESTA sesión (ver comentario junto a gpsFrescoDisponible más
-        // arriba) — es lo único que se le pasa a MapaTILA como posición de navegación.
-        if (Number.isFinite(lat) && Number.isFinite(lng)) {
-          const esPrimero = !gpsFrescoRecibidoRef.current;
-          gpsFrescoRecibidoRef.current = true;
-          setUltimoGpsFresco({ lat, lng });
-          accuracyGpsFrescoRef.current  = Number.isFinite(pos.coords.accuracy) ? pos.coords.accuracy : null;
-          timestampGpsFrescoRef.current = pos.timestamp;
-          if (esPrimero) setGpsFrescoDisponible(true);
-          diagLog(
-            `[TILA_NAV_DIAG] viaje-activo GPS_FRESCO_RECIBIDO primero=${esPrimero} `
-            + `accuracy=${Number.isFinite(pos.coords.accuracy) ? Math.round(pos.coords.accuracy) + "m" : "n/a"} `
-            + `timestamp=${pos.timestamp} `
-            + `latLngPersistida=${viaje?.lat ?? "n/a"},${viaje?.lng ?? "n/a"} `
-            + `latLngEnviadaAMapa=${lat.toFixed(6)},${lng.toFixed(6)}`
-          );
-        }
-        if (usuarioRef.current?.id) {
-          fetch("/api/cargas/gps", {
-            method:  "PATCH",
-            headers: { "Content-Type": "application/json", "x-user-id": usuarioRef.current.id },
-            body:    JSON.stringify({ carga_id: viaje.id, lat, lng, velocidad: vel }),
-          }).catch((err) => console.error("[gps] error:", err));
-        }
-        if (usuarioRef.current?.id) {
-          await supabase.from("usuarios").update({ ultima_senal_at: now, bateria_nivel: bateriaNivel, bateria_cargando: bateriaCargando }).eq("id", usuarioRef.current.id);
-        }
-      },
-      (err) => {
-        setGpsEstado(err.code === 1 ? "🔴 Denegado" : "🔴 Error");
-        diagLog(`[TILA_NAV_DIAG] viaje-activo WATCH_POSITION_ERROR code=${err.code} message=${err.message} t=${Math.round(performance.now())}`);
-      },
-      { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 }
-    );
-    return () => {
-      diagLog(`[TILA_NAV_DIAG] viaje-activo WATCH_POSITION_CLEANUP viajeId=${viaje.id} t=${Math.round(performance.now())}`);
-      navigator.geolocation.clearWatch(wid);
+    // Limpia el watcher activo (si hay) y cualquier timer de reintento/watchdog
+    // pendiente — se llama SIEMPRE antes de crear uno nuevo (arranque, reintento por
+    // timeout, o restart del watchdog), así nunca coexisten dos watchers ni un timer
+    // "viejo" con el watcher nuevo que lo reemplazó.
+    const limpiarWatcherActual = () => {
+      if (watchIdRef.current !== null) {
+        const idPrevio = watchIdRef.current;
+        navigator.geolocation.clearWatch(idPrevio);
+        watchIdRef.current = null;
+        diagLog(`[TILA_NAV_DIAG] viaje-activo WATCH_POSITION_CLEANUP watchId=${idPrevio} t=${Math.round(performance.now())}`);
+      }
+      if (reintentoTimeoutRef.current !== null) {
+        clearTimeout(reintentoTimeoutRef.current);
+        reintentoTimeoutRef.current = null;
+      }
+      if (watchdogTimeoutRef.current !== null) {
+        clearTimeout(watchdogTimeoutRef.current);
+        watchdogTimeoutRef.current = null;
+      }
     };
-  }, [viaje?.id, bateriaNivel, bateriaCargando]);
+
+    // Arranca (o reinicia) la cuenta regresiva de 15s sin fix — se vuelve a llamar cada
+    // vez que llega un fix real (lo reinicia) y cada vez que se arma un watcher nuevo.
+    const armarWatchdog = () => {
+      if (watchdogTimeoutRef.current !== null) clearTimeout(watchdogTimeoutRef.current);
+      watchdogTimeoutRef.current = setTimeout(() => {
+        watchdogTimeoutRef.current = null;
+        if (gpsDesmontadoRef.current || viajeTerminado.current) return;
+        diagLog(`[TILA_NAV_DIAG] viaje-activo WATCH_POSITION_WATCHDOG_RESTART sinFixDesdeMs=${GPS_WATCHDOG_SIN_FIX_MS} t=${Math.round(performance.now())}`);
+        iniciarWatch();
+      }, GPS_WATCHDOG_SIN_FIX_MS);
+    };
+
+    const iniciarWatch = () => {
+      if (gpsDesmontadoRef.current || viajeTerminado.current) return;
+      limpiarWatcherActual();
+      intentoWatchRef.current += 1;
+      const miIntento = intentoWatchRef.current;
+      setGpsEstado("...");
+      diagLog(`[TILA_NAV_DIAG] viaje-activo WATCH_POSITION_INICIADO intento=${miIntento} viajeId=${viajeId} t=${Math.round(performance.now())}`);
+
+      const nuevoWatchId = navigator.geolocation.watchPosition(
+        async (pos) => {
+          // Se loguea ANTES que cualquier otra cosa (incluso antes del guard de
+          // viajeTerminado) — así queda evidencia de que el callback de éxito de
+          // watchPosition realmente se ejecutó, sin importar qué pase después.
+          diagLog(
+            `[TILA_NAV_DIAG] viaje-activo WATCH_POSITION_FIX_RECIBIDO `
+            + `latLngEnviadaAMapa=${pos.coords.latitude.toFixed(6)},${pos.coords.longitude.toFixed(6)} `
+            + `viajeTerminado=${viajeTerminado.current} t=${Math.round(performance.now())}`
+          );
+          ultimoFixTsRef.current = Date.now();
+          armarWatchdog(); // se reinicia con cada fix real — ver comentario en armarWatchdog
+          if (viajeTerminado.current) return;
+          const lat = pos.coords.latitude, lng = pos.coords.longitude;
+          const vel = pos.coords.speed ? Math.round(pos.coords.speed * 3.6) : 0;
+          // heading viene null cuando el GPS no puede inferir dirección (vehículo
+          // detenido, primera lectura, señal débil) — sólo se actualiza el estado con
+          // valores válidos, así se conserva el último rumbo conocido en vez de
+          // pasarle null a MapaTILA (que "resetearía" la orientación de la cámara).
+          const rumbo = pos.coords.heading;
+          if (rumbo !== null && !Number.isNaN(rumbo)) {
+            setHeadingChofer(rumbo);
+          }
+          const now = new Date().toISOString();
+          setGpsEstado("🟢"); setVelocidadGps(vel);
+          setUltimaSenal(new Date(now).toLocaleTimeString("es-AR", { hour:"2-digit", minute:"2-digit" }));
+          setViaje((prev: any) => prev ? { ...prev, lat, lng, velocidad: vel, gps_actualizado: now } : prev);
+
+          // GPS fresco de ESTA sesión (ver comentario junto a gpsFrescoDisponible más
+          // arriba) — es lo único que se le pasa a MapaTILA como posición de navegación.
+          if (Number.isFinite(lat) && Number.isFinite(lng)) {
+            const esPrimero = !gpsFrescoRecibidoRef.current;
+            gpsFrescoRecibidoRef.current = true;
+            setUltimoGpsFresco({ lat, lng });
+            accuracyGpsFrescoRef.current  = Number.isFinite(pos.coords.accuracy) ? pos.coords.accuracy : null;
+            timestampGpsFrescoRef.current = pos.timestamp;
+            if (esPrimero) setGpsFrescoDisponible(true);
+            diagLog(
+              `[TILA_NAV_DIAG] viaje-activo GPS_FRESCO_RECIBIDO primero=${esPrimero} `
+              + `accuracy=${Number.isFinite(pos.coords.accuracy) ? Math.round(pos.coords.accuracy) + "m" : "n/a"} `
+              + `timestamp=${pos.timestamp} `
+              + `latLngPersistida=${viaje?.lat ?? "n/a"},${viaje?.lng ?? "n/a"} `
+              + `latLngEnviadaAMapa=${lat.toFixed(6)},${lng.toFixed(6)}`
+            );
+          }
+          if (usuarioRef.current?.id) {
+            fetch("/api/cargas/gps", {
+              method:  "PATCH",
+              headers: { "Content-Type": "application/json", "x-user-id": usuarioRef.current.id },
+              body:    JSON.stringify({ carga_id: viajeId, lat, lng, velocidad: vel }),
+            }).catch((err) => console.error("[gps] error:", err));
+          }
+          if (usuarioRef.current?.id) {
+            await supabase.from("usuarios").update({
+              ultima_senal_at: now,
+              bateria_nivel: bateriaNivelRef.current,
+              bateria_cargando: bateriaCargandoRef.current,
+            }).eq("id", usuarioRef.current.id);
+          }
+        },
+        (err) => {
+          setGpsEstado(err.code === 1 ? "🔴 Denegado" : "🔴 Error");
+          diagLog(`[TILA_NAV_DIAG] viaje-activo WATCH_POSITION_ERROR code=${err.code} message=${err.message} intento=${miIntento} t=${Math.round(performance.now())}`);
+          // Timeout (code 3): el watcher actual quedó sin resolver — se limpia y se
+          // reintenta solo, con un pequeño backoff (no instantáneo, para no loopear
+          // agresivamente si el GPS sigue sin responder). code 1 (permiso denegado) y
+          // code 2 (posición no disponible) NO reintentan automáticamente: reintentar
+          // un permiso denegado no lo va a resolver solo.
+          if (err.code === 3 && !gpsDesmontadoRef.current && !viajeTerminado.current) {
+            diagLog(`[TILA_NAV_DIAG] viaje-activo WATCH_POSITION_REINTENTO_PROGRAMADO backoffMs=${GPS_REINTENTO_BACKOFF_MS} intento=${miIntento} t=${Math.round(performance.now())}`);
+            if (reintentoTimeoutRef.current !== null) clearTimeout(reintentoTimeoutRef.current);
+            reintentoTimeoutRef.current = setTimeout(() => {
+              reintentoTimeoutRef.current = null;
+              if (gpsDesmontadoRef.current || viajeTerminado.current) return;
+              iniciarWatch();
+            }, GPS_REINTENTO_BACKOFF_MS);
+          }
+        },
+        { enableHighAccuracy: true, maximumAge: GPS_MAXIMUM_AGE_ARRANQUE_MS, timeout: 10000 }
+      );
+      watchIdRef.current = nuevoWatchId;
+      diagLog(`[TILA_NAV_DIAG] viaje-activo WATCH_POSITION_ACTIVO watchId=${nuevoWatchId} intento=${miIntento} t=${Math.round(performance.now())}`);
+      armarWatchdog();
+    };
+
+    iniciarWatch();
+
+    return () => {
+      gpsDesmontadoRef.current = true;
+      limpiarWatcherActual();
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viaje?.id]);
 
   const cargarViajeActivo = async () => {
     const viajeId = localStorage.getItem("viajeActivoId");
