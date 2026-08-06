@@ -110,10 +110,12 @@ export default function ViajeActivoPage() {
   // posición de la base de datos.
   const [gpsFrescoDisponible, setGpsFrescoDisponible] = useState(false);
   const [ultimoGpsFresco, setUltimoGpsFresco]         = useState<{ lat: number; lng: number } | null>(null);
-  // accuracy/timestamp del último GPS fresco: sólo se usan para loguear evidencia en el
-  // momento en que llegan (ver watchPosition más abajo), nada los vuelve a leer después
-  // ni dependen de disparar un re-render — van en refs, no en estado.
-  const accuracyGpsFrescoRef  = useRef<number | null>(null);
+  // accuracy del último GPS fresco: SÍ es estado (no ref) — MapaTILA la recibe como
+  // prop para no reelegir segmento/sumar lectura de desvío con un fix de mala
+  // precisión (ver UMBRAL_ACCURACY_MALA_METROS en MapaTILA.tsx). timestamp sigue en
+  // ref: sólo se usa para loguear evidencia en el momento en que llega, nadie más lo
+  // vuelve a leer después.
+  const [accuracyGpsFresco, setAccuracyGpsFresco] = useState<number | null>(null);
   const timestampGpsFrescoRef = useRef<number | null>(null);
   // Ref espejo de gpsFrescoDisponible: el callback de watchPosition vive dentro de un
   // useEffect de larga duración (no se recrea en cada tick) — leer el STATE ahí adentro
@@ -607,7 +609,7 @@ export default function ViajeActivoPage() {
             const esPrimero = !gpsFrescoRecibidoRef.current;
             gpsFrescoRecibidoRef.current = true;
             setUltimoGpsFresco({ lat, lng });
-            accuracyGpsFrescoRef.current  = Number.isFinite(pos.coords.accuracy) ? pos.coords.accuracy : null;
+            setAccuracyGpsFresco(Number.isFinite(pos.coords.accuracy) ? pos.coords.accuracy : null);
             timestampGpsFrescoRef.current = pos.timestamp;
             if (esPrimero) setGpsFrescoDisponible(true);
             diagLog(
@@ -1005,6 +1007,7 @@ export default function ViajeActivoPage() {
           lat={gpsFrescoDisponible ? ultimoGpsFresco?.lat ?? null : null}
           lng={gpsFrescoDisponible ? ultimoGpsFresco?.lng ?? null : null}
           heading={headingChofer}
+          accuracy={accuracyGpsFresco}
           origen={viaje.origen} destino={viaje.destino}
           paradaActivaDireccion={destinoRuta}
           paradas={paradasParaMapa.length > 0 ? paradasParaMapa : undefined}

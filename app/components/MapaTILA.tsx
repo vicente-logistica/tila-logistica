@@ -147,6 +147,51 @@ const FIXES_REENGANCHE_REQUERIDOS           = 3;     // cantidad de candidatos c
 // adelantó de más. Nunca es un retroceso grande (toda la ruta), sólo estos tramos.
 const VENTANA_ATRAS_SEGMENTOS = 3;
 
+// ─── Selección de segmento activo: ventana en metros + compatibilidad de sentido ──
+// Causa confirmada del bug de autopistas divididas/calzadas paralelas: la búsqueda de
+// segmento más cercano no tenía techo hacia ADELANTE (sólo hacia atrás, ver
+// VENTANA_ATRAS_SEGMENTOS) ni chequeaba sentido de circulación — un punto de la
+// calzada CONTRARIA o de una colectora paralela, a pocos metros de distancia
+// perpendicular, podía "ganar" la distancia mínima aunque estuviera del otro lado del
+// separador central. Ver elegirSegmentoActivo más abajo.
+//
+// VENTANA_ADELANTE_METROS: en metros, no en cantidad de índices — la densidad de
+// steps[].path[] varía mucho (una recta puede ser sólo 2 puntos separados cientos de
+// metros; una rampa/curva, muchos puntos juntos), así que un límite fijo de índices
+// sería demasiado permisivo en rectas y demasiado restrictivo en curvas. 500m es un
+// punto de partida razonado (cubre un intercambiador/rampa típico de 200-400m más
+// margen), NO medido con datos reales de producción: la API key de Maps configurada
+// en este proyecto está restringida por referrer HTTP (sólo navegador), así que no se
+// pudo hacer una llamada a Directions desde este entorno para medir densidad real.
+// El log CANDIDATOS_EN_VENTANA que se agrega en esta misma ronda deja evidencia real
+// de cuántos puntos entran en la ventana en cada selección, para poder ajustar este
+// número con la próxima prueba manejando si hiciera falta.
+const VENTANA_ADELANTE_METROS = 500;
+
+// Diferencia angular entre el heading del vehículo y el bearing del segmento
+// candidato, por encima de la cual se lo considera "sentido incompatible" (mismo
+// criterio de 90° ya usado en evaluarConsistenciaFix — UMBRAL_INCONSISTENCIA_RUMBO_GRADOS
+// — para no introducir un segundo número arbitrario distinto sin motivo).
+const UMBRAL_DIFERENCIA_ANGULAR_SEGMENTO_GRADOS = 90;
+
+// Heading (GPS real o interpolado) por debajo de esta velocidad NO se usa para
+// descartar segmentos por sentido — a paso de hombre o detenido, el heading reportado
+// es ruidoso y no representa una dirección de marcha real. ~9 km/h.
+const VELOCIDAD_MIN_HEADING_CONFIABLE_MPS = 2.5;
+
+// Fix con accuracy peor que esto (metros) no se usa para reelegir segmento/recorte ni
+// para sumar una lectura de desvío ese tick — se vio en una prueba real un fix con
+// accuracy=110m que por sí solo ya superaba el propio umbral de desvío (35m), sin que
+// el vehículo se hubiera movido. 50m es generoso para no rechazar fixes normales
+// (típico 3-15m con cielo despejado, hasta ~30-50m en condiciones marginales) pero
+// corta el caso de 110m documentado.
+const UMBRAL_ACCURACY_MALA_METROS = 50;
+
+// Dos candidatos NO adyacentes (>2 índices de diferencia — evita disparar por puntos
+// vecinos normales de la misma curva) a una distancia perpendicular casi idéntica:
+// señal de ambigüedad real entre dos calzadas/ramales distintos, digna de loguear.
+const UMBRAL_AMBIGUEDAD_METROS = 5;
+
 // Distancia a la que se anuncia por voz una maniobra próxima ("En X metros doblá...").
 const UMBRAL_AVISO_MANIOBRA_METROS = 150;
 
@@ -337,23 +382,10 @@ const interpolarHeading = (desde: number, hasta: number, t: number): number => {
   return normalizarHeading(desde + diferencia * t);
 };
 
-// Distancia (metros) de un punto al segmento a-b, proyectando sobre un plano local
-// equirectangular centrado en el segmento — precisión sobrada para las distancias cortas
-// (decenas/cientos de metros) que interesan para detectar desvío de ruta.
+// Constante de conversión grados↔metros, usada por proyeccionEnSegmento más abajo
+// (proyección sobre un plano local equirectangular — precisión sobrada para las
+// distancias cortas, decenas/cientos de metros, que interesan acá).
 const METROS_POR_GRADO_LAT = 111320;
-const distanciaPuntoASegmentoMetros = (
-  p: google.maps.LatLngLiteral,
-  a: google.maps.LatLngLiteral,
-  b: google.maps.LatLngLiteral
-): number => {
-  const metrosPorGradoLng = METROS_POR_GRADO_LAT * Math.cos((a.lat * Math.PI) / 180);
-  const px = (p.lng - a.lng) * metrosPorGradoLng, py = (p.lat - a.lat) * METROS_POR_GRADO_LAT;
-  const bx = (b.lng - a.lng) * metrosPorGradoLng, by = (b.lat - a.lat) * METROS_POR_GRADO_LAT;
-  const largoSegmentoCuadrado = bx * bx + by * by;
-  if (largoSegmentoCuadrado === 0) return Math.hypot(px, py);
-  const t = Math.max(0, Math.min(1, (px * bx + py * by) / largoSegmentoCuadrado));
-  return Math.hypot(px - t * bx, py - t * by);
-};
 
 // Polyline DETALLADA de una respuesta de Directions, concatenando la geometría real de
 // cada step (leg.steps[].path[]) en vez de result.routes[0].overview_path. overview_path
@@ -385,26 +417,144 @@ const construirPolylineDetalladaDesdeRuta = (
   return puntos;
 };
 
-// Distancia mínima de un punto a una polyline, buscando SÓLO desde `indiceDesde` menos
-// un pequeño margen de retroceso (VENTANA_ATRAS_SEGMENTOS) hacia adelante — no siempre
-// desde el principio de la ruta. Devuelve también el índice del tramo donde se encontró
-// la distancia mínima, para que el llamador pueda avanzar su progreso monotónico.
-// null si la polyline todavía no tiene al menos 2 puntos (ninguna ruta calculada aún).
-// `indiceDesde` en 0 (valor por defecto) reproduce un escaneo completo, útil cuando
-// todavía no hay progreso previo (primer GPS de una ruta nueva).
+// ─── Selección de segmento activo (compartida por desvío y recorte visual) ────────
+// Ver el bloque de constantes junto a VENTANA_ADELANTE_METROS para la explicación
+// completa de la causa que esto corrige. Dos defensas, combinadas:
+//  1) Ventana hacia ADELANTE acotada en METROS (además de la ya existente hacia atrás,
+//     VENTANA_ATRAS_SEGMENTOS) — nunca se evalúa un candidato más allá de
+//     VENTANA_ADELANTE_METROS de distancia acumulada real desde el índice actual.
+//  2) Compatibilidad de sentido: con heading confiable (ver VELOCIDAD_MIN_HEADING_CONFIABLE_MPS),
+//     se descarta cualquier candidato cuyo bearing de segmento difiera del heading del
+//     vehículo en más de UMBRAL_DIFERENCIA_ANGULAR_SEGMENTO_GRADOS — la calzada
+//     contraria (bearing ~180° opuesto al de marcha) no puede ganar sólo por estar
+//     unos metros más cerca. Si NINGÚN candidato de la ventana es compatible (heading
+//     real cambiando, p.ej. una maniobra en curso), se cae de vuelta al más cercano
+//     sin filtrar — mejor eso que dejar sin ninguna selección.
+// Sin heading confiable (detenido, arrancando), el criterio es el de siempre: el más
+// cercano dentro de la ventana, sin filtrar por sentido.
+interface ResultadoSeleccionSegmento {
+  indice: number;
+  distancia: number;
+  punto: google.maps.LatLngLiteral;
+  bearingSegmento: number;
+  diferenciaAngular: number | null;
+  descartadoPorSentido: boolean;
+  saltoIndices: number;
+  candidatosEnVentana: number;
+}
+
+interface ContextoSeleccionSegmento {
+  indiceActual: number;
+  headingVehiculo: number | null;
+  velocidadVehiculoMps: number | null;
+  accuracyMetros: number | null;
+  origen: "desvio" | "recorte";
+  rutaRequestId: number;
+}
+
+const elegirSegmentoActivo = (
+  polyline: google.maps.LatLngLiteral[],
+  posicion: google.maps.LatLngLiteral,
+  ctx: ContextoSeleccionSegmento
+): ResultadoSeleccionSegmento | null => {
+  if (polyline.length < 2) return null;
+  const desde = Math.min(Math.max(ctx.indiceActual - VENTANA_ATRAS_SEGMENTOS, 0), polyline.length - 2);
+
+  // Ventana hacia adelante: camina acumulando longitud REAL de cada tramo desde
+  // `desde` hasta superar VENTANA_ADELANTE_METROS (o llegar al final de la polyline).
+  let hasta = desde;
+  let acumuladoMetros = 0;
+  while (hasta < polyline.length - 2 && acumuladoMetros < VENTANA_ADELANTE_METROS) {
+    acumuladoMetros += distanciaMetros(polyline[hasta], polyline[hasta + 1]);
+    hasta++;
+  }
+
+  const headingConfiable =
+    ctx.headingVehiculo !== null
+    && ctx.velocidadVehiculoMps !== null
+    && ctx.velocidadVehiculoMps >= VELOCIDAD_MIN_HEADING_CONFIABLE_MPS;
+
+  type Candidato = { indice: number; distancia: number; punto: google.maps.LatLngLiteral; bearing: number };
+  const candidatos: Candidato[] = [];
+  for (let i = desde; i <= hasta; i++) {
+    const { distancia, punto } = proyeccionEnSegmento(posicion, polyline[i], polyline[i + 1]);
+    candidatos.push({ indice: i, distancia, punto, bearing: calcularBearing(polyline[i], polyline[i + 1]) });
+  }
+  if (candidatos.length === 0) return null;
+
+  let mejorGlobal = candidatos[0];
+  for (const c of candidatos) if (c.distancia < mejorGlobal.distancia) mejorGlobal = c;
+
+  const esCompatible = (c: Candidato): boolean =>
+    !headingConfiable || diferenciaAngularGrados(ctx.headingVehiculo!, c.bearing) <= UMBRAL_DIFERENCIA_ANGULAR_SEGMENTO_GRADOS;
+
+  let mejorCompatible: Candidato | null = null;
+  for (const c of candidatos) {
+    if (!esCompatible(c)) continue;
+    if (!mejorCompatible || c.distancia < mejorCompatible.distancia) mejorCompatible = c;
+  }
+
+  const descartadoPorSentido = headingConfiable && !esCompatible(mejorGlobal);
+  const elegido = (headingConfiable && mejorCompatible) ? mejorCompatible : mejorGlobal;
+  const diferenciaAngular = headingConfiable ? diferenciaAngularGrados(ctx.headingVehiculo!, elegido.bearing) : null;
+
+  // Log SELECTIVO — nunca por cada candidato evaluado (ver requerimiento de no
+  // inundar el panel): sólo cuando el más cercano crudo fue rechazado por sentido, o
+  // cuando dos candidatos NO adyacentes (>2 índices — descarta vecinos normales de la
+  // misma curva) empatan en distancia (ambigüedad real entre calzadas/ramales).
+  if (descartadoPorSentido) {
+    diagLog(
+      `[TILA_NAV_DIAG] segmento-activo(${ctx.origen}) DESCARTADO_POR_SENTIDO `
+      + `indiceAnterior=${ctx.indiceActual} indiceCandidato=${mejorGlobal.indice} indiceElegido=${elegido.indice} `
+      + `distanciaCandidato=${Math.round(mejorGlobal.distancia)}m bearingSegmento=${Math.round(mejorGlobal.bearing)}° `
+      + `headingVehiculo=${Math.round(ctx.headingVehiculo!)}° diferenciaAngular=${diferenciaAngular !== null ? Math.round(diferenciaAngular) : "n/a"}° `
+      + `velocidad=${ctx.velocidadVehiculoMps !== null ? ctx.velocidadVehiculoMps.toFixed(1) : "n/a"}m/s `
+      + `accuracy=${ctx.accuracyMetros ?? "n/a"} candidatosEnVentana=${candidatos.length} rutaRequestId=${ctx.rutaRequestId} t=${Math.round(performance.now())}`
+    );
+  }
+  const ambiguo = candidatos.find(c =>
+    c.indice !== mejorGlobal.indice
+    && Math.abs(c.indice - mejorGlobal.indice) > 2
+    && Math.abs(c.distancia - mejorGlobal.distancia) <= UMBRAL_AMBIGUEDAD_METROS
+  );
+  if (ambiguo) {
+    diagLog(
+      `[TILA_NAV_DIAG] segmento-activo(${ctx.origen}) AMBIGUEDAD `
+      + `indiceA=${mejorGlobal.indice} distanciaA=${Math.round(mejorGlobal.distancia)}m `
+      + `indiceB=${ambiguo.indice} distanciaB=${Math.round(ambiguo.distancia)}m indiceElegido=${elegido.indice} `
+      + `rutaRequestId=${ctx.rutaRequestId} t=${Math.round(performance.now())}`
+    );
+  }
+
+  return {
+    indice: elegido.indice,
+    distancia: elegido.distancia,
+    punto: elegido.punto,
+    bearingSegmento: elegido.bearing,
+    diferenciaAngular,
+    descartadoPorSentido,
+    saltoIndices: elegido.indice - ctx.indiceActual,
+    candidatosEnVentana: candidatos.length,
+  };
+};
+
+// Distancia mínima de un punto a la polyline — wrapper delgado sobre
+// elegirSegmentoActivo, conserva la firma {distancia, indice} que ya usa el efecto de
+// desvío. null si la polyline todavía no tiene al menos 2 puntos.
 const distanciaMinAPolyline = (
   p: google.maps.LatLngLiteral,
   puntos: google.maps.LatLngLiteral[],
-  indiceDesde: number = 0
+  indiceDesde: number,
+  headingVehiculo: number | null,
+  velocidadVehiculoMps: number | null,
+  accuracyMetros: number | null,
+  rutaRequestId: number
 ): { distancia: number; indice: number } | null => {
-  if (puntos.length < 2) return null;
-  const desde = Math.min(Math.max(indiceDesde - VENTANA_ATRAS_SEGMENTOS, 0), puntos.length - 2);
-  let minimo = Infinity, mejorIndice = desde;
-  for (let i = desde; i < puntos.length - 1; i++) {
-    const d = distanciaPuntoASegmentoMetros(p, puntos[i], puntos[i + 1]);
-    if (d < minimo) { minimo = d; mejorIndice = i; }
-  }
-  return { distancia: minimo, indice: mejorIndice };
+  const resultado = elegirSegmentoActivo(puntos, p, {
+    indiceActual: indiceDesde, headingVehiculo, velocidadVehiculoMps, accuracyMetros,
+    origen: "desvio", rutaRequestId,
+  });
+  return resultado ? { distancia: resultado.distancia, indice: resultado.indice } : null;
 };
 
 // ─── Recorte visual de la traza (SOLO representación — rutaPolylineRef sigue intacta
@@ -419,10 +569,9 @@ const distanciaMinAPolyline = (
 // saltar, sin perder la continuidad visual bajo el ícono.
 const MARGEN_RUTA_DETRAS_METROS = 8;
 
-// Proyección de un punto sobre el segmento a-b: distancia y el punto proyectado (no
-// sólo la distancia, a diferencia de distanciaPuntoASegmentoMetros de arriba — se
-// necesita el punto para poder recortar la polyline ahí). Función separada a propósito:
-// no se reutiliza ni se modifica distanciaPuntoASegmentoMetros, que usa el rerouting real.
+// Proyección de un punto sobre el segmento a-b: distancia y el punto proyectado —
+// usada por elegirSegmentoActivo (necesita el punto, no sólo la distancia, para poder
+// recortar/dibujar la polyline ahí).
 const proyeccionEnSegmento = (
   p: google.maps.LatLngLiteral,
   a: google.maps.LatLngLiteral,
@@ -438,34 +587,35 @@ const proyeccionEnSegmento = (
   return { distancia, punto };
 };
 
-// Recorta `polyline` para mostrar sólo desde cerca del vehículo hasta el final, con un
-// margen de continuidad detrás. `indiceMinimo` es la clave de la monotonía: la búsqueda
-// del punto más cercano nunca mira tramos anteriores a él, así que el arranque visible
-// nunca "salta" hacia atrás por una lectura de GPS momentáneamente imprecisa — sólo
-// puede avanzar o quedarse, nunca retroceder, mientras sea la MISMA ruta (ver el efecto
-// de más abajo, que reinicia indiceMinimo a 0 cuando rutaPolylineRef cambia de verdad).
+// Recorta `polyline` para mostrar sólo desde el segmento elegido (ver
+// elegirSegmentoActivo, que hace la selección real — acá sólo queda el "retroceder
+// margenMetros" para el arranque visual, con continuidad). El índice que se devuelve
+// para el próximo tick es el del segmento ELEGIDO, no el retrocedido por el margen —
+// el margen es sólo cosmético para el dibujo, nunca mueve el progreso real.
 const recortarRutaDesdeVehiculo = (
   polyline: google.maps.LatLngLiteral[],
   posicion: google.maps.LatLngLiteral,
   margenMetros: number,
-  indiceMinimo: number
+  indiceMinimo: number,
+  headingVehiculo: number | null,
+  velocidadVehiculoMps: number | null,
+  accuracyMetros: number | null,
+  rutaRequestId: number
 ): { puntos: google.maps.LatLngLiteral[]; indice: number } => {
   if (polyline.length < 2) return { puntos: polyline, indice: 0 };
+  const resultado = elegirSegmentoActivo(polyline, posicion, {
+    indiceActual: indiceMinimo, headingVehiculo, velocidadVehiculoMps, accuracyMetros,
+    origen: "recorte", rutaRequestId,
+  });
+  if (!resultado) return { puntos: polyline, indice: 0 };
   const desde = Math.min(Math.max(indiceMinimo - VENTANA_ATRAS_SEGMENTOS, 0), polyline.length - 2);
-  let mejorIndice = desde, mejorDistancia = Infinity, mejorPunto = polyline[desde];
-  for (let i = desde; i < polyline.length - 1; i++) {
-    const { distancia, punto } = proyeccionEnSegmento(posicion, polyline[i], polyline[i + 1]);
-    if (distancia < mejorDistancia) {
-      mejorDistancia = distancia; mejorIndice = i; mejorPunto = punto;
-    }
-  }
-  // Retroceder margenMetros desde el punto más cercano, para continuidad visual — nunca
+  // Retroceder margenMetros desde el punto elegido, para continuidad visual — nunca
   // cruza por debajo de `desde` (mismo límite que ya impidió mirar tramos anteriores).
   let restante = margenMetros;
-  let indice = mejorIndice;
-  let punto = mejorPunto;
-  while (restante > 0 && indice > desde) {
-    const inicioSegmento = polyline[indice];
+  let indiceDibujo = resultado.indice;
+  let punto = resultado.punto;
+  while (restante > 0 && indiceDibujo > desde) {
+    const inicioSegmento = polyline[indiceDibujo];
     const largoHastaInicio = distanciaMetros(punto, inicioSegmento);
     if (largoHastaInicio >= restante) {
       const fraccion = restante / largoHastaInicio;
@@ -478,11 +628,9 @@ const recortarRutaDesdeVehiculo = (
     }
     restante -= largoHastaInicio;
     punto = inicioSegmento;
-    indice -= 1;
+    indiceDibujo -= 1;
   }
-  // El índice que se devuelve para el próximo tick es el del punto más cercano REAL
-  // (mejorIndice), no el retrocedido por el margen — el margen es sólo cosmético.
-  return { puntos: [punto, ...polyline.slice(indice + 1)], indice: mejorIndice };
+  return { puntos: [punto, ...polyline.slice(indiceDibujo + 1)], indice: resultado.indice };
 };
 
 export interface ParadaMapa {
@@ -527,6 +675,10 @@ interface MapaTILAProps {
   /** Rumbo GPS del chofer en grados (0-360). Sólo se usa en modoNavegacion, y sólo
    *  mientras el seguimiento automático esté activo, para orientar la cámara. */
   heading?: number | null;
+  /** accuracy (metros) del último fix GPS fresco, si el navegador la reportó. Se usa
+   *  únicamente para no reelegir segmento/sumar lectura de desvío con un fix de mala
+   *  precisión — ver UMBRAL_ACCURACY_MALA_METROS. No afecta marcador/cámara/heading. */
+  accuracy?: number | null;
   origen: string;
   destino: string;
   paradaActivaDireccion?: string | null;
@@ -715,6 +867,7 @@ export default function MapaTILA({
   lat,
   lng,
   heading,
+  accuracy = null,
   origen,
   destino,
   paradaActivaDireccion,
@@ -774,6 +927,11 @@ export default function MapaTILA({
   // de dependencias (mismo patrón que autoResueltoRef más abajo).
   const panelTopPxRef = useRef(panelTopPx);
   useEffect(() => { panelTopPxRef.current = panelTopPx; }, [panelTopPx]);
+  // Espejo en ref del prop accuracy — mismo patrón que panelTopPxRef, así pasoAnimacion
+  // (dentro del loop de rAF, no puede depender de props en su array de deps) lee el
+  // valor más reciente sin recrear el callback en cada cambio de accuracy.
+  const accuracyRef = useRef(accuracy);
+  useEffect(() => { accuracyRef.current = accuracy; }, [accuracy]);
   // true mientras restaurarCamaraNavegacion ("Mi ubicación") está aplicando su propia
   // actualización atómica de cámara — pasoAnimacion y el efecto de panelTopPx NO escriben
   // sobre center/heading mientras esto sea true, para que exista una única autoridad de
@@ -1238,9 +1396,16 @@ export default function MapaTILA({
       ) {
         ultimaActualizacionRecorteTsRef.current = ahora;
         const polyline = rutaPolylineRef.current;
-        if (polyline.length >= 2) {
+        const accuracyActualRecorte = accuracyRef.current ?? null;
+        const accuracyMalaRecorte = accuracyActualRecorte !== null && accuracyActualRecorte > UMBRAL_ACCURACY_MALA_METROS;
+        // Fix de mala precisión: se congela el recorte este tick (no se reelige
+        // segmento ni se redibuja) en vez de arriesgarse a saltar a otra calzada con
+        // una posición poco confiable — ver UMBRAL_ACCURACY_MALA_METROS.
+        if (polyline.length >= 2 && !accuracyMalaRecorte) {
           const { puntos, indice } = recortarRutaDesdeVehiculo(
-            polyline, { lat: latActual, lng: lngActual }, MARGEN_RUTA_DETRAS_METROS, indiceRutaVisibleRef.current
+            polyline, { lat: latActual, lng: lngActual }, MARGEN_RUTA_DETRAS_METROS, indiceRutaVisibleRef.current,
+            headingActual, velocidadMPorMsRef.current > 0 ? velocidadMPorMsRef.current * 1000 : null,
+            accuracyActualRecorte, rutaRequestIdRef.current
           );
           indiceRutaVisibleRef.current = indice;
           setRutaVisibleDesdeVehiculo(puntos);
@@ -1875,10 +2040,24 @@ export default function MapaTILA({
     // ruta" contra una polyline que de todos modos está por reemplazarse.
     let desvioConfirmado = false;
     if (!cambioDeParadas && !primerGps) {
+      const accuracyActualDesvio = accuracyRef.current ?? null;
+      const accuracyMalaDesvio   = accuracyActualDesvio !== null && accuracyActualDesvio > UMBRAL_ACCURACY_MALA_METROS;
+      // Fix de mala precisión: no cuenta para desvío ni mueve el índice/segmento — un
+      // solo fix así puede estar, por sí solo, más lejos de la ruta que el propio
+      // umbral de desvío, sin que el vehículo se haya movido (ver UMBRAL_ACCURACY_MALA_METROS).
+      // No dispara recálculo (desvioConfirmado sigue false) y tampoco resetea el
+      // contador de lecturas — simplemente se ignora este tick por completo.
+      if (accuracyMalaDesvio) {
+        diagLog(`[TILA_NAV_DIAG] desvio-efecto: fix ignorado por accuracy mala accuracy=${Math.round(accuracyActualDesvio!)}m > ${UMBRAL_ACCURACY_MALA_METROS}m t=${Math.round(performance.now())}`);
+      } else {
       // Búsqueda con progreso: sólo desde unos tramos antes del índice compartido en
       // adelante (VENTANA_ATRAS_SEGMENTOS), no la polyline completa desde el principio —
       // evita que un tramo ya recorrido o una calle paralela "gane" la distancia mínima.
-      const resultado   = distanciaMinAPolyline(fix, rutaPolylineRef.current, indiceRutaVisibleRef.current);
+      const resultado   = distanciaMinAPolyline(
+        fix, rutaPolylineRef.current, indiceRutaVisibleRef.current,
+        headingValido(heading), velocidadMPorMsRef.current > 0 ? velocidadMPorMsRef.current * 1000 : null,
+        accuracyActualDesvio, rutaRequestIdRef.current
+      );
       const distancia    = resultado?.distancia ?? null;
       const fueraDeRuta = distancia !== null && distancia >= UMBRAL_DESVIO_RUTA_METROS;
       const desvioObvio = distancia !== null && distancia >= UMBRAL_DESVIO_INMEDIATO_METROS;
@@ -1902,6 +2081,7 @@ export default function MapaTILA({
         }
       }
       diagLog(`[TILA_NAV_DIAG] desvio-efecto distanciaAPolyline=${distancia === null ? "null" : Math.round(distancia)} lecturasFueraDeRuta=${lecturasFueraDeRutaParaLog} desvioConfirmado=${desvioConfirmado} t=${Math.round(performance.now())}`);
+      }
     }
 
     if (!cambioDeParadas && !primerGps && !desvioConfirmado) return; // nada relevante cambió
