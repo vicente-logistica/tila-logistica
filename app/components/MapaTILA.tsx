@@ -201,6 +201,16 @@ const UMBRAL_AVISO_MANIOBRA_METROS = 150;
 const UMBRAL_AVISO_SALIDA_LEJANO_METROS  = 200;
 const UMBRAL_AVISO_SALIDA_CERCANO_METROS = 65;
 
+// ─── Prioridad y espaciado de anuncios por voz ─────────────────────────────────
+// Dos prioridades: "informativo" (p.ej. "Ruta recalculada.") y "maniobra" (giros,
+// salidas). Una maniobra SIEMPRE puede interrumpir un informativo sin esperar este
+// cooldown — evita silenciar una instrucción real por culpa de un mensaje de cortesía.
+// Entre dos anuncios de la MISMA prioridad (dos informativos, o dos maniobras) sí se
+// exige este espaciado mínimo, para que no se corten entre sí sin necesidad — si la
+// segunda maniobra sigue siendo válida, se reintenta en el próximo tick (no se pierde,
+// sólo se posterga).
+const COOLDOWN_ANUNCIO_MISMA_PRIORIDAD_MS = 2500;
+
 // Distancia geodésica simple (haversine) entre dos puntos, en metros.
 const distanciaMetros = (a: google.maps.LatLngLiteral, b: google.maps.LatLngLiteral): number => {
   const R = 6371000;
@@ -700,6 +710,11 @@ interface MapaTILAProps {
    *  detecta el evento y arma el texto; no sabe si la voz está activa ni cómo reproducirla,
    *  eso lo decide quien la use (ver app/utils/vozNavegacion.ts). */
   onAnuncioVoz?: (mensaje: string) => void;
+  /** Corta cualquier locución en curso, YA — se llama al confirmarse un recálculo, antes
+   *  de decidir el próximo anuncio (ver app/utils/vozNavegacion.ts: detenerVoz()). Sin
+   *  esto (prop no provista), no se corta nada explícitamente al recalcular — sólo el
+   *  reemplazo natural que produce la siguiente llamada a onAnuncioVoz. */
+  onDetenerVoz?: () => void;
   /** Coordenada Y real (viewport, getBoundingClientRect().top) del borde superior del
    *  panel flotante inferior (viaje-activo) — usado sólo en modoNavegacion para que el
    *  camión no quede centrado en la pantalla completa, sino pegado arriba del panel (ver
@@ -882,6 +897,7 @@ export default function MapaTILA({
   vozActiva = false,
   onToggleVoz,
   onAnuncioVoz,
+  onDetenerVoz,
   panelTopPx,
 }: MapaTILAProps) {
   const { isLoaded, loadError } = useJsApiLoader({
@@ -1018,6 +1034,39 @@ export default function MapaTILA({
   // apunta a un array distinto (ruta realmente nueva, tras un recálculo).
   const indiceRutaVisibleRef  = useRef(0);
   const ultimaRutaRefVistaRef = useRef<google.maps.LatLngLiteral[] | null>(null);
+  // requestId asociado a la última ruta para la que se sincronizó el índice (sólo para
+  // el log RUTA_NUEVA_INSTALADA) y requestId de la última generación que ya escribió
+  // rutaVisibleDesdeVehiculo al menos una vez (sólo para el log
+  // RUTA_VISUAL_PRIMERA_ESCRITURA, evita loguear en cada frame — ver
+  // sincronizarIndiceConRuta y el bloque de recorte dentro de pasoAnimacion).
+  const ultimaRutaRequestIdVistaRef = useRef<number | null>(null);
+  const ultimoRequestIdEscritoRef   = useRef<number | null>(null);
+
+  // Sincroniza el índice compartido con la ruta ACTUAL antes de usarlo — se llama desde
+  // el mismo lugar que CONSUME el índice (el bloque de recorte dentro de pasoAnimacion,
+  // y el efecto de desvío), nunca depende de que un useEffect de React haya corrido
+  // antes. Si `polyline` ya no es la misma referencia que la última vez que se
+  // sincronizó, es una ruta realmente nueva (recálculo recién aterrizado, ver
+  // rutaPolylineRef en calcularRuta): resetea el índice a 0 ahí mismo, de forma
+  // síncrona, ANTES de que nada pueda leer un índice que pertenece a la generación
+  // anterior — cierra por diseño la ventana de carrera entre calculandoRutaNavRef
+  // (se libera síncrono, dentro del callback de Directions) y el efecto de React que
+  // antes hacía este mismo reset (async, corre recién en el próximo render). Llamarla
+  // más de una vez para la misma polyline en el mismo tick es seguro: la segunda
+  // llamada no encuentra cambio y sólo devuelve el índice ya corregido.
+  const sincronizarIndiceConRuta = useCallback((polyline: google.maps.LatLngLiteral[]): number => {
+    if (polyline !== ultimaRutaRefVistaRef.current) {
+      const requestIdAnterior = ultimaRutaRequestIdVistaRef.current;
+      ultimaRutaRefVistaRef.current = polyline;
+      ultimaRutaRequestIdVistaRef.current = rutaRequestIdRef.current;
+      indiceRutaVisibleRef.current = 0;
+      diagLog(
+        `[TILA_NAV_DIAG] RUTA_NUEVA_INSTALADA requestId=${rutaRequestIdRef.current} `
+        + `requestIdAnterior=${requestIdAnterior ?? "n/a"} puntosRuta=${polyline.length} t=${Math.round(performance.now())}`
+      );
+    }
+    return indiceRutaVisibleRef.current;
+  }, []);
 
   // ── Diagnóstico visible ───────────────────────────────────────────────────
   const [diagnostico, setDiagnostico] = useState<DiagnosticoMapa>({
@@ -1386,29 +1435,42 @@ export default function MapaTILA({
       // Traza visible: recortada con la MISMA posición interpolada de este frame (no
       // con el último fix crudo) y throtteada a la misma cadencia que la cámara — así
       // el arranque de la línea se mueve en sincronía con el marcador en vez de quedar
-      // fijo entre un fix GPS y el siguiente. El efecto por-fix-GPS (más abajo en el
-      // componente) sigue siendo el único que detecta ruta nueva, resetea el índice y
-      // congela durante un recálculo en vuelo — acá sólo se dibuja con el índice que
-      // ese efecto ya dejó al día, nunca se decide nada de eso.
+      // fijo entre un fix GPS y el siguiente. sincronizarIndiceConRuta corre ACÁ MISMO,
+      // justo antes de leer el índice — no depende de que ningún useEffect lo haya
+      // corregido de antemano, así nunca puede dibujar la polyline nueva con el índice
+      // de la generación anterior (ver el comentario largo junto a esa función).
       if (
         !calculandoRutaNavRef.current
         && ahora - ultimaActualizacionRecorteTsRef.current >= INTERVALO_MIN_RECORTE_MS
       ) {
         ultimaActualizacionRecorteTsRef.current = ahora;
         const polyline = rutaPolylineRef.current;
+        const requestIdDeEstaEscritura = rutaRequestIdRef.current;
         const accuracyActualRecorte = accuracyRef.current ?? null;
         const accuracyMalaRecorte = accuracyActualRecorte !== null && accuracyActualRecorte > UMBRAL_ACCURACY_MALA_METROS;
         // Fix de mala precisión: se congela el recorte este tick (no se reelige
         // segmento ni se redibuja) en vez de arriesgarse a saltar a otra calzada con
         // una posición poco confiable — ver UMBRAL_ACCURACY_MALA_METROS.
         if (polyline.length >= 2 && !accuracyMalaRecorte) {
+          const indiceSincronizado = sincronizarIndiceConRuta(polyline);
           const { puntos, indice } = recortarRutaDesdeVehiculo(
-            polyline, { lat: latActual, lng: lngActual }, MARGEN_RUTA_DETRAS_METROS, indiceRutaVisibleRef.current,
+            polyline, { lat: latActual, lng: lngActual }, MARGEN_RUTA_DETRAS_METROS, indiceSincronizado,
             headingActual, velocidadMPorMsRef.current > 0 ? velocidadMPorMsRef.current * 1000 : null,
-            accuracyActualRecorte, rutaRequestIdRef.current
+            accuracyActualRecorte, requestIdDeEstaEscritura
           );
-          indiceRutaVisibleRef.current = indice;
-          setRutaVisibleDesdeVehiculo(puntos);
+          // Defensivo: todo este bloque es síncrono (nada puede reasignar
+          // rutaPolylineRef en el medio), así que esta condición siempre debería ser
+          // verdadera — se deja como guarda explícita en vez de asumirlo.
+          if (rutaPolylineRef.current === polyline) {
+            indiceRutaVisibleRef.current = indice;
+            if (ultimoRequestIdEscritoRef.current !== requestIdDeEstaEscritura) {
+              ultimoRequestIdEscritoRef.current = requestIdDeEstaEscritura;
+              diagLog(`[TILA_NAV_DIAG] RUTA_VISUAL_PRIMERA_ESCRITURA requestId=${requestIdDeEstaEscritura} puntosVisibles=${puntos.length} t=${Math.round(performance.now())}`);
+            }
+            setRutaVisibleDesdeVehiculo(puntos);
+          } else {
+            diagLog(`[TILA_NAV_DIAG] RUTA_VISUAL_ESCRITURA_DESCARTADA requestId=${requestIdDeEstaEscritura} t=${Math.round(performance.now())}`);
+          }
         }
       }
     } else {
@@ -1423,7 +1485,7 @@ export default function MapaTILA({
     } else {
       animacionFrameRef.current = null;
     }
-  }, [modoNavegacion, moverCamara, calcularOffsetVerticalCamara]);
+  }, [modoNavegacion, moverCamara, calcularOffsetVerticalCamara, sincronizarIndiceConRuta]);
   useEffect(() => {
     pasoAnimacionRef.current = pasoAnimacion;
   }, [pasoAnimacion]);
@@ -1593,9 +1655,13 @@ export default function MapaTILA({
           // Google, lo que dejaba la traza nueva "despegada" del vehículo justo después
           // de recalcular. Fallback a overview_path sólo si por algún motivo la ruta no
           // trajera steps (no debería pasar con travelMode DRIVING).
+          const habiaRutaAnterior = rutaPolylineRef.current.length >= 2;
           const puntosOverview  = (result.routes?.[0]?.overview_path ?? []).map(p => ({ lat: p.lat(), lng: p.lng() }));
           const puntosDetallados = construirPolylineDetalladaDesdeRuta(result);
           rutaPolylineRef.current = puntosDetallados.length >= 2 ? puntosDetallados : puntosOverview;
+          if (habiaRutaAnterior) {
+            diagLog(`[TILA_NAV_DIAG] DIRECTIONS_ANTERIOR_LIMPIADO requestId=${miRequestId} t=${Math.round(performance.now())}`);
+          }
           const origenLatLng = typeof origin === "string" ? null : origin;
           const primerPuntoNuevo = rutaPolylineRef.current[0] ?? null;
           const distanciaOrigenAPrimerPunto = origenLatLng && primerPuntoNuevo
@@ -1616,7 +1682,11 @@ export default function MapaTILA({
         } else {
           // FALLBACK: dibujar Polyline simple con los puntos que tenemos — también sirve
           // como polyline de referencia para medir desvío mientras no haya Directions real.
+          const habiaRutaAnterior = rutaPolylineRef.current.length >= 2;
           rutaPolylineRef.current = fallbackPuntos;
+          if (habiaRutaAnterior) {
+            diagLog(`[TILA_NAV_DIAG] FALLBACK_ANTERIOR_LIMPIADO requestId=${miRequestId} t=${Math.round(performance.now())}`);
+          }
           aplicarPolylineFallback(fallbackPuntos);
         }
         if (onSettled) onSettled();
@@ -2053,8 +2123,10 @@ export default function MapaTILA({
       // Búsqueda con progreso: sólo desde unos tramos antes del índice compartido en
       // adelante (VENTANA_ATRAS_SEGMENTOS), no la polyline completa desde el principio —
       // evita que un tramo ya recorrido o una calle paralela "gane" la distancia mínima.
+      // sincronizarIndiceConRuta corre acá también (idempotente: si pasoAnimacion ya
+      // sincronizó esta misma polyline en un frame anterior, no hace nada distinto).
       const resultado   = distanciaMinAPolyline(
-        fix, rutaPolylineRef.current, indiceRutaVisibleRef.current,
+        fix, rutaPolylineRef.current, sincronizarIndiceConRuta(rutaPolylineRef.current),
         headingValido(heading), velocidadMPorMsRef.current > 0 ? velocidadMPorMsRef.current * 1000 : null,
         accuracyActualDesvio, rutaRequestIdRef.current
       );
@@ -2088,16 +2160,18 @@ export default function MapaTILA({
 
     // Al confirmarse un desvío real, se limpia la traza visible YA, antes de pedirle la
     // ruta nueva a Directions — así no queda ningún resto de la ruta anterior dibujado
-    // durante el (breve) viaje de ida y vuelta a la API. El efecto de recorte visual
-    // vuelve a dibujar en cuanto la ruta nueva aterriza (dispara por el cambio de
-    // `directions`/`polylinePuntos`).
-    if (desvioConfirmado) setRutaVisibleDesdeVehiculo([]);
+    // durante el (breve) viaje de ida y vuelta a la API. pasoAnimacion vuelve a dibujar
+    // en cuanto la ruta nueva aterriza y sincronizarIndiceConRuta detecta el cambio.
+    if (desvioConfirmado) {
+      setRutaVisibleDesdeVehiculo([]);
+      diagLog(`[TILA_NAV_DIAG] RUTA_VISUAL_INVALIDADA requestIdAnterior=${rutaRequestIdRef.current} t=${Math.round(performance.now())}`);
+    }
 
     diagLog(`[TILA_NAV_DIAG] desvio-efecto DISPARANDO dispararCalculoNav cambioDeParadas=${cambioDeParadas} primerGps=${primerGps} desvioConfirmado=${desvioConfirmado} t=${Math.round(performance.now())}`);
     primerGpsMultietapaRef.current = true;
     dispararCalculoNav();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isLoaded, modoNavegacion, tieneParadas, modoMultiChofer, lat, lng, JSON.stringify(paradas?.map(p => ({ d: p.direccion, e: p.estado }))), dispararCalculoNav]);
+  }, [isLoaded, modoNavegacion, tieneParadas, modoMultiChofer, lat, lng, JSON.stringify(paradas?.map(p => ({ d: p.direccion, e: p.estado }))), dispararCalculoNav, sincronizarIndiceConRuta]);
 
   // ─── modoNavegacion: encuadre inicial único ────────────────────────────────
   // Único lugar que hace el fitBounds/setCenter automático de arranque en modoNavegacion.
@@ -2114,43 +2188,21 @@ export default function MapaTILA({
     encuadrarPuntos(puntos);
   }, [modoNavegacion, modoMultiChofer, lat, lng, paradasCoords, destinoCoords, encuadrarPuntos]);
 
-  // ─── Recorte visual de la traza: bookkeeping (detectar ruta nueva / congelar) ──────
-  // El DIBUJO en sí (recortarRutaDesdeVehiculo + setRutaVisibleDesdeVehiculo) ya NO pasa
-  // por acá — se mueve al bloque throtteado dentro de pasoAnimacion, que usa la posición
-  // INTERPOLADA (la misma del marcador) en vez del último fix crudo, para que la traza
-  // no quede fija entre un fix GPS y el siguiente (ver INTERVALO_MIN_RECORTE_MS). Este
-  // efecto sigue siendo la única fuente de verdad para: detectar que aterrizó una ruta
-  // realmente nueva y resetear el índice compartido a 0, y congelar (no tocar nada) toda
-  // esta bookkeeping mientras haya un recálculo en vuelo — nunca escribe
-  // rutaVisibleDesdeVehiculo directamente, así ningún otro lugar compite por esa escritura.
+  // ─── Recorte visual de la traza: caso "todavía no hay ruta" ────────────────────────
+  // El DIBUJO normal (recortarRutaDesdeVehiculo + setRutaVisibleDesdeVehiculo) y la
+  // detección de "ruta nueva"/reset de índice ya NO pasan por acá — viven junto al
+  // consumo real del índice (sincronizarIndiceConRuta, llamada desde pasoAnimacion y
+  // desde el efecto de desvío) para eliminar la ventana de carrera que existía cuando
+  // el reset dependía de que este efecto corriera primero. Lo único que sigue siendo
+  // exclusivo de acá: limpiar rutaVisibleDesdeVehiculo cuando directamente NO hay
+  // ninguna ruta (todavía no llegó la primera, o Directions falló sin fallback) — ese
+  // estado no le compete a sincronizarIndiceConRuta, que sólo se llama cuando ya hay
+  // una polyline de 2+ puntos.
   useEffect(() => {
     if (!modoNavegacion || modoMultiChofer) return;
-    // Congela también ante un fix rechazado (mismo criterio que "recálculo en vuelo" más
-    // abajo) — no hay nada confiable con qué decidir si la ruta cambió en este tick.
-    const fix = fixValidoActualRef.current;
-    if (!fix) return;
-    // Mientras haya un recálculo en vuelo, rutaPolylineRef todavía es la ruta VIEJA (está
-    // por reemplazarse) — no tiene sentido evaluar "¿es una ruta nueva?" contra ella. En
-    // cuanto la ruta nueva reemplace a rutaPolylineRef, este efecto corre de nuevo
-    // (dispara por el cambio de `directions`) y recién ahí detecta el cambio.
+    if (!fixValidoActualRef.current) return;
     if (calculandoRutaNavRef.current) return;
-    const polyline = rutaPolylineRef.current;
-    if (polyline.length < 2) {
-      // Sin ruta todavía (o Directions falló sin fallback) — nada que recortar. Único
-      // caso en que este efecto sí limpia rutaVisibleDesdeVehiculo directamente: el
-      // bloque en pasoAnimacion sólo DIBUJA cuando ya hay una polyline de 2+ puntos, así
-      // que no le compete decidir el estado "todavía no hay ruta".
-      setRutaVisibleDesdeVehiculo([]);
-      return;
-    }
-    // Ruta realmente nueva (referencia distinta — rutaPolylineRef se reasigna a un
-    // array nuevo en cada recálculo, ver calcularRuta) → reinicia el índice monotónico
-    // COMPARTIDO (también usado por la detección de desvío, ver ese efecto más arriba).
-    if (polyline !== ultimaRutaRefVistaRef.current) {
-      ultimaRutaRefVistaRef.current = polyline;
-      indiceRutaVisibleRef.current = 0;
-      diagLog(`[TILA_NAV_DIAG] recorte-efecto: ruta nueva detectada, indiceRutaVisibleRef reseteado a 0 puntosRuta=${polyline.length} t=${Math.round(performance.now())}`);
-    }
+    if (rutaPolylineRef.current.length < 2) setRutaVisibleDesdeVehiculo([]);
   }, [lat, lng, directions, polylinePuntos, modoNavegacion, modoMultiChofer]);
 
   // ─── TILA_NAV_DIAG: heartbeat de diagnóstico (1s) ──────────────────────────
@@ -2200,22 +2252,82 @@ export default function MapaTILA({
   const vozDirectionsPrevRef = useRef<google.maps.DirectionsResult | null>(null);
   const pasosAnunciadosRef   = useRef<Set<number>>(new Set());
   const rutaKeyVozRef        = useRef<string | null>(null);
+  // requestId de la ruta a la que están asociados pasosAnunciadosRef/pasosSalidaAvisadosRef
+  // — un anuncio nunca sale al aire si, para cuando se lo va a pronunciar, la ruta
+  // vigente (rutaRequestIdRef.current) ya cambió (ver intentarAnunciar).
+  const vozRutaRequestIdRef = useRef<number | null>(null);
   // Salidas/bifurcaciones de autopista (maneuver "ramp-*"/"fork-*") — dos avisos por
   // step en vez de uno: 0 = ninguno todavía, 1 = aviso lejano ya dado, 2 = aviso
   // cercano ya dado (no se vuelve a anunciar). Set aparte de pasosAnunciadosRef porque
   // acá cada step puede pasar por dos anuncios, no uno solo.
   const pasosSalidaAvisadosRef = useRef<Map<number, 0 | 1 | 2>>(new Map());
+  // Estado del cooldown/prioridad — ver COOLDOWN_ANUNCIO_MISMA_PRIORIDAD_MS.
+  const ultimoAnuncioTsRef        = useRef(0);
+  const ultimaPrioridadAnuncioRef = useRef<"informativo" | "maniobra" | null>(null);
+  const ultimoTextoAnunciadoRef   = useRef<string | null>(null);
+
+  // Único punto que efectivamente llama a onAnuncioVoz — decide si el anuncio sale
+  // ahora, se posterga (mismo texto o misma prioridad demasiado seguido) o se descarta
+  // (la ruta a la que pertenece ya no es la vigente). Devuelve true si realmente anunció
+  // — los llamadores sólo marcan un paso como "ya avisado" cuando esto es true, así un
+  // anuncio postergado se reintenta solo en un tick posterior en vez de perderse.
+  const intentarAnunciar = useCallback((
+    mensaje: string,
+    prioridad: "informativo" | "maniobra",
+    contexto: string,
+    requestIdEsperado: number
+  ): boolean => {
+    if (requestIdEsperado !== rutaRequestIdRef.current) {
+      diagLog(
+        `[TILA_NAV_DIAG] VOZ_ANUNCIO_DESCARTADO_RUTA_OBSOLETA requestIdEsperado=${requestIdEsperado} `
+        + `requestIdVigente=${rutaRequestIdRef.current} contexto=${contexto} texto="${mensaje}" t=${Math.round(performance.now())}`
+      );
+      return false;
+    }
+    const ahora = Date.now();
+    if (mensaje === ultimoTextoAnunciadoRef.current && ahora - ultimoAnuncioTsRef.current < COOLDOWN_ANUNCIO_MISMA_PRIORIDAD_MS) {
+      diagLog(`[TILA_NAV_DIAG] VOZ_ANUNCIO_DESCARTADO_DUPLICADO contexto=${contexto} texto="${mensaje}" t=${Math.round(performance.now())}`);
+      return false;
+    }
+    // Una maniobra SIEMPRE puede interrumpir un informativo sin esperar el cooldown —
+    // sólo dos anuncios de la MISMA prioridad se espacian entre sí.
+    const puedeInterrumpirSinEsperar = prioridad === "maniobra" && ultimaPrioridadAnuncioRef.current === "informativo";
+    if (!puedeInterrumpirSinEsperar && ahora - ultimoAnuncioTsRef.current < COOLDOWN_ANUNCIO_MISMA_PRIORIDAD_MS) {
+      diagLog(`[TILA_NAV_DIAG] VOZ_ANUNCIO_POSTERGADO_COOLDOWN prioridad=${prioridad} contexto=${contexto} texto="${mensaje}" t=${Math.round(performance.now())}`);
+      return false;
+    }
+    onAnuncioVoz!(mensaje);
+    ultimoAnuncioTsRef.current = ahora;
+    ultimaPrioridadAnuncioRef.current = prioridad;
+    ultimoTextoAnunciadoRef.current = mensaje;
+    diagLog(`[TILA_NAV_DIAG] VOZ_ANUNCIO requestId=${requestIdEsperado} prioridad=${prioridad} contexto=${contexto} texto="${mensaje}" t=${Math.round(performance.now())}`);
+    return true;
+  }, [onAnuncioVoz]);
 
   // "Ruta recalculada" — cualquier cambio de `directions` DESPUÉS del primero (el primer
-  // cálculo es el arranque normal del viaje, no un recálculo real).
+  // cálculo es el arranque normal del viaje, no un recálculo real). Además de anunciar,
+  // es el punto donde se invalida TODO el estado de voz de la generación anterior: se
+  // corta cualquier locución en curso YA (onDetenerVoz) y se resetean los pasos
+  // anunciados, para que nada de la ruta vieja pueda volver a hablar.
   useEffect(() => {
     if (!onAnuncioVoz || !modoNavegacion || modoMultiChofer) return;
     if (!directions) return;
     const previa = vozDirectionsPrevRef.current;
     vozDirectionsPrevRef.current = directions;
     if (previa === null || previa === directions) return;
-    onAnuncioVoz("Ruta recalculada.");
-  }, [directions, modoNavegacion, modoMultiChofer, onAnuncioVoz]);
+
+    const requestIdAnterior = vozRutaRequestIdRef.current;
+    vozRutaRequestIdRef.current = rutaRequestIdRef.current;
+    pasosAnunciadosRef.current = new Set();
+    pasosSalidaAvisadosRef.current = new Map();
+    rutaKeyVozRef.current = null; // fuerza también el reset del efecto de maniobras si corre en este mismo render
+
+    onDetenerVoz?.();
+    diagLog(`[TILA_NAV_DIAG] VOZ_DETENIDA_POR_RECALCULO requestIdAnterior=${requestIdAnterior ?? "n/a"} requestIdNuevo=${rutaRequestIdRef.current} t=${Math.round(performance.now())}`);
+    diagLog(`[TILA_NAV_DIAG] VOZ_RUTA_RESET requestId=${rutaRequestIdRef.current} t=${Math.round(performance.now())}`);
+
+    intentarAnunciar("Ruta recalculada.", "informativo", "recalculo", rutaRequestIdRef.current);
+  }, [directions, modoNavegacion, modoMultiChofer, onAnuncioVoz, onDetenerVoz, intentarAnunciar]);
 
   // Giros próximos — lee los steps de Directions (datos que calcularRuta ya produce, sin
   // recalcular nada acá) y anuncia una maniobra por vez cuando la posición actual entra
@@ -2225,6 +2337,7 @@ export default function MapaTILA({
   useEffect(() => {
     if (!onAnuncioVoz || !modoNavegacion || modoMultiChofer) return;
     if (!directions || !lat || !lng) return;
+    const requestIdDeEsteTick = rutaRequestIdRef.current;
 
     const pasos = (directions.routes?.[0]?.legs ?? []).flatMap(l => l.steps ?? []);
     const rutaKey = `${pasos.length}-${directions.routes?.[0]?.overview_path?.length ?? 0}`;
@@ -2247,12 +2360,14 @@ export default function MapaTILA({
         if (!lado) continue;
         const distancia = distanciaMetros({ lat, lng }, { lat: inicioPaso.lat(), lng: inicioPaso.lng() });
         if (estado === 0 && distancia <= UMBRAL_AVISO_SALIDA_LEJANO_METROS) {
-          onAnuncioVoz(`En 200 metros, tomá la salida a la ${lado}.`);
-          pasosSalidaAvisadosRef.current.set(i, 1);
-          break; // una sola maniobra anunciada por tick, evita ráfagas
+          if (intentarAnunciar(`En 200 metros, tomá la salida a la ${lado}.`, "maniobra", "salida-lejana", requestIdDeEsteTick)) {
+            pasosSalidaAvisadosRef.current.set(i, 1);
+          }
+          break; // una sola maniobra intentada por tick, evita ráfagas
         } else if (estado === 1 && distancia <= UMBRAL_AVISO_SALIDA_CERCANO_METROS) {
-          onAnuncioVoz(`En 65 metros, tomá la salida a la ${lado}.`);
-          pasosSalidaAvisadosRef.current.set(i, 2);
+          if (intentarAnunciar(`En 65 metros, tomá la salida a la ${lado}.`, "maniobra", "salida-cercana", requestIdDeEsteTick)) {
+            pasosSalidaAvisadosRef.current.set(i, 2);
+          }
           break;
         }
         continue;
@@ -2266,16 +2381,18 @@ export default function MapaTILA({
 
       const metros = Math.round(distancia / 10) * 10;
       if (maniobra.includes("right")) {
-        onAnuncioVoz(`En ${metros} metros doblá a la derecha.`);
-        pasosAnunciadosRef.current.add(i);
-        break; // una sola maniobra anunciada por tick, evita ráfagas
+        if (intentarAnunciar(`En ${metros} metros doblá a la derecha.`, "maniobra", "giro-derecha", requestIdDeEsteTick)) {
+          pasosAnunciadosRef.current.add(i);
+        }
+        break; // una sola maniobra intentada por tick, evita ráfagas
       } else if (maniobra.includes("left")) {
-        onAnuncioVoz(`En ${metros} metros girá a la izquierda.`);
-        pasosAnunciadosRef.current.add(i);
+        if (intentarAnunciar(`En ${metros} metros girá a la izquierda.`, "maniobra", "giro-izquierda", requestIdDeEsteTick)) {
+          pasosAnunciadosRef.current.add(i);
+        }
         break;
       }
     }
-  }, [directions, lat, lng, modoNavegacion, modoMultiChofer, onAnuncioVoz]);
+  }, [directions, lat, lng, modoNavegacion, modoMultiChofer, onAnuncioVoz, intentarAnunciar]);
 
   // ─── Marcador chofer ──────────────────────────────────────────────────────
   // Sólo crea el marcador si todavía no existe — ya NO fija su posición (eso lo hace

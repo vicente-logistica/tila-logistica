@@ -1016,6 +1016,7 @@ export default function ViajeActivoPage() {
           vozActiva={vozActiva}
           onToggleVoz={toggleVoz}
           onAnuncioVoz={onAnuncioVoz}
+          onDetenerVoz={detenerVoz}
           panelTopPx={panelTopPx}
         />
       </div>
