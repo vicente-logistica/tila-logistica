@@ -144,6 +144,22 @@ export default function ViajeActivoPage() {
     if (vozActiva) hablar(mensaje);
   }, [vozActiva]);
 
+  // ─── navegadorActivo: quién es el navegador turn-by-turn vigente ───────────
+  // 'tila' | 'waze' | 'google'. NO afecta el seguimiento/logística del viaje (tracking
+  // GPS, estado de viaje/parada/carga/pago, botones — todo eso sigue igual siempre).
+  // Sólo gatea si TILA actúa como navegador turn-by-turn: recalcula ruta, evalúa
+  // desvío, corre la máquina de maniobra y habla — ver navegacionTilaActiva en
+  // MapaTILAProps. Elegir Waze/Google en el selector (abrirNavegador) es la ÚNICA forma
+  // de pasar a 'waze'/'google'; el botón "🗺️ Mapa TILA" del mismo selector es la ÚNICA
+  // forma de volver a 'tila' — nunca revierte solo (ej. al volver a primer plano).
+  const [navegadorActivo, setNavegadorActivo] = useState<"tila" | "waze" | "google">("tila");
+  const navegacionTilaActiva = navegadorActivo === "tila";
+  // Con navegador externo activo, TILA no debe seguir armando/hablando anuncios
+  // propios — se withholdea la prop entera en vez de dejar que MapaTILA arme el texto
+  // y descartarlo acá, para que quede un solo punto de verdad (ver uso en el JSX).
+  const onAnuncioVozTila = navegacionTilaActiva ? onAnuncioVoz : undefined;
+  const onDetenerVozTila = navegacionTilaActiva ? detenerVoz : undefined;
+
   const [paradas, setParadas]                     = useState<any[]>([]);
   const [paradaActivaIndex, setParadaActivaIndex] = useState(0);
   const [confirmandoParada, setConfirmandoParada] = useState(false);
@@ -740,6 +756,9 @@ export default function ViajeActivoPage() {
   };
 
   // ─── Navegación externa ───────────────────────────────────────────────────
+  // Fallback web — SÓLO si la app nativa correspondiente no está instalada. Google Maps
+  // usa acá la URL de "vista previa" (?api=1...) a propósito: es la única opción posible
+  // sin la app nativa, y de todos modos abre en el navegador, no en Maps.
   const buildNavUrl = (navId: string, dest: string): string => {
     const enc = encodeURIComponent(dest + ", Argentina");
     if (navId === "waze") return `https://waze.com/ul?q=${enc}&navigate=yes`;
@@ -749,6 +768,13 @@ export default function ViajeActivoPage() {
   const buildWazeAppUrl = (dest: string): string => {
     const enc = encodeURIComponent(dest + ", Argentina");
     return `waze://?q=${enc}&navigate=yes`;
+  };
+
+  // Intent/esquema nativo Android — arranca navegación turn-by-turn directamente en
+  // Google Maps, sin pasar por la vista previa que obliga a tocar "Iniciar".
+  const buildGoogleNavAppUrl = (dest: string): string => {
+    const enc = encodeURIComponent(dest + ", Argentina");
+    return `google.navigation:q=${enc}&mode=d`;
   };
 
   const abrirNavegador = async (navId: string, dest: string) => {
@@ -766,6 +792,16 @@ export default function ViajeActivoPage() {
             const { Browser } = await import("@capacitor/browser");
             await Browser.open({ url });
           }
+        } else if (navId === "google_maps") {
+          const { AppLauncher } = await import("@capacitor/app-launcher");
+          const googleNavUrl = buildGoogleNavAppUrl(dest);
+          const { value: instalada } = await AppLauncher.canOpenUrl({ url: googleNavUrl });
+          if (instalada) {
+            await AppLauncher.openUrl({ url: googleNavUrl });
+          } else {
+            const { Browser } = await import("@capacitor/browser");
+            await Browser.open({ url });
+          }
         } else {
           const { Browser } = await import("@capacitor/browser");
           await Browser.open({ url });
@@ -776,6 +812,19 @@ export default function ViajeActivoPage() {
     } catch {
       window.open(url, `_nav_${Date.now()}`);
     }
+
+    // Navegador externo pasa a ser la única autoridad de navegación — TILA deja de
+    // actuar como navegador turn-by-turn (voz, recálculo, maniobras) de inmediato, sin
+    // esperar a que MapaTILA vuelva a renderizar. El tracking GPS/estado del viaje
+    // sigue funcionando igual: eso no depende de navegadorActivo.
+    const nuevoNavegador: "waze" | "google" = navId === "waze" ? "waze" : "google";
+    const navegadorAnterior = navegadorActivo;
+    setNavegadorActivo(nuevoNavegador);
+    diagLog(`[TILA_NAV_DIAG] NAVEGADOR_ACTIVO_CAMBIO anterior=${navegadorAnterior} nuevo=${nuevoNavegador} t=${Math.round(performance.now())}`);
+    diagLog(`[TILA_NAV_DIAG] TILA_NAV_SUSPENDIDA_POR_EXTERNO navegador=${nuevoNavegador} t=${Math.round(performance.now())}`);
+    detenerVoz();
+    diagLog(`[TILA_NAV_DIAG] TILA_VOZ_DETENIDA_POR_EXTERNO navegador=${nuevoNavegador} t=${Math.round(performance.now())}`);
+
     setMostrarNavSel(false);
     setDestNavPendiente(null);
   };
@@ -786,6 +835,19 @@ export default function ViajeActivoPage() {
   const iniciarNavegacion = (dest: string) => {
     setDestNavPendiente(dest);
     setMostrarNavSel(true);
+  };
+
+  // Única forma de volver a navegadorActivo='tila' — acción explícita del chofer desde
+  // este mismo selector. Nunca se hace automáticamente (ej. al volver a primer plano).
+  const elegirMapaTila = () => {
+    if (navegadorActivo !== "tila") {
+      const navegadorAnterior = navegadorActivo;
+      setNavegadorActivo("tila");
+      diagLog(`[TILA_NAV_DIAG] NAVEGADOR_ACTIVO_CAMBIO anterior=${navegadorAnterior} nuevo=tila t=${Math.round(performance.now())}`);
+      diagLog(`[TILA_NAV_DIAG] TILA_NAV_REANUDADA t=${Math.round(performance.now())}`);
+    }
+    setMostrarNavSel(false);
+    setDestNavPendiente(null);
   };
 
   // ─── Actualizar estado + navegación automática ────────────────────────────
@@ -1015,9 +1077,10 @@ export default function ViajeActivoPage() {
           modoNavegacion={true}
           vozActiva={vozActiva}
           onToggleVoz={toggleVoz}
-          onAnuncioVoz={onAnuncioVoz}
-          onDetenerVoz={detenerVoz}
+          onAnuncioVoz={onAnuncioVozTila}
+          onDetenerVoz={onDetenerVozTila}
           panelTopPx={panelTopPx}
+          navegacionTilaActiva={navegacionTilaActiva}
         />
       </div>
 
@@ -1385,7 +1448,7 @@ export default function ViajeActivoPage() {
             </div>
             <p className="text-zinc-300 text-xs px-1">📍 <span className="text-white font-black">{destNavPendiente}</span></p>
             <div className="grid grid-cols-1 gap-3">
-              <button type="button" onClick={() => { setMostrarNavSel(false); setDestNavPendiente(null); }}
+              <button type="button" onClick={elegirMapaTila}
                 className={`flex items-center justify-center gap-3 border rounded-2xl px-4 py-4 font-black text-sm text-white transition ${
                   navegadorPreferido === "mapa_tila" ? "bg-zinc-800 border-yellow-400" : "bg-zinc-800 hover:bg-zinc-700 border-zinc-600"
                 }`}>

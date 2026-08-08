@@ -140,6 +140,28 @@ const UMBRAL_MS_SIN_ACEPTAR_PARA_REENGANCHE = 10000; // 10s sin aceptar ningún 
 const UMBRAL_DISTANCIA_REENGANCHE_METROS    = 30;    // candidatos consecutivos deben estar a esta distancia entre sí
 const FIXES_REENGANCHE_REQUERIDOS           = 3;     // cantidad de candidatos coherentes seguidos para reemplazar la base
 
+// ─── Bootstrap GPS: fase de adquisición inicial ────────────────────────────────
+// Causa confirmada en prueba real: el PRIMER fix de la sesión se convertía en ancla
+// PERMANENTE sin mirar su accuracy — si ese primer fix tenía accuracy=43m (posición
+// real hasta 43m lejos de la reportada), evaluarConsistenciaFix comparaba TODOS los
+// fixes siguientes (aunque tuvieran accuracy=3m, mucho mejores) contra esa base mala,
+// y velocidades implícitas de 60-130m/s los rechazaba — no porque el fix nuevo fuera
+// malo, sino porque el ANCLA lo era. evaluarConsistenciaFix (velocidad/rumbo) es un
+// criterio para RÉGIMEN ESTABLE, donde ya hay una base confiable contra la cual medir
+// — no sirve para decidir CUÁL debe ser esa base al arrancar.
+// Mientras gpsInicialEstabilizadoRef sea false, el fix se trata como CANDIDATO de
+// bootstrap: se puede seguir mostrando en el mapa (marcador/cámara ya funcionan con
+// fixValidoActualRef), pero un candidato con mejor accuracy reemplaza directamente al
+// anterior (sin pasar por el chequeo de velocidad, que no aplica todavía). Dos vías de
+// salida de esta fase, la que ocurra primero:
+//  a) un candidato con accuracy <= UMBRAL_ACCURACY_BOOTSTRAP_BUENO_METROS ya alcanza solo;
+//  b) FIXES_COHERENTES_PARA_ESTABILIZAR candidatos seguidos, mutuamente cercanos entre
+//     sí (aunque ninguno individualmente tenga una accuracy "buena"), confirman que el
+//     GPS ya convergió a una posición real y consistente.
+const UMBRAL_ACCURACY_BOOTSTRAP_BUENO_METROS = 25;
+const FIXES_COHERENTES_PARA_ESTABILIZAR      = 2;
+const DISTANCIA_COHERENCIA_BOOTSTRAP_METROS  = 30;
+
 // ─── Progreso monotónico sobre la ruta (compartido entre desvío y recorte visual) ──
 // Tolerancia de retroceso del índice de progreso: la búsqueda del punto más cercano
 // puede mirar hasta esta cantidad de tramos ANTES del índice actual (no sólo desde él
@@ -192,14 +214,23 @@ const UMBRAL_ACCURACY_MALA_METROS = 50;
 // señal de ambigüedad real entre dos calzadas/ramales distintos, digna de loguear.
 const UMBRAL_AMBIGUEDAD_METROS = 5;
 
-// Distancia a la que se anuncia por voz una maniobra próxima ("En X metros doblá...").
-const UMBRAL_AVISO_MANIOBRA_METROS = 150;
-
-// Salidas/bifurcaciones de autopista (maneuver "ramp-*"/"fork-*") — dos avisos en vez
-// de uno, con umbrales propios (no comparten UMBRAL_AVISO_MANIOBRA_METROS): uno lejano
-// para dar tiempo a ubicarse en el carril, uno cercano ya casi en la salida.
-const UMBRAL_AVISO_SALIDA_LEJANO_METROS  = 200;
-const UMBRAL_AVISO_SALIDA_CERCANO_METROS = 65;
+// ─── Máquina de estado de maniobra: distancia por recorrido de ruta, 3 niveles ────
+// Reemplaza el escaneo de todos los steps por proximidad geodésica directa (causa
+// confirmada de maniobras adelantadas/pisadas: la distancia vehículo→step se medía en
+// línea recta, no siguiendo la calle, y CUALQUIER step dentro del umbral podía
+// calificar en cualquier tick, no sólo el que corresponde según el progreso real).
+// Un único "maniobraActualIndex" avanza sólo cuando el progreso sobre la polyline
+// (indiceRutaVisibleRef) alcanza el inicio del PRÓXIMO step — nunca por proximidad.
+// LEJANO/MEDIO/CERCANO: mismo umbral para giros y salidas ahora (antes tenían
+// conjuntos de umbrales separados) — valores pedidos explícitamente, no ajustados a
+// ciegas. Si al inicializar una maniobra la distancia real ya es menor a un nivel,
+// ese nivel (y los más lejanos) se marca directamente como "ya pasado" sin
+// reproducirlo — nunca se anuncian avisos atrasados.
+const UMBRAL_MANIOBRA_LEJANO_METROS  = 400;
+const UMBRAL_MANIOBRA_MEDIO_METROS   = 300;
+const UMBRAL_MANIOBRA_CERCANO_METROS = 90;
+// "Completada": el progreso sobre la polyline alcanzó el inicio del step SIGUIENTE
+// (o el final de la ruta, si es el último step) — no una distancia arbitraria.
 
 // ─── Prioridad y espaciado de anuncios por voz ─────────────────────────────────
 // Dos prioridades: "informativo" (p.ej. "Ruta recalculada.") y "maniobra" (giros,
@@ -408,13 +439,26 @@ const METROS_POR_GRADO_LAT = 111320;
 // Se deduplica el punto de unión entre steps consecutivos (el último punto de un step es
 // el mismo que el primero del siguiente) para no dejar segmentos de longitud cero que
 // puedan "ganar" espuriamente una búsqueda de distancia mínima.
+//
+// También devuelve `indicePorStep`: indicePorStep[i] = índice dentro de `puntos` (ya
+// deduplicado) donde arranca la geometría del step i (steps de TODOS los legs,
+// concatenados en el mismo orden que usa la voz — pasos[i] = ese mismo step). Es un
+// subproducto gratis de este mismo recorrido (no hace falta un segundo pase de
+// búsqueda): al momento de empezar a procesar el step i, `puntos.length` YA es el
+// índice donde van a caer sus puntos, se deduplique o no el primero (si se deduplica
+// por ser igual al último punto del step anterior, el SIGUIENTE punto nuevo cae
+// exactamente ahí de todos modos). Usado por la máquina de estado de maniobra para
+// calcular distancia recorriendo la polyline hasta cada step, sin tener que buscar su
+// posición por proximidad geométrica cada vez.
 const construirPolylineDetalladaDesdeRuta = (
   result: google.maps.DirectionsResult
-): google.maps.LatLngLiteral[] => {
+): { puntos: google.maps.LatLngLiteral[]; indicePorStep: number[] } => {
   const legs = result.routes?.[0]?.legs ?? [];
   const puntos: google.maps.LatLngLiteral[] = [];
+  const indicePorStep: number[] = [];
   legs.forEach(leg => {
     (leg.steps ?? []).forEach(step => {
+      indicePorStep.push(puntos.length);
       (step.path ?? []).forEach(p => {
         const punto = { lat: p.lat(), lng: p.lng() };
         const anterior = puntos[puntos.length - 1];
@@ -424,7 +468,7 @@ const construirPolylineDetalladaDesdeRuta = (
       });
     });
   });
-  return puntos;
+  return { puntos, indicePorStep };
 };
 
 // ─── Selección de segmento activo (compartida por desvío y recorte visual) ────────
@@ -597,6 +641,34 @@ const proyeccionEnSegmento = (
   return { distancia, punto };
 };
 
+// Distancia SIGUIENDO LA GEOMETRÍA de la polyline entre la posición actual del
+// vehículo (posicionActual, sobre el segmento indiceDesde) y el punto donde arranca el
+// step de la maniobra (polyline[indiceHasta]) — no geodésica directa. Usada por la
+// máquina de estado de maniobra: evita anunciar "faltan 90m" en línea recta cuando la
+// calle en realidad da una vuelta y todavía faltan 300m reales por recorrer.
+// indiceHasta <= indiceDesde (ya lo pasamos, o coincide) devuelve 0.
+const calcularDistanciaRutaHastaIndice = (
+  polyline: google.maps.LatLngLiteral[],
+  indiceDesde: number,
+  posicionActual: google.maps.LatLngLiteral,
+  indiceHasta: number
+): number => {
+  if (indiceHasta <= indiceDesde || indiceDesde + 1 >= polyline.length) return 0;
+  const hastaClamp = Math.min(indiceHasta, polyline.length - 1);
+  let total = distanciaMetros(posicionActual, polyline[indiceDesde + 1]);
+  for (let i = indiceDesde + 1; i < hastaClamp; i++) {
+    total += distanciaMetros(polyline[i], polyline[i + 1]);
+  }
+  return total;
+};
+
+// Texto de voz para la maniobra actual — sólo derecha/izquierda ("no quiero mensajes
+// innecesarios"); llamantes ya filtran maniobras sin lado antes de invocar esto.
+const construirTextoManiobra = (esSalida: boolean, lado: string, metros: number): string => {
+  if (esSalida) return `En ${metros} metros, tomá la salida a la ${lado}.`;
+  return lado === "derecha" ? `En ${metros} metros doblá a la derecha.` : `En ${metros} metros girá a la izquierda.`;
+};
+
 // Recorta `polyline` para mostrar sólo desde el segmento elegido (ver
 // elegirSegmentoActivo, que hace la selección real — acá sólo queda el "retroceder
 // margenMetros" para el arranque visual, con continuidad). El índice que se devuelve
@@ -721,6 +793,13 @@ interface MapaTILAProps {
    *  puntoConOffsetVerticalPx/calcularOffsetVerticalCamara). undefined (por defecto): sin
    *  panel conocido, comportamiento de siempre — centrado, sin offset. */
   panelTopPx?: number;
+  /** false cuando el chofer eligió navegar con Waze/Google (navegadorActivo !== 'tila'
+   *  en viaje-activo/page.tsx): TILA deja de actuar como navegador turn-by-turn — no
+   *  recalcula ruta de navegación, no evalúa desvío, no avanza la máquina de maniobra,
+   *  no anuncia nada por voz. El tracking GPS del viaje (lat/lng/marcador) sigue
+   *  funcionando igual; esto NO toca modoNavegacion ni oculta ninguna UI. Por defecto
+   *  true: comportamiento sin cambios para quien no provea esta prop. */
+  navegacionTilaActiva?: boolean;
 }
 
 const formatearDistancia = (metros: number) =>
@@ -899,6 +978,7 @@ export default function MapaTILA({
   onAnuncioVoz,
   onDetenerVoz,
   panelTopPx,
+  navegacionTilaActiva = true,
 }: MapaTILAProps) {
   const { isLoaded, loadError } = useJsApiLoader({
     googleMapsApiKey: process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || "",
@@ -993,6 +1073,12 @@ export default function MapaTILA({
   // más nueva. Protege a los 4 call-sites de calcularRuta con un solo cambio.
   const rutaPolylineRef = useRef<google.maps.LatLngLiteral[]>([]);
   const rutaRequestIdRef = useRef(0);
+  // indicePorStepRef[i] = índice dentro de rutaPolylineRef.current donde arranca la
+  // geometría del step i (steps de todos los legs concatenados, mismo orden que la
+  // voz) — ver construirPolylineDetalladaDesdeRuta. Se recalcula junto con
+  // rutaPolylineRef en cada recálculo, así siempre están sincronizados a la misma
+  // generación de ruta.
+  const indicePorStepRef = useRef<number[]>([]);
 
   // Espejo en estado de siguiendoChoferRef — sólo para que el botón "Mi ubicación"
   // pueda pintarse distinto según el seguimiento esté activo o pausado. La lógica de
@@ -1657,8 +1743,12 @@ export default function MapaTILA({
           // trajera steps (no debería pasar con travelMode DRIVING).
           const habiaRutaAnterior = rutaPolylineRef.current.length >= 2;
           const puntosOverview  = (result.routes?.[0]?.overview_path ?? []).map(p => ({ lat: p.lat(), lng: p.lng() }));
-          const puntosDetallados = construirPolylineDetalladaDesdeRuta(result);
+          const { puntos: puntosDetallados, indicePorStep } = construirPolylineDetalladaDesdeRuta(result);
           rutaPolylineRef.current = puntosDetallados.length >= 2 ? puntosDetallados : puntosOverview;
+          // indicePorStep sólo es válido si efectivamente se usó la geometría detallada
+          // (si por algún motivo se cayó al overview_path, no hay mapeo step→índice
+          // confiable — la máquina de estado de maniobra queda sin datos ese caso raro).
+          indicePorStepRef.current = puntosDetallados.length >= 2 ? indicePorStep : [];
           if (habiaRutaAnterior) {
             diagLog(`[TILA_NAV_DIAG] DIRECTIONS_ANTERIOR_LIMPIADO requestId=${miRequestId} t=${Math.round(performance.now())}`);
           }
@@ -1916,6 +2006,19 @@ export default function MapaTILA({
   // mientras hace mucho que no se acepta ninguno — ver UMBRAL_MS_SIN_ACEPTAR_PARA_REENGANCHE.
   const candidatosReenganceRef = useRef<google.maps.LatLngLiteral[]>([]);
 
+  // ── Bootstrap GPS: fase de adquisición ──────────────────────────────────────
+  // gpsInicialEstabilizadoRef: false mientras la sesión todavía no tiene una base
+  // confiable — ver el bloque de constantes junto a UMBRAL_ACCURACY_BOOTSTRAP_BUENO_METROS.
+  // Mientras sea false: Directions/desvío/voz permanecen bloqueados (ver los efectos
+  // correspondientes más abajo), pero marcador/cámara siguen funcionando con lo que
+  // haya en fixValidoActualRef, como pediste ("puede mostrarse el mapa; puede
+  // recibirse GPS"). bootstrapMejorAccuracyRef: accuracy del mejor candidato aceptado
+  // hasta ahora (null si nunca se recibió accuracy). bootstrapCandidatosCoherentesRef:
+  // cadena de candidatos mutuamente cercanos, para la vía de estabilización (b).
+  const gpsInicialEstabilizadoRef        = useRef(false);
+  const bootstrapMejorAccuracyRef        = useRef<number | null>(null);
+  const bootstrapCandidatosCoherentesRef = useRef<google.maps.LatLngLiteral[]>([]);
+
   // Reset explícito al montar: la base de validación NUNCA debe arrancar desde lat/lng
   // (que en el primer render puede ser la última posición conocida guardada en la base de
   // datos del viaje, no un fix GPS real de ESTA sesión — ver el bug real: la base quedaba
@@ -1927,6 +2030,9 @@ export default function MapaTILA({
     ultimoFixValidoTsRef.current  = null;
     penultimoFixValidoRef.current = null;
     candidatosReenganceRef.current = [];
+    gpsInicialEstabilizadoRef.current = false;
+    bootstrapMejorAccuracyRef.current = null;
+    bootstrapCandidatosCoherentesRef.current = [];
   }, []);
 
   // Corre PRIMERO en cada commit (declarado antes que el resto de los efectos que leen
@@ -1948,16 +2054,74 @@ export default function MapaTILA({
     const nuevo  = { lat, lng };
     const ahora  = Date.now();
 
-    // Primer fix real de la sesión (todavía no hay base): se acepta incondicionalmente
-    // si es finito, y se convierte en la base — no pasa por evaluarConsistenciaFix
-    // (que de todos modos ya trata anterior=null como "aceptar", esto sólo lo hace
-    // explícito y logueado con su propio tag, como pediste).
-    if (!ultimoFixValidoRef.current) {
-      ultimoFixValidoRef.current    = nuevo;
-      ultimoFixValidoTsRef.current  = ahora;
-      fixValidoActualRef.current    = nuevo;
-      candidatosReenganceRef.current = [];
-      diagLog(`[TILA_NAV_DIAG] gps-bootstrap PRIMER_FIX_ACEPTADO lat=${lat.toFixed(6)} lng=${lng.toFixed(6)} t=${Math.round(performance.now())}`);
+    // ── Fase de adquisición (bootstrap) ─────────────────────────────────────
+    // Mientras no estabilizó, NO pasa por evaluarConsistenciaFix — esa función
+    // compara contra una base que acá todavía no confirmamos que sea correcta, así
+    // que aplicarla podría rechazar para siempre un fix bueno por culpa de un
+    // candidato de bootstrap malo (exactamente el bug real que se está corrigiendo).
+    if (!gpsInicialEstabilizadoRef.current) {
+      const accuracyActual = accuracyRef.current ?? null;
+      const baseBootstrapActual = ultimoFixValidoRef.current;
+
+      if (!baseBootstrapActual) {
+        ultimoFixValidoRef.current    = nuevo;
+        ultimoFixValidoTsRef.current  = ahora;
+        fixValidoActualRef.current    = nuevo;
+        bootstrapMejorAccuracyRef.current = accuracyActual;
+        bootstrapCandidatosCoherentesRef.current = [nuevo];
+        diagLog(`[TILA_NAV_DIAG] GPS_BOOTSTRAP_CANDIDATO primero=true lat=${lat.toFixed(6)} lng=${lng.toFixed(6)} accuracy=${accuracyActual ?? "n/a"} t=${Math.round(performance.now())}`);
+      } else {
+        // ¿Este candidato tiene mejor accuracy que la base actual de bootstrap?
+        // Reemplaza directamente — sin chequeo de velocidad, no aplica todavía.
+        const accuracyBaseActual = bootstrapMejorAccuracyRef.current;
+        const esMejor = accuracyActual !== null && (accuracyBaseActual === null || accuracyActual < accuracyBaseActual);
+        if (esMejor) {
+          diagLog(
+            `[TILA_NAV_DIAG] GPS_BOOTSTRAP_REEMPLAZADO `
+            + `baseAnterior=${baseBootstrapActual.lat.toFixed(6)},${baseBootstrapActual.lng.toFixed(6)} accuracyAnterior=${accuracyBaseActual ?? "n/a"} `
+            + `baseNueva=${lat.toFixed(6)},${lng.toFixed(6)} accuracyNueva=${accuracyActual} t=${Math.round(performance.now())}`
+          );
+          ultimoFixValidoRef.current    = nuevo;
+          ultimoFixValidoTsRef.current  = ahora;
+          bootstrapMejorAccuracyRef.current = accuracyActual;
+        } else {
+          diagLog(`[TILA_NAV_DIAG] GPS_BOOTSTRAP_CANDIDATO primero=false lat=${lat.toFixed(6)} lng=${lng.toFixed(6)} accuracy=${accuracyActual ?? "n/a"} t=${Math.round(performance.now())}`);
+        }
+        // El mapa sigue mostrando el fix crudo de este tick aunque no reemplace la
+        // base — "puede recibirse GPS" durante la adquisición.
+        fixValidoActualRef.current = nuevo;
+
+        // Vía alternativa de estabilización: varios candidatos SEGUIDOS mutuamente
+        // cercanos, aunque ninguno individualmente tenga accuracy "buena".
+        const candidatos = bootstrapCandidatosCoherentesRef.current;
+        const ultimoCandidato = candidatos[candidatos.length - 1] ?? null;
+        const esCoherente = !ultimoCandidato || distanciaMetros(ultimoCandidato, nuevo) <= DISTANCIA_COHERENCIA_BOOTSTRAP_METROS;
+        if (!esCoherente) candidatos.length = 0;
+        candidatos.push(nuevo);
+      }
+
+      const accuracyBuena = bootstrapMejorAccuracyRef.current !== null && bootstrapMejorAccuracyRef.current <= UMBRAL_ACCURACY_BOOTSTRAP_BUENO_METROS;
+      const suficientesCoherentes = bootstrapCandidatosCoherentesRef.current.length >= FIXES_COHERENTES_PARA_ESTABILIZAR;
+      const baseTrasEsteTick = ultimoFixValidoRef.current;
+      if ((accuracyBuena || suficientesCoherentes) && baseTrasEsteTick) {
+        // Si estabilizó por coherencia (no por accuracy buena), la base final es el
+        // ÚLTIMO candidato de esa cadena — el más reciente conocido, no necesariamente
+        // el de mejor accuracy histórica.
+        const motivo = accuracyBuena ? "accuracy" : "coherencia";
+        const baseFinal = accuracyBuena
+          ? baseTrasEsteTick
+          : bootstrapCandidatosCoherentesRef.current[bootstrapCandidatosCoherentesRef.current.length - 1];
+        ultimoFixValidoRef.current    = baseFinal;
+        ultimoFixValidoTsRef.current  = ahora;
+        penultimoFixValidoRef.current = null; // arranca limpio el régimen estable
+        fixValidoActualRef.current    = baseFinal;
+        gpsInicialEstabilizadoRef.current = true;
+        diagLog(
+          `[TILA_NAV_DIAG] GPS_INICIAL_ESTABILIZADO motivo=${motivo} `
+          + `lat=${baseFinal.lat.toFixed(6)} lng=${baseFinal.lng.toFixed(6)} accuracy=${bootstrapMejorAccuracyRef.current ?? "n/a"} t=${Math.round(performance.now())}`
+        );
+        diagLog(`[TILA_NAV_DIAG] GPS_REGIMEN_ESTABLE t=${Math.round(performance.now())}`);
+      }
       return;
     }
 
@@ -1986,8 +2150,9 @@ export default function MapaTILA({
       if (!esCoherente) candidatos.length = 0; // rompió la cadena — reinicia el conteo desde este fix
       candidatos.push(nuevo);
       diagLog(`[TILA_NAV_DIAG] gps-reenganche candidato n=${candidatos.length}/${FIXES_REENGANCHE_REQUERIDOS} lat=${lat.toFixed(6)} lng=${lng.toFixed(6)} msSinAceptar=${msSinAceptar} t=${Math.round(performance.now())}`);
-      if (candidatos.length >= FIXES_REENGANCHE_REQUERIDOS) {
-        const baseAnterior = ultimoFixValidoRef.current;
+      const baseAnteriorReenganche = ultimoFixValidoRef.current;
+      if (candidatos.length >= FIXES_REENGANCHE_REQUERIDOS && baseAnteriorReenganche) {
+        const baseAnterior = baseAnteriorReenganche;
         const distanciaReemplazo = distanciaMetros(baseAnterior, nuevo);
         penultimoFixValidoRef.current = null; // sin tendencia previa confiable tras un reenganche
         ultimoFixValidoRef.current    = nuevo;
@@ -2072,6 +2237,15 @@ export default function MapaTILA({
 
   useEffect(() => {
     if (!isLoaded || !modoNavegacion || !tieneParadas || modoMultiChofer) return;
+    // Bloqueado mientras el GPS no estabilizó (ver GPS_INICIAL_ESTABILIZADO más arriba)
+    // — ni Directions inicial ni desvío/recálculo deben arrancar desde un bootstrap
+    // todavía dudoso. En cuanto estabiliza, este mismo efecto corre de nuevo en el
+    // siguiente tick de GPS y dispara el primer cálculo normalmente.
+    if (!gpsInicialEstabilizadoRef.current) return;
+    // Waze/Google Maps es el navegador activo: TILA deja de recalcular ruta de
+    // navegación por completo (sigue trackeando GPS para el viaje, eso no depende de
+    // este efecto). Ver navegacionTilaActiva en MapaTILAProps.
+    if (!navegacionTilaActiva) return;
     const fix = fixValidoActualRef.current;
     if (!fix) return; // fix rechazado este tick — ni desvío ni recálculo lo usan
 
@@ -2171,7 +2345,7 @@ export default function MapaTILA({
     primerGpsMultietapaRef.current = true;
     dispararCalculoNav();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isLoaded, modoNavegacion, tieneParadas, modoMultiChofer, lat, lng, JSON.stringify(paradas?.map(p => ({ d: p.direccion, e: p.estado }))), dispararCalculoNav, sincronizarIndiceConRuta]);
+  }, [isLoaded, modoNavegacion, tieneParadas, modoMultiChofer, navegacionTilaActiva, lat, lng, JSON.stringify(paradas?.map(p => ({ d: p.direccion, e: p.estado }))), dispararCalculoNav, sincronizarIndiceConRuta]);
 
   // ─── modoNavegacion: encuadre inicial único ────────────────────────────────
   // Único lugar que hace el fitBounds/setCenter automático de arranque en modoNavegacion.
@@ -2250,17 +2424,22 @@ export default function MapaTILA({
   // dispararCalculoNav ni la detección de desvío. Si onAnuncioVoz no viene (nadie la
   // usa), estos efectos no hacen nada.
   const vozDirectionsPrevRef = useRef<google.maps.DirectionsResult | null>(null);
-  const pasosAnunciadosRef   = useRef<Set<number>>(new Set());
   const rutaKeyVozRef        = useRef<string | null>(null);
-  // requestId de la ruta a la que están asociados pasosAnunciadosRef/pasosSalidaAvisadosRef
-  // — un anuncio nunca sale al aire si, para cuando se lo va a pronunciar, la ruta
-  // vigente (rutaRequestIdRef.current) ya cambió (ver intentarAnunciar).
+  // requestId de la ruta a la que está asociada la maquina de maniobra actual — un
+  // anuncio nunca sale al aire si, para cuando se lo va a pronunciar, la ruta vigente
+  // (rutaRequestIdRef.current) ya cambió (ver intentarAnunciar).
   const vozRutaRequestIdRef = useRef<number | null>(null);
-  // Salidas/bifurcaciones de autopista (maneuver "ramp-*"/"fork-*") — dos avisos por
-  // step en vez de uno: 0 = ninguno todavía, 1 = aviso lejano ya dado, 2 = aviso
-  // cercano ya dado (no se vuelve a anunciar). Set aparte de pasosAnunciadosRef porque
-  // acá cada step puede pasar por dos anuncios, no uno solo.
-  const pasosSalidaAvisadosRef = useRef<Map<number, 0 | 1 | 2>>(new Map());
+  // ── Máquina de estado de maniobra ───────────────────────────────────────────
+  // maniobraActualIndiceRef: índice ÚNICO (dentro de `pasos`) de la maniobra que se
+  // está siguiendo — null hasta inicializarla. Nunca se anuncia ni se evalúa distancia
+  // de ningún step que no sea éste. maniobraAvisosEmitidosRef: qué niveles (lejano/
+  // medio/cercano) ya se anunciaron PARA LA MANIOBRA ACTUAL — se reinicia cada vez que
+  // maniobraActualIndiceRef avanza. ultimoLogDistanciaManiobraTsRef: throttle sólo del
+  // log de diagnóstico MANIOBRA_DISTANCIA_RUTA (se recalcula cada tick, pero loguearlo
+  // cada tick sería demasiado — no es un evento de transición).
+  const maniobraActualIndiceRef      = useRef<number | null>(null);
+  const maniobraAvisosEmitidosRef    = useRef<Set<"lejano" | "medio" | "cercano">>(new Set());
+  const ultimoLogDistanciaManiobraTsRef = useRef(0);
   // Estado del cooldown/prioridad — ver COOLDOWN_ANUNCIO_MISMA_PRIORIDAD_MS.
   const ultimoAnuncioTsRef        = useRef(0);
   const ultimaPrioridadAnuncioRef = useRef<"informativo" | "maniobra" | null>(null);
@@ -2311,6 +2490,13 @@ export default function MapaTILA({
   // anunciados, para que nada de la ruta vieja pueda volver a hablar.
   useEffect(() => {
     if (!onAnuncioVoz || !modoNavegacion || modoMultiChofer) return;
+    // Redundante en la práctica (directions no puede existir todavía si el GPS no
+    // estabilizó — Directions inicial también está bloqueado, ver el efecto de
+    // desvío/recálculo) pero explícito, como pediste.
+    if (!gpsInicialEstabilizadoRef.current) return;
+    // Waze/Google Maps es el navegador activo: ningún anuncio de TILA puede salir al
+    // aire mientras tanto (ver navegacionTilaActiva en MapaTILAProps).
+    if (!navegacionTilaActiva) return;
     if (!directions) return;
     const previa = vozDirectionsPrevRef.current;
     vozDirectionsPrevRef.current = directions;
@@ -2318,24 +2504,28 @@ export default function MapaTILA({
 
     const requestIdAnterior = vozRutaRequestIdRef.current;
     vozRutaRequestIdRef.current = rutaRequestIdRef.current;
-    pasosAnunciadosRef.current = new Set();
-    pasosSalidaAvisadosRef.current = new Map();
-    rutaKeyVozRef.current = null; // fuerza también el reset del efecto de maniobras si corre en este mismo render
+    rutaKeyVozRef.current = null; // fuerza también el reset del efecto de maniobras (incluye maniobraActualIndiceRef) si corre en este mismo render
 
     onDetenerVoz?.();
     diagLog(`[TILA_NAV_DIAG] VOZ_DETENIDA_POR_RECALCULO requestIdAnterior=${requestIdAnterior ?? "n/a"} requestIdNuevo=${rutaRequestIdRef.current} t=${Math.round(performance.now())}`);
     diagLog(`[TILA_NAV_DIAG] VOZ_RUTA_RESET requestId=${rutaRequestIdRef.current} t=${Math.round(performance.now())}`);
 
     intentarAnunciar("Ruta recalculada.", "informativo", "recalculo", rutaRequestIdRef.current);
-  }, [directions, modoNavegacion, modoMultiChofer, onAnuncioVoz, onDetenerVoz, intentarAnunciar]);
+  }, [directions, modoNavegacion, modoMultiChofer, navegacionTilaActiva, onAnuncioVoz, onDetenerVoz, intentarAnunciar]);
 
-  // Giros próximos — lee los steps de Directions (datos que calcularRuta ya produce, sin
-  // recalcular nada acá) y anuncia una maniobra por vez cuando la posición actual entra
-  // dentro de UMBRAL_AVISO_MANIOBRA_METROS de su punto de inicio. Sólo derecha/izquierda —
-  // "no quiero mensajes innecesarios". pasosAnunciadosRef se reinicia cuando cambia la
-  // ruta vigente, para poder narrar de nuevo tras un recálculo.
+  // Giros próximos — máquina de estado secuencial de UNA sola maniobra actual
+  // (maniobraActualIndiceRef). No escanea todos los steps buscando cuál "califica": sigue
+  // el progreso real del vehículo sobre la polyline (indiceRutaVisibleRef) para saber
+  // cuándo la maniobra actual terminó y cuál es la siguiente, y calcula la distancia
+  // restante caminando esa misma polyline (calcularDistanciaRutaHastaIndice), no en línea
+  // recta. Esto garantiza objetivo 8: nunca se anuncia la maniobra siguiente antes de que
+  // indiceRutaVisibleRef confirme que la actual quedó atrás.
   useEffect(() => {
     if (!onAnuncioVoz || !modoNavegacion || modoMultiChofer) return;
+    if (!gpsInicialEstabilizadoRef.current) return;
+    // Waze/Google Maps es el navegador activo: la máquina de maniobra de TILA no
+    // avanza ni anuncia nada (ver navegacionTilaActiva en MapaTILAProps).
+    if (!navegacionTilaActiva) return;
     if (!directions || !lat || !lng) return;
     const requestIdDeEsteTick = rutaRequestIdRef.current;
 
@@ -2343,56 +2533,95 @@ export default function MapaTILA({
     const rutaKey = `${pasos.length}-${directions.routes?.[0]?.overview_path?.length ?? 0}`;
     if (rutaKeyVozRef.current !== rutaKey) {
       rutaKeyVozRef.current = rutaKey;
-      pasosAnunciadosRef.current = new Set();
-      pasosSalidaAvisadosRef.current = new Map();
+      maniobraActualIndiceRef.current = null;
+      maniobraAvisosEmitidosRef.current = new Set();
     }
 
-    for (let i = 1; i < pasos.length; i++) {
-      const maniobra = pasos[i].maneuver ?? "";
-      const esSalida = maniobra.startsWith("ramp-") || maniobra.startsWith("fork-");
+    const polyline = rutaPolylineRef.current;
+    const indicePorStep = indicePorStepRef.current;
+    if (polyline.length < 2 || indicePorStep.length === 0) return; // geometría detallada aún no disponible
 
-      if (esSalida) {
-        const estado = pasosSalidaAvisadosRef.current.get(i) ?? 0;
-        if (estado >= 2) continue; // ya se dieron los dos avisos para este step
-        const inicioPaso = pasos[i].start_location;
-        if (!inicioPaso) continue;
-        const lado = maniobra.includes("right") ? "derecha" : maniobra.includes("left") ? "izquierda" : null;
-        if (!lado) continue;
-        const distancia = distanciaMetros({ lat, lng }, { lat: inicioPaso.lat(), lng: inicioPaso.lng() });
-        if (estado === 0 && distancia <= UMBRAL_AVISO_SALIDA_LEJANO_METROS) {
-          if (intentarAnunciar(`En 200 metros, tomá la salida a la ${lado}.`, "maniobra", "salida-lejana", requestIdDeEsteTick)) {
-            pasosSalidaAvisadosRef.current.set(i, 1);
-          }
-          break; // una sola maniobra intentada por tick, evita ráfagas
-        } else if (estado === 1 && distancia <= UMBRAL_AVISO_SALIDA_CERCANO_METROS) {
-          if (intentarAnunciar(`En 65 metros, tomá la salida a la ${lado}.`, "maniobra", "salida-cercana", requestIdDeEsteTick)) {
-            pasosSalidaAvisadosRef.current.set(i, 2);
-          }
-          break;
-        }
-        continue;
+    // Inicializa la maniobra actual (si no hay una) buscando el primer step cuyo inicio
+    // en la polyline está adelante del progreso real del vehículo — no arranca ciego en
+    // el step 1, porque tras un recálculo el vehículo puede aterrizar ya avanzado sobre
+    // la ruta nueva.
+    if (maniobraActualIndiceRef.current === null) {
+      const progresoActual = indiceRutaVisibleRef.current;
+      let candidato: number | null = null;
+      for (let i = 1; i < pasos.length; i++) {
+        const indicePoly = indicePorStep[i] ?? Infinity;
+        if (indicePoly >= progresoActual) { candidato = i; break; }
       }
+      if (candidato === null) return; // no queda ninguna maniobra por delante
+      maniobraActualIndiceRef.current = candidato;
+      maniobraAvisosEmitidosRef.current = new Set();
+      diagLog(`[TILA_NAV_DIAG] MANIOBRA_ACTUAL_INICIALIZADA requestId=${requestIdDeEsteTick} step=${candidato} maniobra=${pasos[candidato]?.maneuver ?? "?"} t=${Math.round(performance.now())}`);
+    }
 
-      if (pasosAnunciadosRef.current.has(i)) continue;
-      const inicioPaso = pasos[i].start_location;
-      if (!inicioPaso) continue;
-      const distancia = distanciaMetros({ lat, lng }, { lat: inicioPaso.lat(), lng: inicioPaso.lng() });
-      if (distancia > UMBRAL_AVISO_MANIOBRA_METROS) continue;
+    const i = maniobraActualIndiceRef.current;
+    if (i === null || i >= pasos.length) return;
 
-      const metros = Math.round(distancia / 10) * 10;
-      if (maniobra.includes("right")) {
-        if (intentarAnunciar(`En ${metros} metros doblá a la derecha.`, "maniobra", "giro-derecha", requestIdDeEsteTick)) {
-          pasosAnunciadosRef.current.add(i);
-        }
-        break; // una sola maniobra intentada por tick, evita ráfagas
-      } else if (maniobra.includes("left")) {
-        if (intentarAnunciar(`En ${metros} metros girá a la izquierda.`, "maniobra", "giro-izquierda", requestIdDeEsteTick)) {
-          pasosAnunciadosRef.current.add(i);
-        }
-        break;
+    // Fin del step actual = inicio del step siguiente en la polyline. Si el progreso real
+    // ya lo alcanzó/superó, la maniobra actual quedó atrás — avanza y no evalúa nada más
+    // en este tick (el próximo tick de GPS ya ve la maniobra nueva).
+    const indiceFinDelStep = indicePorStep[i + 1] ?? (polyline.length - 1);
+    if (indiceRutaVisibleRef.current >= indiceFinDelStep) {
+      diagLog(`[TILA_NAV_DIAG] MANIOBRA_COMPLETADA requestId=${requestIdDeEsteTick} step=${i} t=${Math.round(performance.now())}`);
+      const siguiente = i + 1;
+      maniobraActualIndiceRef.current = siguiente;
+      maniobraAvisosEmitidosRef.current = new Set();
+      diagLog(`[TILA_NAV_DIAG] MANIOBRA_ACTUAL_AVANCE requestId=${requestIdDeEsteTick} stepAnterior=${i} stepNuevo=${siguiente} t=${Math.round(performance.now())}`);
+      return;
+    }
+
+    const paso = pasos[i];
+    const maniobra = paso.maneuver ?? "";
+    const esSalida = maniobra.startsWith("ramp-") || maniobra.startsWith("fork-");
+    const lado = maniobra.includes("right") ? "derecha" : maniobra.includes("left") ? "izquierda" : null;
+
+    const distanciaRuta = calcularDistanciaRutaHastaIndice(polyline, indiceRutaVisibleRef.current, { lat, lng }, indicePorStep[i] ?? indiceFinDelStep);
+
+    const ahoraLog = performance.now();
+    if (ahoraLog - ultimoLogDistanciaManiobraTsRef.current >= 2000) {
+      ultimoLogDistanciaManiobraTsRef.current = ahoraLog;
+      diagLog(`[TILA_NAV_DIAG] MANIOBRA_DISTANCIA_RUTA requestId=${requestIdDeEsteTick} step=${i} distanciaM=${Math.round(distanciaRuta)} t=${Math.round(ahoraLog)}`);
+    }
+
+    if (!lado) return; // maniobra sin lado anunciable (recto/incorporación/rotonda) — sigue siendo la actual, se completa por progreso, nunca se le habla
+
+    const avisos = maniobraAvisosEmitidosRef.current;
+    // Primera evaluación de esta maniobra: si ya estamos dentro de un nivel más cercano
+    // que "lejano" (por ejemplo, tras inicializar recién a 150 m), los niveles MÁS
+    // LEJANOS que el actual se marcan directamente como consumidos — nunca se reproduce
+    // un aviso atrasado.
+    if (avisos.size === 0) {
+      if (distanciaRuta <= UMBRAL_MANIOBRA_CERCANO_METROS) {
+        avisos.add("lejano"); avisos.add("medio");
+      } else if (distanciaRuta <= UMBRAL_MANIOBRA_MEDIO_METROS) {
+        avisos.add("lejano");
       }
     }
-  }, [directions, lat, lng, modoNavegacion, modoMultiChofer, onAnuncioVoz, intentarAnunciar]);
+
+    const metros = Math.round(distanciaRuta / 10) * 10;
+    const texto = construirTextoManiobra(esSalida, lado, metros);
+
+    if (!avisos.has("lejano") && distanciaRuta <= UMBRAL_MANIOBRA_LEJANO_METROS) {
+      if (intentarAnunciar(texto, "maniobra", `maniobra-lejano-step${i}`, requestIdDeEsteTick)) {
+        avisos.add("lejano");
+        diagLog(`[TILA_NAV_DIAG] MANIOBRA_AVISO_400 requestId=${requestIdDeEsteTick} step=${i} distanciaM=${Math.round(distanciaRuta)} t=${Math.round(performance.now())}`);
+      }
+    } else if (!avisos.has("medio") && distanciaRuta <= UMBRAL_MANIOBRA_MEDIO_METROS) {
+      if (intentarAnunciar(texto, "maniobra", `maniobra-medio-step${i}`, requestIdDeEsteTick)) {
+        avisos.add("medio");
+        diagLog(`[TILA_NAV_DIAG] MANIOBRA_AVISO_300 requestId=${requestIdDeEsteTick} step=${i} distanciaM=${Math.round(distanciaRuta)} t=${Math.round(performance.now())}`);
+      }
+    } else if (!avisos.has("cercano") && distanciaRuta <= UMBRAL_MANIOBRA_CERCANO_METROS) {
+      if (intentarAnunciar(texto, "maniobra", `maniobra-cercano-step${i}`, requestIdDeEsteTick)) {
+        avisos.add("cercano");
+        diagLog(`[TILA_NAV_DIAG] MANIOBRA_AVISO_CERCANO requestId=${requestIdDeEsteTick} step=${i} distanciaM=${Math.round(distanciaRuta)} t=${Math.round(performance.now())}`);
+      }
+    }
+  }, [directions, lat, lng, modoNavegacion, modoMultiChofer, navegacionTilaActiva, onAnuncioVoz, intentarAnunciar]);
 
   // ─── Marcador chofer ──────────────────────────────────────────────────────
   // Sólo crea el marcador si todavía no existe — ya NO fija su posición (eso lo hace
