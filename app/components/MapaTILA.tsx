@@ -2946,13 +2946,16 @@ export default function MapaTILA({
     // presente, Google ignora `styles` por completo.
     mapId: process.env.NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID,
     colorScheme: colorSchemeActual,
-    // Inclinación/rotación SIEMPRE deshabilitadas como gesto manual (dos dedos podían
-    // rotar/inclinar el mapa sin querer durante la conducción) — tilt/heading siguen
-    // cambiando normalmente por código (restaurarCamaraNavegacion/pasoAnimacion usan
-    // setTilt/setHeading/moveCamera, que no pasan por estos flags, sólo gatean gestos
-    // del usuario). Pan y zoom quedan intactos vía gestureHandling más abajo.
-    tiltInteractionEnabled: false,
-    headingInteractionEnabled: false,
+    // Inclinación/rotación manual HABILITADAS — igual que pan/zoom, el gesto corta el
+    // seguimiento automático (ver heading_changed/tilt_changed en onMapLoad, ya gateados
+    // por programaticoRef: sólo actualizarSeguimiento(false) si el cambio no vino de
+    // nuestro propio código) y sólo el botón "Mi ubicación" (restaurarCamaraNavegacion)
+    // los retoma. Antes iban en false para evitar rotación accidental durante la
+    // conducción, pero eso también bloqueaba la rotación manual intencional — la cámara
+    // automática (pasoAnimacion/restaurarCamaraNavegacion) sigue usando
+    // setTilt/setHeading/moveCamera por código, que no pasa por estos flags.
+    tiltInteractionEnabled: true,
+    headingInteractionEnabled: true,
     // Arrastre/zoom libres, sin el modo cooperativo (que exigiría dos dedos
     // incluso para arrastrar) en esta vista de mapa a pantalla completa.
     gestureHandling: "greedy",
