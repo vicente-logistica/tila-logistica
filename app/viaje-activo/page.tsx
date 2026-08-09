@@ -150,8 +150,11 @@ export default function ViajeActivoPage() {
   // Sólo gatea si TILA actúa como navegador turn-by-turn: recalcula ruta, evalúa
   // desvío, corre la máquina de maniobra y habla — ver navegacionTilaActiva en
   // MapaTILAProps. Elegir Waze/Google en el selector (abrirNavegador) es la ÚNICA forma
-  // de pasar a 'waze'/'google'; el botón "🗺️ Mapa TILA" del mismo selector es la ÚNICA
-  // forma de volver a 'tila' — nunca revierte solo (ej. al volver a primer plano).
+  // de pasar a 'waze'/'google'. Vuelve a 'tila' de dos formas: el botón "🗺️ Mapa TILA"
+  // del mismo selector (elegirMapaTila), o automáticamente al detectar que la app volvió
+  // a primer plano tras usar el navegador externo (ver volverATila/appStateChange más
+  // abajo) — la auditoría de sesión real mostró que, sin esto último, el chofer que sólo
+  // cambiaba de app y volvía se quedaba con TILA suspendido indefinidamente.
   const [navegadorActivo, setNavegadorActivo] = useState<"tila" | "waze" | "google">("tila");
   const navegacionTilaActiva = navegadorActivo === "tila";
   // Con navegador externo activo, TILA no debe seguir armando/hablando anuncios
@@ -159,6 +162,45 @@ export default function ViajeActivoPage() {
   // y descartarlo acá, para que quede un solo punto de verdad (ver uso en el JSX).
   const onAnuncioVozTila = navegacionTilaActiva ? onAnuncioVoz : undefined;
   const onDetenerVozTila = navegacionTilaActiva ? detenerVoz : undefined;
+
+  // Espejo en ref de navegadorActivo — el listener de appStateChange (más abajo) se
+  // registra una sola vez y vive mientras dure la página; leer el STATE directamente
+  // ahí adentro quedaría con el valor de cuando el efecto se armó (mismo motivo que
+  // silenciarChatViajeRef/mostrarChatRef un poco más abajo en este archivo).
+  const navegadorActivoRef = useRef<"tila" | "waze" | "google">(navegadorActivo);
+  useEffect(() => { navegadorActivoRef.current = navegadorActivo; }, [navegadorActivo]);
+
+  // Única lógica real de "volver a navegadorActivo=tila" — compartida entre el botón
+  // explícito del selector (elegirMapaTila) y el listener de foreground/resume. origen
+  // sólo es informativo para el log, para distinguir un caso del otro en la evidencia.
+  const volverATila = useCallback((origen: "boton" | "foreground") => {
+    if (navegadorActivoRef.current === "tila") return;
+    const navegadorAnterior = navegadorActivoRef.current;
+    setNavegadorActivo("tila");
+    diagLog(`[TILA_NAV_DIAG] NAVEGADOR_ACTIVO_CAMBIO anterior=${navegadorAnterior} nuevo=tila origen=${origen} t=${Math.round(performance.now())}`);
+    diagLog(`[TILA_NAV_DIAG] TILA_NAV_REANUDADA origen=${origen} t=${Math.round(performance.now())}`);
+  }, []);
+
+  // Detecta el regreso real a primer plano tras abrir Waze/Google como app externa —
+  // TILA nunca se cierra en ese momento, sólo pierde el foreground (AppLauncher/Browser
+  // abren la otra app por encima). Sin este listener, sólo el botón del selector podía
+  // revertir a 'tila' (ver comentario junto a navegadorActivo). Sólo se registra en
+  // plataforma nativa — en web no existe este ciclo de vida ni tiene sentido.
+  useEffect(() => {
+    let handle: { remove: () => void } | null = null;
+    let cancelado = false;
+    (async () => {
+      const { Capacitor } = await import("@capacitor/core");
+      if (!Capacitor.isNativePlatform()) return;
+      const { App } = await import("@capacitor/app");
+      const h = await App.addListener("appStateChange", ({ isActive }) => {
+        if (isActive) volverATila("foreground");
+      });
+      if (cancelado) { h.remove(); return; }
+      handle = h;
+    })();
+    return () => { cancelado = true; handle?.remove(); };
+  }, [volverATila]);
 
   const [paradas, setParadas]                     = useState<any[]>([]);
   const [paradaActivaIndex, setParadaActivaIndex] = useState(0);
@@ -837,15 +879,10 @@ export default function ViajeActivoPage() {
     setMostrarNavSel(true);
   };
 
-  // Única forma de volver a navegadorActivo='tila' — acción explícita del chofer desde
-  // este mismo selector. Nunca se hace automáticamente (ej. al volver a primer plano).
+  // Vía explícita del chofer para volver a navegadorActivo='tila' desde el selector —
+  // ver volverATila para la lógica compartida con el regreso automático por foreground.
   const elegirMapaTila = () => {
-    if (navegadorActivo !== "tila") {
-      const navegadorAnterior = navegadorActivo;
-      setNavegadorActivo("tila");
-      diagLog(`[TILA_NAV_DIAG] NAVEGADOR_ACTIVO_CAMBIO anterior=${navegadorAnterior} nuevo=tila t=${Math.round(performance.now())}`);
-      diagLog(`[TILA_NAV_DIAG] TILA_NAV_REANUDADA t=${Math.round(performance.now())}`);
-    }
+    volverATila("boton");
     setMostrarNavSel(false);
     setDestNavPendiente(null);
   };

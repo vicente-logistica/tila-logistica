@@ -2623,6 +2623,39 @@ export default function MapaTILA({
     }
   }, [directions, lat, lng, modoNavegacion, modoMultiChofer, navegacionTilaActiva, onAnuncioVoz, intentarAnunciar]);
 
+  // Al volver de navegación externa (Waze/Google) — flanco false→true de
+  // navegacionTilaActiva — el tracking GPS nunca se detuvo (fixValidoActualRef siguió
+  // actualizándose todo el tiempo), pero Directions/desvío/voz estuvieron congelados: la
+  // ruta, el índice de progreso y la fase de estabilización GPS pueden llevar minutos de
+  // desactualización silenciosa respecto de por dónde se manejó mientras tanto. Se trata
+  // el regreso como una sesión de navegación nueva — mismo reset que al montar, más
+  // primerGpsMultietapaRef=false para forzar un recálculo limpio e inmediato (primerGps)
+  // en vez de esperar a que el detector de desvío note la deriva acumulada.
+  // Inicializado con el valor actual (no false) para no disparar en el primer render —
+  // el efecto de montaje ya cubre ese caso.
+  const navegacionTilaActivaPrevRef = useRef(navegacionTilaActiva);
+  useEffect(() => {
+    const estabaActiva = navegacionTilaActivaPrevRef.current;
+    navegacionTilaActivaPrevRef.current = navegacionTilaActiva;
+    if (estabaActiva || !navegacionTilaActiva) return; // sólo interesa el flanco false→true
+
+    ultimoFixValidoRef.current    = null;
+    ultimoFixValidoTsRef.current  = null;
+    penultimoFixValidoRef.current = null;
+    candidatosReenganceRef.current = [];
+    gpsInicialEstabilizadoRef.current = false;
+    bootstrapMejorAccuracyRef.current = null;
+    bootstrapCandidatosCoherentesRef.current = [];
+    rutaPolylineRef.current = [];
+    indicePorStepRef.current = [];
+    calculandoRutaNavRef.current = false;
+    lecturasFueraDeRutaRef.current = 0;
+    maniobraActualIndiceRef.current = null;
+    maniobraAvisosEmitidosRef.current = new Set();
+    primerGpsMultietapaRef.current = false;
+    diagLog(`[TILA_NAV_DIAG] NAV_ESTADO_RESET_POR_REANUDACION t=${Math.round(performance.now())}`);
+  }, [navegacionTilaActiva]);
+
   // ─── Marcador chofer ──────────────────────────────────────────────────────
   // Sólo crea el marcador si todavía no existe — ya NO fija su posición (eso lo hace
   // exclusivamente pasoAnimacion, frame a frame). onMapLoad es la única excepción: ahí
