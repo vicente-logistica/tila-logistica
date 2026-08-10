@@ -114,6 +114,7 @@ const TarjetaUsuario = ({
   usuario,
   esUnicoAdmin,
   usuarioActualId,
+  cargas,
   onActualizar,
   onActualizarAprobacionChofer,
   onResetPassword,
@@ -123,6 +124,10 @@ const TarjetaUsuario = ({
   usuario: any;
   esUnicoAdmin: boolean;
   usuarioActualId: string;
+  // Viajes ya cargados en memoria por AdminPage — opcional a propósito: si no se pasa,
+  // el bloque "Viajes relacionados" simplemente no se renderiza. Nunca dispara una
+  // consulta nueva, sólo filtra el array que ya existe.
+  cargas?: any[];
   onActualizar: (id: string, campo: string, valor: string) => void;
   onActualizarAprobacionChofer?: (id: string, estado: string) => void;
   onResetPassword: (id: string, nombre: string) => void;
@@ -130,6 +135,13 @@ const TarjetaUsuario = ({
   onRestaurar: (id: string) => void;
 }) => {
   const [editando, setEditando] = useState(false);
+  const [mostrarViajes, setMostrarViajes] = useState(false);
+  const viajesRelacionados = useMemo(
+    () => (cargas ?? []).filter(
+      (c) => String(c.cliente_id) === String(usuario.id) || String(c.chofer_id) === String(usuario.id)
+    ),
+    [cargas, usuario.id]
+  );
   const [nombre, setNombre] = useState(usuario.nombre || "");
   const [email, setEmail] = useState(usuario.email || "");
   const [telefono, setTelefono] = useState(usuario.telefono || "");
@@ -293,6 +305,30 @@ const TarjetaUsuario = ({
 
       {estaEliminado && (
         <button onClick={() => onRestaurar(usuario.id)} className="w-full bg-zinc-700 text-white font-black py-2 rounded-xl text-xs">♻️ Restaurar usuario</button>
+      )}
+
+      {cargas !== undefined && (
+        <div className="mt-3 pt-3 border-t border-zinc-800">
+          <button onClick={() => setMostrarViajes(v => !v)} className="w-full flex items-center justify-between text-xs text-zinc-400 hover:text-yellow-400 font-black">
+            <span>🧳 Viajes relacionados ({viajesRelacionados.length})</span>
+            <span>{mostrarViajes ? "▲" : "▼"}</span>
+          </button>
+          {mostrarViajes && (
+            <div className="mt-2 space-y-1.5">
+              {viajesRelacionados.length === 0 ? (
+                <p className="text-zinc-600 text-xs">Sin viajes relacionados.</p>
+              ) : viajesRelacionados.map((c: any) => (
+                <div key={c.id} className="bg-zinc-900 rounded-xl px-3 py-2 text-xs">
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <span className="text-white font-black truncate">{c.origen} → {c.destino}</span>
+                    <span className={`px-2 py-0.5 rounded-lg text-[10px] font-black flex-shrink-0 ${colorEstado(c.estado)}`}>{c.estado || "Pendiente"}</span>
+                  </div>
+                  <p className="text-zinc-500 mt-0.5">{formatearFechaAdmin(c.created_at)}</p>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       )}
     </div>
   );
@@ -1160,6 +1196,40 @@ export default function AdminPage() {
   const silenciarSoporteClienteRef = useRef(false);
   const silenciarSoporteChoferRef  = useRef(false);
 
+  // ── Tarjetas superiores → acceso directo a las secciones de detalle que ya existen
+  // más abajo en esta misma página. Sólo scrollea + resalta brevemente — ningún dato
+  // ni componente nuevo, todo lo que muestran esas secciones ya se cargaba antes.
+  const refPendientes       = useRef<HTMLDivElement>(null);
+  const refActivos          = useRef<HTMLDivElement>(null);
+  const refFinalizados      = useRef<HTMLDivElement>(null);
+  const refUsuarios         = useRef<HTMLDivElement>(null);
+  const refChoferesOnline   = useRef<HTMLDivElement>(null);
+  const refBusquedaUsuarios = useRef<HTMLInputElement>(null);
+  const [seccionResaltada, setSeccionResaltada] = useState<
+    "pendientes" | "activos" | "finalizados" | "usuarios" | "choferesOnline" | null
+  >(null);
+  const resaltadoTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [soloOnlineChoferes, setSoloOnlineChoferes] = useState(false);
+
+  const irASeccion = useCallback((ref: { current: HTMLDivElement | null }, id: NonNullable<typeof seccionResaltada>) => {
+    ref.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    if (resaltadoTimeoutRef.current) clearTimeout(resaltadoTimeoutRef.current);
+    setSeccionResaltada(id);
+    resaltadoTimeoutRef.current = setTimeout(() => setSeccionResaltada(null), 1600);
+  }, []);
+
+  const irAUsuarios = useCallback(() => {
+    irASeccion(refUsuarios, "usuarios");
+    // Espera un frame a que arranque el scroll suave antes de forzar el foco, para no
+    // pelear con scrollIntoView.
+    requestAnimationFrame(() => requestAnimationFrame(() => refBusquedaUsuarios.current?.focus()));
+  }, [irASeccion]);
+
+  const irAChoferesOnline = useCallback(() => {
+    setSoloOnlineChoferes(true);
+    irASeccion(refChoferesOnline, "choferesOnline");
+  }, [irASeccion]);
+
   const usuarioActual = typeof window !== "undefined" ? JSON.parse(localStorage.getItem("usuario") || "{}") : {};
 
   const cargarResumenMensajes = useCallback(async () => {
@@ -1513,21 +1583,22 @@ export default function AdminPage() {
 
       {/* Stats */}
       <section className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-8">
-        <div className="bg-zinc-900 border border-yellow-400 rounded-3xl p-6"><p className="text-zinc-400">Pendientes</p><h2 className="text-6xl font-black text-yellow-400">{pendientes.length}</h2></div>
-        <div className="bg-zinc-900 border border-green-400 rounded-3xl p-6"><p className="text-zinc-400">Activos</p><h2 className="text-6xl font-black text-green-400">{activos.length}</h2></div>
-        <div className="bg-zinc-900 border border-red-400 rounded-3xl p-6"><p className="text-zinc-400">Finalizados</p><h2 className="text-6xl font-black text-red-400">{finalizados.length}</h2></div>
-        <div className="bg-zinc-900 border border-blue-400 rounded-3xl p-6"><p className="text-zinc-400">Choferes online</p><h2 className="text-6xl font-black text-blue-400">{choferesOnline.length}</h2></div>
-        <div className="bg-zinc-900 border border-purple-400 rounded-3xl p-6"><p className="text-zinc-400">Usuarios</p><h2 className="text-6xl font-black text-purple-400">{todosUsuarios.filter(u => !u.eliminado).length}</h2></div>
+        <button type="button" onClick={() => irASeccion(refPendientes, "pendientes")} className="w-full text-left bg-zinc-900 border border-yellow-400 rounded-3xl p-6 hover:brightness-110 transition"><p className="text-zinc-400">Pendientes</p><h2 className="text-6xl font-black text-yellow-400">{pendientes.length}</h2></button>
+        <button type="button" onClick={() => irASeccion(refActivos, "activos")} className="w-full text-left bg-zinc-900 border border-green-400 rounded-3xl p-6 hover:brightness-110 transition"><p className="text-zinc-400">Activos</p><h2 className="text-6xl font-black text-green-400">{activos.length}</h2></button>
+        <button type="button" onClick={() => irASeccion(refFinalizados, "finalizados")} className="w-full text-left bg-zinc-900 border border-red-400 rounded-3xl p-6 hover:brightness-110 transition"><p className="text-zinc-400">Finalizados</p><h2 className="text-6xl font-black text-red-400">{finalizados.length}</h2></button>
+        <button type="button" onClick={irAChoferesOnline} className="w-full text-left bg-zinc-900 border border-blue-400 rounded-3xl p-6 hover:brightness-110 transition"><p className="text-zinc-400">Choferes online</p><h2 className="text-6xl font-black text-blue-400">{choferesOnline.length}</h2></button>
+        <button type="button" onClick={irAUsuarios} className="w-full text-left bg-zinc-900 border border-purple-400 rounded-3xl p-6 hover:brightness-110 transition"><p className="text-zinc-400">Usuarios</p><h2 className="text-6xl font-black text-purple-400">{todosUsuarios.filter(u => !u.eliminado).length}</h2></button>
       </section>
 
       {/* Gestión de usuarios */}
-      <section className="bg-zinc-900 border border-yellow-400 rounded-3xl p-6 mb-8">
+      <section ref={refUsuarios} className={`bg-zinc-900 border border-yellow-400 rounded-3xl p-6 mb-8 transition ${seccionResaltada === "usuarios" ? "ring-4 ring-yellow-400" : ""}`}>
         <h2 className="text-3xl font-black text-yellow-400 mb-2">Gestión de Usuarios</h2>
         <p className="text-zinc-500 text-sm mb-5">Administrá clientes, choferes y administradores.</p>
 
         {/* Filtros */}
         <div className="flex flex-col md:flex-row gap-3 mb-6">
           <input
+            ref={refBusquedaUsuarios}
             type="text"
             placeholder="Buscar por nombre, email, teléfono, DNI o rol..."
             value={busqueda}
@@ -1556,6 +1627,7 @@ export default function AdminPage() {
                 usuario={usuario}
                 esUnicoAdmin={adminCount <= 1}
                 usuarioActualId={usuarioActual?.id || ""}
+                cargas={cargas}
                 onActualizar={actualizarCampoUsuario}
                 onActualizarAprobacionChofer={actualizarAprobacionChofer}
                 onResetPassword={resetearPassword}
@@ -1567,12 +1639,21 @@ export default function AdminPage() {
       </section>
 
       {/* Gestión de choferes */}
-      <section className="bg-zinc-900 border border-green-400 rounded-3xl p-6 mb-8">
-        <h2 className="text-3xl font-black text-green-400 mb-2">Aprobación de Choferes</h2>
+      <section ref={refChoferesOnline} className={`bg-zinc-900 border border-green-400 rounded-3xl p-6 mb-8 transition ${seccionResaltada === "choferesOnline" ? "ring-4 ring-green-400" : ""}`}>
+        <div className="flex items-center justify-between mb-2 flex-wrap gap-3">
+          <h2 className="text-3xl font-black text-green-400">Aprobación de Choferes</h2>
+          <button type="button" onClick={() => setSoloOnlineChoferes(v => !v)}
+            className={`px-4 py-2 rounded-xl font-black text-sm ${soloOnlineChoferes ? "bg-green-600 text-white" : "bg-zinc-700 text-zinc-400"}`}>
+            {soloOnlineChoferes ? "🟢 Sólo online" : "Ver sólo online"}
+          </button>
+        </div>
         <p className="text-zinc-500 text-sm mb-6">Control de acceso a la plataforma para choferes.</p>
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-          {choferes.length === 0 ? <p className="text-zinc-500">No hay choferes registrados.</p> :
-            choferes.map((chofer) => <TarjetaChofer key={chofer.id} chofer={chofer} onActualizarAprobacion={actualizarAprobacionChofer} />)}
+          {(soloOnlineChoferes ? choferes.filter((c) => c.online) : choferes).length === 0 ? (
+            <p className="text-zinc-500">{soloOnlineChoferes ? "No hay choferes online ahora mismo." : "No hay choferes registrados."}</p>
+          ) : (soloOnlineChoferes ? choferes.filter((c) => c.online) : choferes).map((chofer) => (
+            <TarjetaChofer key={chofer.id} chofer={chofer} onActualizarAprobacion={actualizarAprobacionChofer} />
+          ))}
         </div>
       </section>
 
@@ -1786,21 +1867,21 @@ export default function AdminPage() {
 
       {/* Viajes */}
       <section className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-        <div>
+        <div ref={refPendientes} className={`rounded-3xl transition ${seccionResaltada === "pendientes" ? "ring-4 ring-yellow-400" : ""}`}>
           <h2 className="text-3xl font-black text-yellow-400 mb-4">Pendientes</h2>
           <div className="grid gap-4">
             {pendientes.length === 0 ? <p className="text-zinc-500">Sin pendientes.</p> :
               pendientes.map((carga) => <TarjetaViaje key={carga.id} carga={carga} paradas={paradasPorCarga[String(carga.id)] || []} choferInfo={choferInfoPorCarga[String(carga.id)]} onAbrirCliente={abrirCliente} onAbrirChofer={abrirChofer} onEliminarViaje={eliminarViaje} onActualizarEstado={actualizarEstado} />)}
           </div>
         </div>
-        <div>
+        <div ref={refActivos} className={`rounded-3xl transition ${seccionResaltada === "activos" ? "ring-4 ring-green-400" : ""}`}>
           <h2 className="text-3xl font-black text-green-400 mb-4">Activos</h2>
           <div className="grid gap-4">
             {activos.length === 0 ? <p className="text-zinc-500">Sin activos.</p> :
               activos.map((carga) => <TarjetaViaje key={carga.id} carga={carga} paradas={paradasPorCarga[String(carga.id)] || []} choferInfo={choferInfoPorCarga[String(carga.id)]} onAbrirCliente={abrirCliente} onAbrirChofer={abrirChofer} onEliminarViaje={eliminarViaje} onActualizarEstado={actualizarEstado} />)}
           </div>
         </div>
-        <div>
+        <div ref={refFinalizados} className={`rounded-3xl transition ${seccionResaltada === "finalizados" ? "ring-4 ring-red-400" : ""}`}>
           <h2 className="text-3xl font-black text-red-400 mb-4">Finalizados</h2>
           <div className="grid gap-4">
             {finalizados.length === 0 ? <p className="text-zinc-500">Sin finalizados.</p> :
