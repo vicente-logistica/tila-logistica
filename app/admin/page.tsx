@@ -1166,6 +1166,19 @@ const HistorialAdmin = ({ cargas, paradasPorCarga, todosUsuarios, onRecargar }: 
 
 // ─── Componente principal ─────────────────────────────────────────────────────
 
+type ModuloAdmin =
+  | "inicio"
+  | "pendientes"
+  | "activos"
+  | "finalizados"
+  | "choferesOnline"
+  | "usuarios"
+  | "clientes"
+  | "mapa"
+  | "reportes"
+  | "historial"
+  | "chats";
+
 export default function AdminPage() {
   const { autorizado } = useProtegerRuta("admin");
 
@@ -1196,39 +1209,13 @@ export default function AdminPage() {
   const silenciarSoporteClienteRef = useRef(false);
   const silenciarSoporteChoferRef  = useRef(false);
 
-  // ── Tarjetas superiores → acceso directo a las secciones de detalle que ya existen
-  // más abajo en esta misma página. Sólo scrollea + resalta brevemente — ningún dato
-  // ni componente nuevo, todo lo que muestran esas secciones ya se cargaba antes.
-  const refPendientes       = useRef<HTMLDivElement>(null);
-  const refActivos          = useRef<HTMLDivElement>(null);
-  const refFinalizados      = useRef<HTMLDivElement>(null);
-  const refUsuarios         = useRef<HTMLDivElement>(null);
-  const refChoferesOnline   = useRef<HTMLDivElement>(null);
-  const refBusquedaUsuarios = useRef<HTMLInputElement>(null);
-  const [seccionResaltada, setSeccionResaltada] = useState<
-    "pendientes" | "activos" | "finalizados" | "usuarios" | "choferesOnline" | null
-  >(null);
-  const resaltadoTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // ── Central operativa modular ────────────────────────────────────────────
+  // Un único módulo pesado visible a la vez debajo de las tarjetas — todos los bloques
+  // que renderiza cada módulo ya existían antes tal cual (TarjetaUsuario, TarjetaChofer,
+  // TarjetaCliente, TarjetaViaje, ReportesAdmin, HistorialAdmin, mapa, chats); esto sólo
+  // decide CUÁL se muestra, no cambia su contenido ni su lógica interna.
+  const [moduloActivo, setModuloActivo] = useState<ModuloAdmin>("inicio");
   const [soloOnlineChoferes, setSoloOnlineChoferes] = useState(false);
-
-  const irASeccion = useCallback((ref: { current: HTMLDivElement | null }, id: NonNullable<typeof seccionResaltada>) => {
-    ref.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-    if (resaltadoTimeoutRef.current) clearTimeout(resaltadoTimeoutRef.current);
-    setSeccionResaltada(id);
-    resaltadoTimeoutRef.current = setTimeout(() => setSeccionResaltada(null), 1600);
-  }, []);
-
-  const irAUsuarios = useCallback(() => {
-    irASeccion(refUsuarios, "usuarios");
-    // Espera un frame a que arranque el scroll suave antes de forzar el foco, para no
-    // pelear con scrollIntoView.
-    requestAnimationFrame(() => requestAnimationFrame(() => refBusquedaUsuarios.current?.focus()));
-  }, [irASeccion]);
-
-  const irAChoferesOnline = useCallback(() => {
-    setSoloOnlineChoferes(true);
-    irASeccion(refChoferesOnline, "choferesOnline");
-  }, [irASeccion]);
 
   const usuarioActual = typeof window !== "undefined" ? JSON.parse(localStorage.getItem("usuario") || "{}") : {};
 
@@ -1571,6 +1558,20 @@ export default function AdminPage() {
 
   if (!autorizado) return null;
 
+  // Repetido dentro de cada módulo — única forma de volver a "inicio", nunca recarga
+  // la página (sólo cambia moduloActivo).
+  const BotonVolverInicio = () => (
+    <button type="button" onClick={() => setModuloActivo("inicio")}
+      className="mb-4 text-sm font-black text-zinc-400 hover:text-yellow-400 transition">
+      ← Volver al inicio
+    </button>
+  );
+
+  const claseTarjetaModulo = (activo: boolean, colorRing: string) =>
+    `w-full text-left bg-zinc-900 border rounded-3xl p-6 hover:brightness-110 transition ${
+      activo ? `${colorRing} ring-4` : "border-zinc-700"
+    }`;
+
   return (
     <main className="min-h-screen bg-black text-white p-6">
       <header className="mb-8">
@@ -1583,22 +1584,47 @@ export default function AdminPage() {
 
       {/* Stats */}
       <section className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-8">
-        <button type="button" onClick={() => irASeccion(refPendientes, "pendientes")} className="w-full text-left bg-zinc-900 border border-yellow-400 rounded-3xl p-6 hover:brightness-110 transition"><p className="text-zinc-400">Pendientes</p><h2 className="text-6xl font-black text-yellow-400">{pendientes.length}</h2></button>
-        <button type="button" onClick={() => irASeccion(refActivos, "activos")} className="w-full text-left bg-zinc-900 border border-green-400 rounded-3xl p-6 hover:brightness-110 transition"><p className="text-zinc-400">Activos</p><h2 className="text-6xl font-black text-green-400">{activos.length}</h2></button>
-        <button type="button" onClick={() => irASeccion(refFinalizados, "finalizados")} className="w-full text-left bg-zinc-900 border border-red-400 rounded-3xl p-6 hover:brightness-110 transition"><p className="text-zinc-400">Finalizados</p><h2 className="text-6xl font-black text-red-400">{finalizados.length}</h2></button>
-        <button type="button" onClick={irAChoferesOnline} className="w-full text-left bg-zinc-900 border border-blue-400 rounded-3xl p-6 hover:brightness-110 transition"><p className="text-zinc-400">Choferes online</p><h2 className="text-6xl font-black text-blue-400">{choferesOnline.length}</h2></button>
-        <button type="button" onClick={irAUsuarios} className="w-full text-left bg-zinc-900 border border-purple-400 rounded-3xl p-6 hover:brightness-110 transition"><p className="text-zinc-400">Usuarios</p><h2 className="text-6xl font-black text-purple-400">{todosUsuarios.filter(u => !u.eliminado).length}</h2></button>
+        <button type="button" onClick={() => setModuloActivo("pendientes")} className={claseTarjetaModulo(moduloActivo === "pendientes", "border-yellow-400 ring-yellow-400")}><p className="text-zinc-400">Pendientes</p><h2 className="text-6xl font-black text-yellow-400">{pendientes.length}</h2></button>
+        <button type="button" onClick={() => setModuloActivo("activos")} className={claseTarjetaModulo(moduloActivo === "activos", "border-green-400 ring-green-400")}><p className="text-zinc-400">Activos</p><h2 className="text-6xl font-black text-green-400">{activos.length}</h2></button>
+        <button type="button" onClick={() => setModuloActivo("finalizados")} className={claseTarjetaModulo(moduloActivo === "finalizados", "border-red-400 ring-red-400")}><p className="text-zinc-400">Finalizados</p><h2 className="text-6xl font-black text-red-400">{finalizados.length}</h2></button>
+        <button type="button" onClick={() => { setSoloOnlineChoferes(true); setModuloActivo("choferesOnline"); }} className={claseTarjetaModulo(moduloActivo === "choferesOnline", "border-blue-400 ring-blue-400")}><p className="text-zinc-400">Choferes online</p><h2 className="text-6xl font-black text-blue-400">{choferesOnline.length}</h2></button>
+        <button type="button" onClick={() => setModuloActivo("usuarios")} className={claseTarjetaModulo(moduloActivo === "usuarios", "border-purple-400 ring-purple-400")}><p className="text-zinc-400">Usuarios</p><h2 className="text-6xl font-black text-purple-400">{todosUsuarios.filter(u => !u.eliminado).length}</h2></button>
+      </section>
+
+      {/* Fila secundaria */}
+      <section className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-8">
+        <button type="button" onClick={() => setModuloActivo("clientes")}
+          className={`px-3 py-3 rounded-2xl font-black text-sm transition ${moduloActivo === "clientes" ? "bg-purple-900/40 border border-purple-400 text-white" : "bg-zinc-900 border border-zinc-700 text-zinc-400 hover:text-white"}`}>
+          Clientes
+        </button>
+        <button type="button" onClick={() => setModuloActivo("mapa")}
+          className={`px-3 py-3 rounded-2xl font-black text-sm transition ${moduloActivo === "mapa" ? "bg-yellow-900/40 border border-yellow-400 text-white" : "bg-zinc-900 border border-zinc-700 text-zinc-400 hover:text-white"}`}>
+          Mapa
+        </button>
+        <button type="button" onClick={() => setModuloActivo("reportes")}
+          className={`px-3 py-3 rounded-2xl font-black text-sm transition ${moduloActivo === "reportes" ? "bg-yellow-900/40 border border-yellow-400 text-white" : "bg-zinc-900 border border-zinc-700 text-zinc-400 hover:text-white"}`}>
+          Reportes
+        </button>
+        <button type="button" onClick={() => setModuloActivo("historial")}
+          className={`px-3 py-3 rounded-2xl font-black text-sm transition ${moduloActivo === "historial" ? "bg-zinc-700 border border-zinc-300 text-white" : "bg-zinc-900 border border-zinc-700 text-zinc-400 hover:text-white"}`}>
+          Historial
+        </button>
+        <button type="button" onClick={() => setModuloActivo("chats")}
+          className={`px-3 py-3 rounded-2xl font-black text-sm transition ${moduloActivo === "chats" ? "bg-blue-900/40 border border-blue-400 text-white" : "bg-zinc-900 border border-zinc-700 text-zinc-400 hover:text-white"}`}>
+          Chats / Soporte
+        </button>
       </section>
 
       {/* Gestión de usuarios */}
-      <section ref={refUsuarios} className={`bg-zinc-900 border border-yellow-400 rounded-3xl p-6 mb-8 transition ${seccionResaltada === "usuarios" ? "ring-4 ring-yellow-400" : ""}`}>
+      {moduloActivo === "usuarios" && (
+      <section className="bg-zinc-900 border border-yellow-400 rounded-3xl p-6 mb-8">
+        <BotonVolverInicio />
         <h2 className="text-3xl font-black text-yellow-400 mb-2">Gestión de Usuarios</h2>
         <p className="text-zinc-500 text-sm mb-5">Administrá clientes, choferes y administradores.</p>
 
         {/* Filtros */}
         <div className="flex flex-col md:flex-row gap-3 mb-6">
           <input
-            ref={refBusquedaUsuarios}
             type="text"
             placeholder="Buscar por nombre, email, teléfono, DNI o rol..."
             value={busqueda}
@@ -1637,14 +1663,17 @@ export default function AdminPage() {
             ))}
         </div>
       </section>
+      )}
 
       {/* Gestión de choferes */}
-      <section ref={refChoferesOnline} className={`bg-zinc-900 border border-green-400 rounded-3xl p-6 mb-8 transition ${seccionResaltada === "choferesOnline" ? "ring-4 ring-green-400" : ""}`}>
+      {moduloActivo === "choferesOnline" && (
+      <section className="bg-zinc-900 border border-green-400 rounded-3xl p-6 mb-8">
+        <BotonVolverInicio />
         <div className="flex items-center justify-between mb-2 flex-wrap gap-3">
           <h2 className="text-3xl font-black text-green-400">Aprobación de Choferes</h2>
           <button type="button" onClick={() => setSoloOnlineChoferes(v => !v)}
             className={`px-4 py-2 rounded-xl font-black text-sm ${soloOnlineChoferes ? "bg-green-600 text-white" : "bg-zinc-700 text-zinc-400"}`}>
-            {soloOnlineChoferes ? "🟢 Sólo online" : "Ver sólo online"}
+            {soloOnlineChoferes ? "🟢 Sólo online" : "Ver todos los choferes"}
           </button>
         </div>
         <p className="text-zinc-500 text-sm mb-6">Control de acceso a la plataforma para choferes.</p>
@@ -1656,18 +1685,24 @@ export default function AdminPage() {
           ))}
         </div>
       </section>
+      )}
 
       {/* Clientes */}
+      {moduloActivo === "clientes" && (
       <section className="bg-zinc-900 border border-purple-400 rounded-3xl p-6 mb-8">
+        <BotonVolverInicio />
         <h2 className="text-3xl font-black text-purple-400 mb-6">Clientes registrados</h2>
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
           {clientes.length === 0 ? <p className="text-zinc-500">No hay clientes registrados.</p> :
             clientes.map((cliente) => <TarjetaCliente key={cliente.id} cliente={cliente} />)}
         </div>
       </section>
+      )}
 
       {/* Mapa */}
+      {moduloActivo === "mapa" && (
       <section className="bg-zinc-900 border border-yellow-400 rounded-3xl p-6 mb-8">
+        <BotonVolverInicio />
         <h2 className="text-3xl font-black text-yellow-400 mb-4">Mapa Global Operativo</h2>
         <div className="rounded-3xl overflow-hidden border-2 border-yellow-400 mb-6">
           <iframe title="Mapa TILA"
@@ -1688,12 +1723,15 @@ export default function AdminPage() {
             ))}
         </div>
       </section>
+      )}
 
       {/* ── TOAST MENSAJE NUEVO ADMIN ───────────────────────────────────── */}
       <ChatToast texto={alertaMensajeAdmin} />
 
       {/* Central de Asistencia */}
+      {moduloActivo === "chats" && (
       <section className="bg-zinc-900 border border-blue-400 rounded-3xl p-4 mb-8">
+        <BotonVolverInicio />
         {/* Header compacto */}
         <div className="flex items-center justify-between mb-3">
           <h2 className="text-xl font-black text-blue-400">💬 Central de Asistencia</h2>
@@ -1765,8 +1803,9 @@ export default function AdminPage() {
         )}
 
       </section>
+      )}
 
-      {/* ── VENTANA FLOTANTE DE CHAT ADMIN — una sola ventana para todos los viajes ── */}
+      {/* ── VENTANA FLOTANTE DE CHAT ADMIN — una sola ventana para todos los viajes (siempre disponible, no depende del módulo activo, para no cerrar un chat abierto ni perder notificaciones al navegar a otro módulo) ── */}
       {chatViajeId && usuarioActual?.id && (() => {
         const cargaActiva = activos.find(c => String(c.id) === chatViajeId);
         const LABELS_TIPO: Record<string, string> = { viaje: "💬 Operativo", soporte_cliente: "👤 Cliente", soporte_chofer: "🚛 Chofer" };
@@ -1860,35 +1899,52 @@ export default function AdminPage() {
       })()}
 
       {/* Reportes */}
-      <ReportesAdmin cargas={cargas} todosUsuarios={todosUsuarios} />
+      {moduloActivo === "reportes" && (
+        <>
+          <BotonVolverInicio />
+          <ReportesAdmin cargas={cargas} todosUsuarios={todosUsuarios} />
+        </>
+      )}
 
       {/* Historial general */}
-      <HistorialAdmin cargas={cargas} paradasPorCarga={paradasPorCarga} todosUsuarios={todosUsuarios} onRecargar={cargarViajes} />
+      {moduloActivo === "historial" && (
+        <>
+          <BotonVolverInicio />
+          <HistorialAdmin cargas={cargas} paradasPorCarga={paradasPorCarga} todosUsuarios={todosUsuarios} onRecargar={cargarViajes} />
+        </>
+      )}
 
       {/* Viajes */}
-      <section className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-        <div ref={refPendientes} className={`rounded-3xl transition ${seccionResaltada === "pendientes" ? "ring-4 ring-yellow-400" : ""}`}>
+      {moduloActivo === "pendientes" && (
+        <section>
+          <BotonVolverInicio />
           <h2 className="text-3xl font-black text-yellow-400 mb-4">Pendientes</h2>
           <div className="grid gap-4">
             {pendientes.length === 0 ? <p className="text-zinc-500">Sin pendientes.</p> :
               pendientes.map((carga) => <TarjetaViaje key={carga.id} carga={carga} paradas={paradasPorCarga[String(carga.id)] || []} choferInfo={choferInfoPorCarga[String(carga.id)]} onAbrirCliente={abrirCliente} onAbrirChofer={abrirChofer} onEliminarViaje={eliminarViaje} onActualizarEstado={actualizarEstado} />)}
           </div>
-        </div>
-        <div ref={refActivos} className={`rounded-3xl transition ${seccionResaltada === "activos" ? "ring-4 ring-green-400" : ""}`}>
+        </section>
+      )}
+      {moduloActivo === "activos" && (
+        <section>
+          <BotonVolverInicio />
           <h2 className="text-3xl font-black text-green-400 mb-4">Activos</h2>
           <div className="grid gap-4">
             {activos.length === 0 ? <p className="text-zinc-500">Sin activos.</p> :
               activos.map((carga) => <TarjetaViaje key={carga.id} carga={carga} paradas={paradasPorCarga[String(carga.id)] || []} choferInfo={choferInfoPorCarga[String(carga.id)]} onAbrirCliente={abrirCliente} onAbrirChofer={abrirChofer} onEliminarViaje={eliminarViaje} onActualizarEstado={actualizarEstado} />)}
           </div>
-        </div>
-        <div ref={refFinalizados} className={`rounded-3xl transition ${seccionResaltada === "finalizados" ? "ring-4 ring-red-400" : ""}`}>
+        </section>
+      )}
+      {moduloActivo === "finalizados" && (
+        <section>
+          <BotonVolverInicio />
           <h2 className="text-3xl font-black text-red-400 mb-4">Finalizados</h2>
           <div className="grid gap-4">
             {finalizados.length === 0 ? <p className="text-zinc-500">Sin finalizados.</p> :
               finalizados.map((carga) => <TarjetaViaje key={carga.id} carga={carga} paradas={paradasPorCarga[String(carga.id)] || []} choferInfo={choferInfoPorCarga[String(carga.id)]} onAbrirCliente={abrirCliente} onAbrirChofer={abrirChofer} onEliminarViaje={eliminarViaje} onActualizarEstado={actualizarEstado} />)}
           </div>
-        </div>
-      </section>
+        </section>
+      )}
     </main>
   );
 }
