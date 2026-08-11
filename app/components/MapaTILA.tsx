@@ -99,6 +99,20 @@ const UMBRAL_DESVIO_INMEDIATO_METROS = 120;
 const LECTURAS_CONSECUTIVAS_DESVIO   = 2;
 const COOLDOWN_RECALCULO_MS          = 8000;
 
+// ─── Snap visual del camión sobre la polyline activa ──────────────────────────
+// El GPS real (fixValidoActualRef, historial, velocidad/heading) NUNCA se modifica —
+// sigue siendo la única fuente para desvío/recálculo. Esto sólo cambia dónde se DIBUJA
+// el ícono: mientras la distancia del vehículo al segmento activo (la misma que ya
+// calcula elegirSegmentoActivo en cada recorte) esté dentro de este corredor, el ícono
+// se posiciona en el punto PROYECTADO sobre la polyline en vez de en la coordenada GPS
+// cruda — corrige el offset lateral entre el camión y la calzada dibujada visto en los
+// videos. Reutiliza UMBRAL_DESVIO_RUTA_METROS: es exactamente el mismo umbral que ya
+// define "todavía sobre esta ruta" para el detector de desvío — no hace falta un
+// segundo número arbitrario distinto. Más allá de esto, se asume desvío real y el
+// ícono vuelve a mostrarse en su posición GPS real tal cual, sin forzarlo sobre una
+// ruta de la que ya se salió.
+const UMBRAL_CORREDOR_SNAP_VISUAL_METROS = UMBRAL_DESVIO_RUTA_METROS;
+
 // ─── Validación defensiva de fixes GPS (velocidad + consistencia de rumbo) ────
 // No se valida accuracy (page.tsx no la expone todavía). Filtros, en orden:
 //  0) Intervalo demasiado corto para confiar en una velocidad calculada (denominador
@@ -226,9 +240,18 @@ const UMBRAL_AMBIGUEDAD_METROS = 5;
 // ciegas. Si al inicializar una maniobra la distancia real ya es menor a un nivel,
 // ese nivel (y los más lejanos) se marca directamente como "ya pasado" sin
 // reproducirlo — nunca se anuncian avisos atrasados.
-const UMBRAL_MANIOBRA_LEJANO_METROS  = 400;
-const UMBRAL_MANIOBRA_MEDIO_METROS   = 300;
-const UMBRAL_MANIOBRA_CERCANO_METROS = 90;
+//
+// Cada nivel se dispara por CRUCE explícito (distanciaAnterior > umbral && distanciaRuta
+// <= umbral, ver el efecto de maniobra/voz), nunca por un timer ni por una velocidad
+// supuesta — así queda correcto en todo el rango ~20-250km/h: a 250km/h (~69.4 m/s) un
+// solo intervalo entre lecturas GPS puede perfectamente saltar de más de 600m a menos de
+// 400m sin haber pasado nunca por un valor "cercano a 600" — el cruce se detecta igual
+// porque compara contra el umbral, no contra un valor exacto. Si ese mismo salto cruza
+// varios niveles a la vez, se marcan TODOS como consumidos pero se anuncia sólo el más
+// cercano (más útil) — ver ese mismo efecto.
+const UMBRAL_MANIOBRA_LEJANO_METROS  = 600;
+const UMBRAL_MANIOBRA_MEDIO_METROS   = 400;
+const UMBRAL_MANIOBRA_CERCANO_METROS = 200;
 // "Completada": el progreso sobre la polyline alcanzó el inicio del step SIGUIENTE
 // (o el final de la ruta, si es el último step) — no una distancia arbitraria.
 
@@ -502,7 +525,10 @@ interface ContextoSeleccionSegmento {
   headingVehiculo: number | null;
   velocidadVehiculoMps: number | null;
   accuracyMetros: number | null;
-  origen: "desvio" | "recorte";
+  // "siembra": proyección única, síncrona, al aterrizar una ruta nueva (ver
+  // sembrarProgresoRutaNueva) — mismo cálculo que "recorte", identificado aparte sólo
+  // para que los logs de diagnóstico puedan distinguir el origen.
+  origen: "desvio" | "recorte" | "siembra";
   rutaRequestId: number;
 }
 
@@ -683,13 +709,23 @@ const recortarRutaDesdeVehiculo = (
   velocidadVehiculoMps: number | null,
   accuracyMetros: number | null,
   rutaRequestId: number
-): { puntos: google.maps.LatLngLiteral[]; indice: number } => {
-  if (polyline.length < 2) return { puntos: polyline, indice: 0 };
+): {
+  puntos: google.maps.LatLngLiteral[];
+  indice: number;
+  // Punto proyectado sobre el segmento activo y su distancia real al vehículo — SIN el
+  // retroceso cosmético de margenMetros aplicado más abajo (ése es sólo para que la
+  // traza dibujada no corte justo debajo del ícono). Usado para el snap visual del
+  // marcador (ver UMBRAL_CORREDOR_SNAP_VISUAL_METROS) — necesita la posición real sobre
+  // la calzada, no la retrocedida.
+  snapPunto: google.maps.LatLngLiteral | null;
+  snapDistancia: number | null;
+} => {
+  if (polyline.length < 2) return { puntos: polyline, indice: 0, snapPunto: null, snapDistancia: null };
   const resultado = elegirSegmentoActivo(polyline, posicion, {
     indiceActual: indiceMinimo, headingVehiculo, velocidadVehiculoMps, accuracyMetros,
     origen: "recorte", rutaRequestId,
   });
-  if (!resultado) return { puntos: polyline, indice: 0 };
+  if (!resultado) return { puntos: polyline, indice: 0, snapPunto: null, snapDistancia: null };
   const desde = Math.min(Math.max(indiceMinimo - VENTANA_ATRAS_SEGMENTOS, 0), polyline.length - 2);
   // Retroceder margenMetros desde el punto elegido, para continuidad visual — nunca
   // cruza por debajo de `desde` (mismo límite que ya impidió mirar tramos anteriores).
@@ -712,7 +748,12 @@ const recortarRutaDesdeVehiculo = (
     punto = inicioSegmento;
     indiceDibujo -= 1;
   }
-  return { puntos: [punto, ...polyline.slice(indiceDibujo + 1)], indice: resultado.indice };
+  return {
+    puntos: [punto, ...polyline.slice(indiceDibujo + 1)],
+    indice: resultado.indice,
+    snapPunto: resultado.punto,
+    snapDistancia: resultado.distancia,
+  };
 };
 
 export interface ParadaMapa {
@@ -1028,6 +1069,11 @@ export default function MapaTILA({
   // valor más reciente sin recrear el callback en cada cambio de accuracy.
   const accuracyRef = useRef(accuracy);
   useEffect(() => { accuracyRef.current = accuracy; }, [accuracy]);
+  // Espejo en ref del prop heading — mismo patrón que accuracyRef, para que
+  // sembrarProgresoRutaNueva (callback estable, no puede depender de props en su array
+  // de deps sin recrearse en cada tick de GPS) lea siempre el heading más reciente.
+  const headingRef = useRef(heading);
+  useEffect(() => { headingRef.current = heading; }, [heading]);
   // true mientras restaurarCamaraNavegacion ("Mi ubicación") está aplicando su propia
   // actualización atómica de cámara — pasoAnimacion y el efecto de panelTopPx NO escriben
   // sobre center/heading mientras esto sea true, para que exista una única autoridad de
@@ -1045,6 +1091,13 @@ export default function MapaTILA({
   const animacionInicioTsRef    = useRef(0);
   const animacionDuracionRef    = useRef(DURACION_ANIMACION_MAX_MS);
   const posicionVisualActualRef = useRef<{ lat: number; lng: number; heading: number | null } | null>(null);
+  // Último punto proyectado sobre la polyline activa + su distancia real al vehículo —
+  // alimentado por el mismo bloque de recorte (throttle INTERVALO_MIN_RECORTE_MS) dentro
+  // de pasoAnimacion, reutilizado por el marcador para el snap visual (ver
+  // UMBRAL_CORREDOR_SNAP_VISUAL_METROS). null mientras no haya una lectura fresca válida
+  // (recién arrancando, ruta recién reemplazada, o el propio recorte se saltó el tick por
+  // accuracy mala) — en ese caso el marcador cae de vuelta a la posición GPS real.
+  const posicionSnapRutaRef = useRef<{ punto: google.maps.LatLngLiteral; distancia: number } | null>(null);
   // Velocidad real (metros/milisegundo) entre los últimos dos fixes GPS reales — se
   // recalcula en cada animarHaciaPosicion y sólo se usa para la extrapolación acotada de
   // pasoAnimacion cuando el PRÓXIMO fix tarda más que la animación en curso.
@@ -1146,6 +1199,12 @@ export default function MapaTILA({
       ultimaRutaRefVistaRef.current = polyline;
       ultimaRutaRequestIdVistaRef.current = rutaRequestIdRef.current;
       indiceRutaVisibleRef.current = 0;
+      // El snap visual de la generación anterior no tiene sentido contra esta polyline
+      // nueva — se descarta acá mismo, síncrono, junto con el reset del índice (mismo
+      // motivo que ese reset: nunca dejar que algo de la ruta vieja se siga dibujando/
+      // usando después de instalarse una nueva). El marcador cae de vuelta a la posición
+      // GPS real hasta que el próximo recorte calcule un snap fresco sobre la ruta nueva.
+      posicionSnapRutaRef.current = null;
       diagLog(
         `[TILA_NAV_DIAG] RUTA_NUEVA_INSTALADA requestId=${rutaRequestIdRef.current} `
         + `requestIdAnterior=${requestIdAnterior ?? "n/a"} puntosRuta=${polyline.length} t=${Math.round(performance.now())}`
@@ -1153,6 +1212,55 @@ export default function MapaTILA({
     }
     return indiceRutaVisibleRef.current;
   }, []);
+
+  // Aplica un candidato de progreso sin permitir que retroceda dentro de la misma
+  // generación de ruta. sincronizarIndiceConRuta ya se encarga de resetear a 0 cuando la
+  // polyline cambia (ruta realmente nueva) — acá sólo queda impedir que los DOS caminos
+  // independientes que escriben este índice (el recorte visual, con la posición
+  // interpolada/extrapolada, y el efecto de desvío, con el fix GPS crudo) se pisen hacia
+  // atrás entre sí. Causa confirmada del retroceso 6→3→1 visto en producción: ninguno de
+  // los dos comparaba el candidato contra el progreso ya confirmado antes de escribir.
+  // Con esto, el peor caso posible es un candidato erróneo que NO avanza (se ignora
+  // porque Math.max lo descarta) — nunca uno que retrocede el progreso confirmado.
+  const avanzarIndiceProgreso = useCallback((nuevoIndice: number): number => {
+    indiceRutaVisibleRef.current = Math.max(indiceRutaVisibleRef.current, nuevoIndice);
+    return indiceRutaVisibleRef.current;
+  }, []);
+
+  // Al aterrizar una ruta nueva (recálculo), siembra el progreso desde la posición GPS
+  // REAL actual — no desde el origen que se le envió a Directions, que ya quedó
+  // desactualizado durante el viaje de ida y vuelta a la API (el vehículo sigue
+  // moviéndose mientras tanto). sincronizarIndiceConRuta ya resetea el índice a 0 y
+  // limpia el snap visual apenas detecta la referencia de polyline nueva (síncrono,
+  // dentro de esa misma llamada); acá se reemplaza ese 0 crudo por la proyección real,
+  // TAMBIÉN síncrono, antes de que nada pueda dibujar un primer frame apuntando hacia
+  // atrás del vehículo. Usa fixValidoActualRef (GPS real validado) explícitamente, no la
+  // posición visual/interpolada — mismo criterio que el resto del progreso monotónico:
+  // el GPS real nunca se toca ni se sustituye por una posición "arreglada".
+  // Sin fix real conocido todavía (arranque, o calcularRuta usado fuera de navegación
+  // con GPS) no hay nada que sembrar: el índice se queda en el 0 que ya dejó
+  // sincronizarIndiceConRuta, y el próximo tick de recorte/desvío lo corrige apenas haya
+  // una posición real.
+  const sembrarProgresoRutaNueva = useCallback((polyline: google.maps.LatLngLiteral[], requestId: number) => {
+    sincronizarIndiceConRuta(polyline);
+    const posicionActual = fixValidoActualRef.current;
+    if (!posicionActual || polyline.length < 2) return;
+    const resultado = elegirSegmentoActivo(polyline, posicionActual, {
+      indiceActual: 0,
+      headingVehiculo: headingValido(headingRef.current),
+      velocidadVehiculoMps: velocidadMPorMsRef.current > 0 ? velocidadMPorMsRef.current * 1000 : null,
+      accuracyMetros: accuracyRef.current ?? null,
+      origen: "siembra",
+      rutaRequestId: requestId,
+    });
+    if (resultado) {
+      avanzarIndiceProgreso(resultado.indice);
+      diagLog(
+        `[TILA_NAV_DIAG] PROGRESO_SEMBRADO_RUTA_NUEVA requestId=${requestId} indiceSembrado=${resultado.indice} `
+        + `distanciaAlPunto=${Math.round(resultado.distancia)}m t=${Math.round(performance.now())}`
+      );
+    }
+  }, [sincronizarIndiceConRuta, avanzarIndiceProgreso]);
 
   // ── Diagnóstico visible ───────────────────────────────────────────────────
   const [diagnostico, setDiagnostico] = useState<DiagnosticoMapa>({
@@ -1476,8 +1584,21 @@ export default function MapaTILA({
 
     posicionVisualActualRef.current = { lat: latActual, lng: lngActual, heading: headingActual };
 
+    // Snap visual: el ÍCONO se dibuja proyectado sobre la polyline activa mientras el
+    // vehículo esté dentro de un corredor razonable de la ruta (ver
+    // UMBRAL_CORREDOR_SNAP_VISUAL_METROS) — el GPS real (posicionVisualActualRef, arriba,
+    // usado por cámara/animación/desvío) no se toca. posicionSnapRutaRef se recalcula en
+    // el bloque de recorte más abajo, a su misma cadencia (INTERVALO_MIN_RECORTE_MS) —
+    // acá simplemente se reutiliza el último valor fresco. Fuera de modoNavegacion, o sin
+    // un snap fresco todavía (arranque, ruta recién reemplazada, tick de accuracy mala),
+    // el ícono se dibuja en su posición GPS real tal cual, sin forzarlo.
+    const snapVisual = modoNavegacion ? posicionSnapRutaRef.current : null;
+    const posicionMarcador = (snapVisual && snapVisual.distancia <= UMBRAL_CORREDOR_SNAP_VISUAL_METROS)
+      ? snapVisual.punto
+      : { lat: latActual, lng: lngActual };
+
     if (choferMarkerRef.current) {
-      choferMarkerRef.current.setPosition({ lat: latActual, lng: lngActual });
+      choferMarkerRef.current.setPosition(posicionMarcador);
     } else {
       // TILA_NAV_DIAG: evidencia directa de "el marcador desaparece" — si esto se ve en
       // logcat durante la prueba, el marcador realmente no existe en ese momento.
@@ -1539,7 +1660,7 @@ export default function MapaTILA({
         // una posición poco confiable — ver UMBRAL_ACCURACY_MALA_METROS.
         if (polyline.length >= 2 && !accuracyMalaRecorte) {
           const indiceSincronizado = sincronizarIndiceConRuta(polyline);
-          const { puntos, indice } = recortarRutaDesdeVehiculo(
+          const { puntos, indice, snapPunto, snapDistancia } = recortarRutaDesdeVehiculo(
             polyline, { lat: latActual, lng: lngActual }, MARGEN_RUTA_DETRAS_METROS, indiceSincronizado,
             headingActual, velocidadMPorMsRef.current > 0 ? velocidadMPorMsRef.current * 1000 : null,
             accuracyActualRecorte, requestIdDeEstaEscritura
@@ -1548,7 +1669,14 @@ export default function MapaTILA({
           // rutaPolylineRef en el medio), así que esta condición siempre debería ser
           // verdadera — se deja como guarda explícita en vez de asumirlo.
           if (rutaPolylineRef.current === polyline) {
-            indiceRutaVisibleRef.current = indice;
+            // avanzarIndiceProgreso, no asignación cruda: este camino usa la posición
+            // INTERPOLADA/EXTRAPOLADA (puede sobrepasar momentáneamente la calzada real
+            // en una curva) — nunca puede hacer retroceder el progreso ya confirmado por
+            // el otro escritor (el efecto de desvío, con GPS crudo). Ver avanzarIndiceProgreso.
+            avanzarIndiceProgreso(indice);
+            posicionSnapRutaRef.current = (snapPunto && snapDistancia !== null)
+              ? { punto: snapPunto, distancia: snapDistancia }
+              : null;
             if (ultimoRequestIdEscritoRef.current !== requestIdDeEstaEscritura) {
               ultimoRequestIdEscritoRef.current = requestIdDeEstaEscritura;
               diagLog(`[TILA_NAV_DIAG] RUTA_VISUAL_PRIMERA_ESCRITURA requestId=${requestIdDeEstaEscritura} puntosVisibles=${puntos.length} t=${Math.round(performance.now())}`);
@@ -1571,7 +1699,7 @@ export default function MapaTILA({
     } else {
       animacionFrameRef.current = null;
     }
-  }, [modoNavegacion, moverCamara, calcularOffsetVerticalCamara, sincronizarIndiceConRuta]);
+  }, [modoNavegacion, moverCamara, calcularOffsetVerticalCamara, sincronizarIndiceConRuta, avanzarIndiceProgreso]);
   useEffect(() => {
     pasoAnimacionRef.current = pasoAnimacion;
   }, [pasoAnimacion]);
@@ -1749,6 +1877,10 @@ export default function MapaTILA({
           // (si por algún motivo se cayó al overview_path, no hay mapeo step→índice
           // confiable — la máquina de estado de maniobra queda sin datos ese caso raro).
           indicePorStepRef.current = puntosDetallados.length >= 2 ? indicePorStep : [];
+          // Siembra el progreso desde el GPS real ANTES de que nada más lea el índice —
+          // ver sembrarProgresoRutaNueva. Nunca deja el 0 crudo del reset expuesto a un
+          // primer frame dibujado hacia atrás del vehículo.
+          sembrarProgresoRutaNueva(rutaPolylineRef.current, miRequestId);
           if (habiaRutaAnterior) {
             diagLog(`[TILA_NAV_DIAG] DIRECTIONS_ANTERIOR_LIMPIADO requestId=${miRequestId} t=${Math.round(performance.now())}`);
           }
@@ -1774,6 +1906,7 @@ export default function MapaTILA({
           // como polyline de referencia para medir desvío mientras no haya Directions real.
           const habiaRutaAnterior = rutaPolylineRef.current.length >= 2;
           rutaPolylineRef.current = fallbackPuntos;
+          sembrarProgresoRutaNueva(rutaPolylineRef.current, miRequestId);
           if (habiaRutaAnterior) {
             diagLog(`[TILA_NAV_DIAG] FALLBACK_ANTERIOR_LIMPIADO requestId=${miRequestId} t=${Math.round(performance.now())}`);
           }
@@ -1782,7 +1915,7 @@ export default function MapaTILA({
         if (onSettled) onSettled();
       }
     );
-  }, [aplicarPolylineFallback, encuadrarDesdeRuta]);
+  }, [aplicarPolylineFallback, encuadrarDesdeRuta, sembrarProgresoRutaNueva]);
 
   // ─── Resumen de distancias/tiempos para mostrarRutaDesdeChofer ────────────
   const informarResumenRuta = useCallback((result: google.maps.DirectionsResult) => {
@@ -2307,7 +2440,10 @@ export default function MapaTILA({
       const distancia    = resultado?.distancia ?? null;
       const fueraDeRuta = distancia !== null && distancia >= UMBRAL_DESVIO_RUTA_METROS;
       const desvioObvio = distancia !== null && distancia >= UMBRAL_DESVIO_INMEDIATO_METROS;
-      if (resultado) indiceRutaVisibleRef.current = resultado.indice;
+      // avanzarIndiceProgreso, no asignación cruda: este camino usa el fix GPS real, pero
+      // el otro escritor (recorte, posición interpolada) puede haber escrito recién un
+      // valor mayor este mismo ciclo — nunca retroceder el progreso ya confirmado.
+      if (resultado) avanzarIndiceProgreso(resultado.indice);
       lecturasFueraDeRutaRef.current = fueraDeRuta ? lecturasFueraDeRutaRef.current + 1 : 0;
       // Capturado ANTES de un posible reset por confirmación (más abajo) — si no, el log
       // de este mismo tick mostraría 0 (el valor YA reseteado) aunque la confirmación se
@@ -2345,7 +2481,7 @@ export default function MapaTILA({
     primerGpsMultietapaRef.current = true;
     dispararCalculoNav();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isLoaded, modoNavegacion, tieneParadas, modoMultiChofer, navegacionTilaActiva, lat, lng, JSON.stringify(paradas?.map(p => ({ d: p.direccion, e: p.estado }))), dispararCalculoNav, sincronizarIndiceConRuta]);
+  }, [isLoaded, modoNavegacion, tieneParadas, modoMultiChofer, navegacionTilaActiva, lat, lng, JSON.stringify(paradas?.map(p => ({ d: p.direccion, e: p.estado }))), dispararCalculoNav, sincronizarIndiceConRuta, avanzarIndiceProgreso]);
 
   // ─── modoNavegacion: encuadre inicial único ────────────────────────────────
   // Único lugar que hace el fitBounds/setCenter automático de arranque en modoNavegacion.
@@ -2439,6 +2575,21 @@ export default function MapaTILA({
   // cada tick sería demasiado — no es un evento de transición).
   const maniobraActualIndiceRef      = useRef<number | null>(null);
   const maniobraAvisosEmitidosRef    = useRef<Set<"lejano" | "medio" | "cercano">>(new Set());
+  // distanciaRuta de la evaluación ANTERIOR de la maniobra actual — null si esta es la
+  // primera evaluación (recién inicializada/avanzada). Habilita el cruce EXPLÍCITO
+  // `anterior > umbral && actual <= umbral` en vez de depender implícitamente de que
+  // distanciaRuta sólo decrezca tick a tick — necesario para que el sistema sea correcto
+  // en todo el rango 20-250km/h sin timers ni velocidad supuesta (ver el bloque de
+  // avisos más abajo). Se reinicia junto con maniobraAvisosEmitidosRef, mismo ciclo de
+  // vida (una maniobra nueva no hereda el "anterior" de la maniobra previa).
+  const maniobraDistanciaAnteriorRef = useRef<number | null>(null);
+  // Niveles detectados como "cruzados" (anteriorDist > umbral && distanciaRuta <= umbral)
+  // pero todavía NO anunciados por voz — normalmente se anuncia y consume en el mismo
+  // tick en que se detecta el cruce, pero si intentarAnunciar lo posterga (cooldown de
+  // otra maniobra/informativo), el nivel se queda acá para reintentarse en el próximo
+  // tick SIN volver a exigir un cruce nuevo (que ya no ocurriría — distanciaRuta ya bajó
+  // del umbral) y sin perderse. Mismo ciclo de vida que maniobraAvisosEmitidosRef.
+  const maniobraNivelesPendientesRef = useRef<Set<"lejano" | "medio" | "cercano">>(new Set());
   const ultimoLogDistanciaManiobraTsRef = useRef(0);
   // Estado del cooldown/prioridad — ver COOLDOWN_ANUNCIO_MISMA_PRIORIDAD_MS.
   const ultimoAnuncioTsRef        = useRef(0);
@@ -2535,11 +2686,23 @@ export default function MapaTILA({
       rutaKeyVozRef.current = rutaKey;
       maniobraActualIndiceRef.current = null;
       maniobraAvisosEmitidosRef.current = new Set();
+      maniobraNivelesPendientesRef.current = new Set();
+      maniobraDistanciaAnteriorRef.current = null;
     }
 
     const polyline = rutaPolylineRef.current;
     const indicePorStep = indicePorStepRef.current;
     if (polyline.length < 2 || indicePorStep.length === 0) return; // geometría detallada aún no disponible
+
+    // Sincroniza el índice compartido ANTES de leerlo — nunca asumir que el efecto de
+    // recorte/desvío ya corrió este mismo commit (no está garantizado por orden de
+    // declaración). Sin esto, tras un recálculo, esta máquina podía inicializar/evaluar
+    // la maniobra usando un índice todavía de la ruta VIEJA contra los steps/indicePorStep
+    // de la ruta NUEVA — causa confirmada de "En 0 metros doblá..." apenas se recalcula
+    // (calcularDistanciaRutaHastaIndice devuelve 0 si el índice ya "superó" el step).
+    // Idempotente: si esta polyline ya fue sincronizada este tick por otro efecto, no
+    // hace nada distinto.
+    sincronizarIndiceConRuta(polyline);
 
     // Inicializa la maniobra actual (si no hay una) buscando el primer step cuyo inicio
     // en la polyline está adelante del progreso real del vehículo — no arranca ciego en
@@ -2555,6 +2718,8 @@ export default function MapaTILA({
       if (candidato === null) return; // no queda ninguna maniobra por delante
       maniobraActualIndiceRef.current = candidato;
       maniobraAvisosEmitidosRef.current = new Set();
+      maniobraNivelesPendientesRef.current = new Set();
+      maniobraDistanciaAnteriorRef.current = null;
       diagLog(`[TILA_NAV_DIAG] MANIOBRA_ACTUAL_INICIALIZADA requestId=${requestIdDeEsteTick} step=${candidato} maniobra=${pasos[candidato]?.maneuver ?? "?"} t=${Math.round(performance.now())}`);
     }
 
@@ -2570,6 +2735,8 @@ export default function MapaTILA({
       const siguiente = i + 1;
       maniobraActualIndiceRef.current = siguiente;
       maniobraAvisosEmitidosRef.current = new Set();
+      maniobraNivelesPendientesRef.current = new Set();
+      maniobraDistanciaAnteriorRef.current = null;
       diagLog(`[TILA_NAV_DIAG] MANIOBRA_ACTUAL_AVANCE requestId=${requestIdDeEsteTick} stepAnterior=${i} stepNuevo=${siguiente} t=${Math.round(performance.now())}`);
       return;
     }
@@ -2589,39 +2756,60 @@ export default function MapaTILA({
 
     if (!lado) return; // maniobra sin lado anunciable (recto/incorporación/rotonda) — sigue siendo la actual, se completa por progreso, nunca se le habla
 
+    // ─── Avisos por CRUCE real de distancia, no por proximidad simple ────────────────
+    // anteriorDist > umbral && distanciaRuta <= umbral: nunca se dispara sólo porque
+    // distanciaRuta ya esté por debajo (eso repetiría/lingering a baja velocidad — ya
+    // bloqueado además por avisos/pendientes más abajo), sino porque efectivamente
+    // CRUZÓ el umbral desde la lectura anterior. anteriorDist === null (primera
+    // evaluación de esta maniobra, recién inicializada/avanzada) se trata igual que un
+    // cruce — así, si al inicializar ya estamos dentro de un nivel, se anuncia una vez
+    // sin esperar un cruce que ya no va a ocurrir.
+    // NIVELES ordenado de más cercano a más lejano: si el salto entre dos lecturas GPS
+    // (alta velocidad, o baja frecuencia de GPS) cruza varios umbrales de golpe, se
+    // detectan TODOS pero sólo se anuncia el más cercano (el más útil) — el resto se
+    // consume en silencio, nunca se apilan varias voces seguidas.
+    const anteriorDist = maniobraDistanciaAnteriorRef.current;
+    maniobraDistanciaAnteriorRef.current = distanciaRuta;
+
     const avisos = maniobraAvisosEmitidosRef.current;
-    // Primera evaluación de esta maniobra: si ya estamos dentro de un nivel más cercano
-    // que "lejano" (por ejemplo, tras inicializar recién a 150 m), los niveles MÁS
-    // LEJANOS que el actual se marcan directamente como consumidos — nunca se reproduce
-    // un aviso atrasado.
-    if (avisos.size === 0) {
-      if (distanciaRuta <= UMBRAL_MANIOBRA_CERCANO_METROS) {
-        avisos.add("lejano"); avisos.add("medio");
-      } else if (distanciaRuta <= UMBRAL_MANIOBRA_MEDIO_METROS) {
-        avisos.add("lejano");
-      }
+    const pendientes = maniobraNivelesPendientesRef.current;
+    const NIVELES: { nombre: "cercano" | "medio" | "lejano"; umbral: number }[] = [
+      { nombre: "cercano", umbral: UMBRAL_MANIOBRA_CERCANO_METROS },
+      { nombre: "medio",   umbral: UMBRAL_MANIOBRA_MEDIO_METROS },
+      { nombre: "lejano",  umbral: UMBRAL_MANIOBRA_LEJANO_METROS },
+    ];
+    for (const nivel of NIVELES) {
+      if (avisos.has(nivel.nombre) || pendientes.has(nivel.nombre)) continue;
+      const cruzo = anteriorDist === null
+        ? distanciaRuta <= nivel.umbral
+        : anteriorDist > nivel.umbral && distanciaRuta <= nivel.umbral;
+      if (cruzo) pendientes.add(nivel.nombre);
     }
 
-    const metros = Math.round(distanciaRuta / 10) * 10;
-    const texto = construirTextoManiobra(esSalida, lado, metros);
-
-    if (!avisos.has("lejano") && distanciaRuta <= UMBRAL_MANIOBRA_LEJANO_METROS) {
-      if (intentarAnunciar(texto, "maniobra", `maniobra-lejano-step${i}`, requestIdDeEsteTick)) {
-        avisos.add("lejano");
-        diagLog(`[TILA_NAV_DIAG] MANIOBRA_AVISO_400 requestId=${requestIdDeEsteTick} step=${i} distanciaM=${Math.round(distanciaRuta)} t=${Math.round(performance.now())}`);
+    if (pendientes.size > 0) {
+      // NIVELES ya está ordenado cercano→lejano: el primero presente en `pendientes` es
+      // el más útil para anunciar ahora mismo.
+      const masCercano = NIVELES.find(n => pendientes.has(n.nombre))!;
+      const metros = Math.round(distanciaRuta / 10) * 10;
+      const texto = construirTextoManiobra(esSalida, lado, metros);
+      const anunciado = intentarAnunciar(texto, "maniobra", `maniobra-${masCercano.nombre}-step${i}`, requestIdDeEsteTick);
+      if (anunciado) {
+        // Se anunció el más útil — todo lo pendiente (incluidos niveles más lejanos que
+        // cruzaron junto con él, ya superados) se consume junto, de una sola vez.
+        const nivelesConsumidos = pendientes.size;
+        for (const nombre of pendientes) avisos.add(nombre);
+        pendientes.clear();
+        diagLog(
+          `[TILA_NAV_DIAG] MANIOBRA_AVISO_${masCercano.nombre.toUpperCase()} requestId=${requestIdDeEsteTick} step=${i} `
+          + `distanciaM=${Math.round(distanciaRuta)} nivelesCruzadosJuntos=${nivelesConsumidos} t=${Math.round(performance.now())}`
+        );
       }
-    } else if (!avisos.has("medio") && distanciaRuta <= UMBRAL_MANIOBRA_MEDIO_METROS) {
-      if (intentarAnunciar(texto, "maniobra", `maniobra-medio-step${i}`, requestIdDeEsteTick)) {
-        avisos.add("medio");
-        diagLog(`[TILA_NAV_DIAG] MANIOBRA_AVISO_300 requestId=${requestIdDeEsteTick} step=${i} distanciaM=${Math.round(distanciaRuta)} t=${Math.round(performance.now())}`);
-      }
-    } else if (!avisos.has("cercano") && distanciaRuta <= UMBRAL_MANIOBRA_CERCANO_METROS) {
-      if (intentarAnunciar(texto, "maniobra", `maniobra-cercano-step${i}`, requestIdDeEsteTick)) {
-        avisos.add("cercano");
-        diagLog(`[TILA_NAV_DIAG] MANIOBRA_AVISO_CERCANO requestId=${requestIdDeEsteTick} step=${i} distanciaM=${Math.round(distanciaRuta)} t=${Math.round(performance.now())}`);
-      }
+      // Si no se anunció (cooldown de otra prioridad/misma prioridad, ver
+      // intentarAnunciar), `pendientes` queda tal cual — se reintenta el mismo nivel más
+      // cercano en el próximo tick, sin exigir un cruce nuevo (distanciaRuta ya está
+      // por debajo del umbral) y sin perder evidencia de los niveles ya cruzados.
     }
-  }, [directions, lat, lng, modoNavegacion, modoMultiChofer, navegacionTilaActiva, onAnuncioVoz, intentarAnunciar]);
+  }, [directions, lat, lng, modoNavegacion, modoMultiChofer, navegacionTilaActiva, onAnuncioVoz, intentarAnunciar, sincronizarIndiceConRuta]);
 
   // Al volver de navegación externa (Waze/Google) — flanco false→true de
   // navegacionTilaActiva — el tracking GPS nunca se detuvo (fixValidoActualRef siguió
@@ -2652,7 +2840,12 @@ export default function MapaTILA({
     lecturasFueraDeRutaRef.current = 0;
     maniobraActualIndiceRef.current = null;
     maniobraAvisosEmitidosRef.current = new Set();
+    maniobraNivelesPendientesRef.current = new Set();
+    maniobraDistanciaAnteriorRef.current = null;
     primerGpsMultietapaRef.current = false;
+    // El snap visual de la sesión de navegación anterior (si la hubo) no tiene sentido
+    // contra el estado recién limpiado — mismo motivo que rutaPolylineRef=[] arriba.
+    posicionSnapRutaRef.current = null;
     diagLog(`[TILA_NAV_DIAG] NAV_ESTADO_RESET_POR_REANUDACION t=${Math.round(performance.now())}`);
   }, [navegacionTilaActiva]);
 
