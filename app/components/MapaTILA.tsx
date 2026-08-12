@@ -474,9 +474,16 @@ const METROS_POR_GRADO_LAT = 111320;
 // calcular distancia recorriendo la polyline hasta cada step, sin tener que buscar su
 // posición por proximidad geométrica cada vez.
 const construirPolylineDetalladaDesdeRuta = (
-  result: google.maps.DirectionsResult
+  result: google.maps.DirectionsResult,
+  // Cuántos legs (desde el principio) participan de la navegación — ver
+  // legsActivosNavRef: mientras exista una parada tipo "retiro" pendiente, se pasa 1
+  // para que el tramo A→B (legs[1]) no entre en NINGUNA estructura de navegación
+  // (polyline, indicePorStep, progreso, recorte, desvío, maniobras, voz). undefined =
+  // todos los legs (comportamiento de siempre — usado por los demás call-sites de
+  // calcularRuta, que no pasan este parámetro).
+  legsActivos?: number
 ): { puntos: google.maps.LatLngLiteral[]; indicePorStep: number[] } => {
-  const legs = result.routes?.[0]?.legs ?? [];
+  const legs = (result.routes?.[0]?.legs ?? []).slice(0, legsActivos ?? Infinity);
   const puntos: google.maps.LatLngLiteral[] = [];
   const indicePorStep: number[] = [];
   legs.forEach(leg => {
@@ -1132,6 +1139,12 @@ export default function MapaTILA({
   // rutaPolylineRef en cada recálculo, así siempre están sincronizados a la misma
   // generación de ruta.
   const indicePorStepRef = useRef<number[]>([]);
+  // Cuántos legs de la respuesta de Directions vigente participan de la navegación —
+  // ver construirPolylineDetalladaDesdeRuta. null = todos (sin restricción). Se fija en
+  // calcularRuta junto con rutaPolylineRef/indicePorStepRef, así queda sincronizado a la
+  // misma generación de ruta; la máquina de voz lo lee para no armar `pasos` con steps
+  // de un leg que ya quedó fuera de la polyline/indicePorStep.
+  const legsActivosNavRef = useRef<number | null>(null);
 
   // Espejo en estado de siguiendoChoferRef — sólo para que el botón "Mi ubicación"
   // pueda pintarse distinto según el seguimiento esté activo o pausado. La lógica de
@@ -1827,7 +1840,11 @@ export default function MapaTILA({
     waypoints: google.maps.DirectionsWaypoint[],
     fallbackPuntos: google.maps.LatLngLiteral[],
     onSuccess?: (result: google.maps.DirectionsResult) => void,
-    onSettled?: () => void
+    onSettled?: () => void,
+    // Ver legsActivosNavRef / construirPolylineDetalladaDesdeRuta: sólo lo pasa
+    // dispararCalculoNav (navegación activa) cuando hay una parada tipo "retiro"
+    // pendiente. Los demás call-sites no lo pasan → sin restricción, igual que hoy.
+    legsActivos?: number
   ) => {
     if (!directionsServiceRef.current) {
       directionsServiceRef.current = new google.maps.DirectionsService();
@@ -1871,8 +1888,9 @@ export default function MapaTILA({
           // trajera steps (no debería pasar con travelMode DRIVING).
           const habiaRutaAnterior = rutaPolylineRef.current.length >= 2;
           const puntosOverview  = (result.routes?.[0]?.overview_path ?? []).map(p => ({ lat: p.lat(), lng: p.lng() }));
-          const { puntos: puntosDetallados, indicePorStep } = construirPolylineDetalladaDesdeRuta(result);
+          const { puntos: puntosDetallados, indicePorStep } = construirPolylineDetalladaDesdeRuta(result, legsActivos);
           rutaPolylineRef.current = puntosDetallados.length >= 2 ? puntosDetallados : puntosOverview;
+          legsActivosNavRef.current = legsActivos ?? null;
           // indicePorStep sólo es válido si efectivamente se usó la geometría detallada
           // (si por algún motivo se cayó al overview_path, no hay mapeo step→índice
           // confiable — la máquina de estado de maniobra queda sin datos ese caso raro).
@@ -2356,13 +2374,20 @@ export default function MapaTILA({
     const fallback: google.maps.LatLngLiteral[] = [latLng];
     paradasCoords.forEach(c => { if (c) fallback.push(c); });
 
+    // Mientras exista una parada tipo "retiro" pendiente, la navegación sólo conoce el
+    // tramo GPS→retiro: legs[0]. El tramo retiro→siguiente (legs[1]) queda fuera de toda
+    // estructura de navegación hasta que el retiro se confirme completado — ahí
+    // cambioDeParadas dispara este mismo callback de nuevo, con el GPS real actual como
+    // origen y la respuesta nueva como única fuente de verdad (ver más abajo).
+    const legsActivos = pendientes.some(p => p.tipo === "retiro") ? 1 : undefined;
+
     calcularRuta({ lat: latLng.lat, lng: latLng.lng }, destino, waypoints, fallback, undefined, () => {
       calculandoRutaNavRef.current = false;
       if (recalculoPendienteNavRef.current) {
         recalculoPendienteNavRef.current = false;
         dispararCalculoNavRef.current();
       }
-    });
+    }, legsActivos);
   }, [calcularRuta, paradasCoords]);
   useEffect(() => {
     dispararCalculoNavRef.current = dispararCalculoNav;
@@ -2680,7 +2705,12 @@ export default function MapaTILA({
     if (!directions || !lat || !lng) return;
     const requestIdDeEsteTick = rutaRequestIdRef.current;
 
-    const pasos = (directions.routes?.[0]?.legs ?? []).flatMap(l => l.steps ?? []);
+    // Restringido a los mismos legs que rutaPolylineRef/indicePorStepRef (ver
+    // legsActivosNavRef) — así pasos[i] sigue correspondiendo exactamente a
+    // indicePorStep[i]; un step de legs[1] nunca debe poder generar aviso de voz
+    // mientras el retiro siga pendiente.
+    const legsParaVoz = (directions.routes?.[0]?.legs ?? []).slice(0, legsActivosNavRef.current ?? Infinity);
+    const pasos = legsParaVoz.flatMap(l => l.steps ?? []);
     const rutaKey = `${pasos.length}-${directions.routes?.[0]?.overview_path?.length ?? 0}`;
     if (rutaKeyVozRef.current !== rutaKey) {
       rutaKeyVozRef.current = rutaKey;
