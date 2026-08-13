@@ -590,11 +590,19 @@ const elegirSegmentoActivo = (
   // cuando dos candidatos NO adyacentes (>2 índices — descarta vecinos normales de la
   // misma curva) empatan en distancia (ambigüedad real entre calzadas/ramales).
   if (descartadoPorSentido) {
+    // Antes este log mezclaba bearing/indice/distancia de mejorGlobal (el descartado)
+    // con el diferenciaAngular de elegido (un candidato DISTINTO) en la misma línea, sin
+    // distinguirlos — parecía una inconsistencia matemática (headingVehiculo vs
+    // bearingSegmento no daba el diferenciaAngular mostrado) cuando en realidad eran dos
+    // segmentos distintos. Ahora cada grupo trae SUS propios indice/distancia/bearing/
+    // diferenciaAngular, explícitamente etiquetado.
+    const diferenciaAngularDescartado = diferenciaAngularGrados(ctx.headingVehiculo!, mejorGlobal.bearing);
     diagLog(
       `[TILA_NAV_DIAG] segmento-activo(${ctx.origen}) DESCARTADO_POR_SENTIDO `
-      + `indiceAnterior=${ctx.indiceActual} indiceCandidato=${mejorGlobal.indice} indiceElegido=${elegido.indice} `
-      + `distanciaCandidato=${Math.round(mejorGlobal.distancia)}m bearingSegmento=${Math.round(mejorGlobal.bearing)}° `
-      + `headingVehiculo=${Math.round(ctx.headingVehiculo!)}° diferenciaAngular=${diferenciaAngular !== null ? Math.round(diferenciaAngular) : "n/a"}° `
+      + `indiceAnterior=${ctx.indiceActual} `
+      + `descartado(indice=${mejorGlobal.indice} distancia=${Math.round(mejorGlobal.distancia)}m bearing=${Math.round(mejorGlobal.bearing)}° diferenciaAngular=${Math.round(diferenciaAngularDescartado)}°) `
+      + `elegido(indice=${elegido.indice} distancia=${Math.round(elegido.distancia)}m bearing=${Math.round(elegido.bearing)}° diferenciaAngular=${diferenciaAngular !== null ? Math.round(diferenciaAngular) : "n/a"}°) `
+      + `headingVehiculo=${Math.round(ctx.headingVehiculo!)}° `
       + `velocidad=${ctx.velocidadVehiculoMps !== null ? ctx.velocidadVehiculoMps.toFixed(1) : "n/a"}m/s `
       + `accuracy=${ctx.accuracyMetros ?? "n/a"} candidatosEnVentana=${candidatos.length} rutaRequestId=${ctx.rutaRequestId} t=${Math.round(performance.now())}`
     );
@@ -702,6 +710,20 @@ const construirTextoManiobra = (esSalida: boolean, lado: string, metros: number)
   return lado === "derecha" ? `En ${metros} metros doblá a la derecha.` : `En ${metros} metros girá a la izquierda.`;
 };
 
+// Identidad de una maniobra INDEPENDIENTE de su índice dentro de `pasos` — el índice
+// dentro del array de steps deja de ser válido apenas hay un recálculo (Directions
+// devuelve un array de steps nuevo), pero el tipo de maniobra y la ubicación real de la
+// esquina/bifurcación siguen identificando la MISMA maniobra del mundo real aunque haya
+// cambiado la cantidad de steps antes de ella. Redondeo a 5 decimales (~1m) para tolerar
+// el ruido de precisión entre dos respuestas de Directions para la misma esquina real.
+// Usado por la máquina de voz para decidir si un reroute es "la misma maniobra próxima"
+// (preserva avisos ya emitidos) o una maniobra realmente distinta (reinicializa).
+const claveManiobra = (paso: google.maps.DirectionsStep): string => {
+  const lat = paso.start_location?.lat();
+  const lng = paso.start_location?.lng();
+  return `${paso.maneuver ?? ""}|${lat !== undefined ? lat.toFixed(5) : "?"}|${lng !== undefined ? lng.toFixed(5) : "?"}`;
+};
+
 // Recorta `polyline` para mostrar sólo desde el segmento elegido (ver
 // elegirSegmentoActivo, que hace la selección real — acá sólo queda el "retroceder
 // margenMetros" para el arranque visual, con continuidad). El índice que se devuelve
@@ -733,12 +755,28 @@ const recortarRutaDesdeVehiculo = (
     origen: "recorte", rutaRequestId,
   });
   if (!resultado) return { puntos: polyline, indice: 0, snapPunto: null, snapDistancia: null };
+
+  // Progreso monotónico ANTES del slice: elegirSegmentoActivo puede devolver un índice
+  // DETRÁS de indiceMinimo (p.ej. el más cercano compatible por sentido cae en un tramo
+  // ya superado — ver DESCARTADO_POR_SENTIDO). avanzarIndiceProgreso (en el call-site)
+  // evita que ESE retroceso se guarde para el próximo tick, pero eso no alcanza: si
+  // `puntos` se arma con el índice sin proteger, el recorte visual de ESTE tick ya
+  // vuelve a mostrar tramo detrás del vehículo antes de que esa protección actúe. Por
+  // eso el clamp acá, antes de tocar `indiceDibujo`/`punto` — nunca recortar desde un
+  // índice menor al progreso ya confirmado. Cuando clampea, reproyecta la posición
+  // sobre el segmento indiceMinimo (mismo criterio geométrico de elegirSegmentoActivo)
+  // en vez de reusar resultado.punto, que corresponde al segmento retrocedido.
+  const indiceProtegido = Math.max(resultado.indice, indiceMinimo);
+  const puntoProtegido = indiceProtegido === resultado.indice
+    ? resultado.punto
+    : proyeccionEnSegmento(posicion, polyline[indiceProtegido], polyline[indiceProtegido + 1]).punto;
+
   const desde = Math.min(Math.max(indiceMinimo - VENTANA_ATRAS_SEGMENTOS, 0), polyline.length - 2);
-  // Retroceder margenMetros desde el punto elegido, para continuidad visual — nunca
+  // Retroceder margenMetros desde el punto protegido, para continuidad visual — nunca
   // cruza por debajo de `desde` (mismo límite que ya impidió mirar tramos anteriores).
   let restante = margenMetros;
-  let indiceDibujo = resultado.indice;
-  let punto = resultado.punto;
+  let indiceDibujo = indiceProtegido;
+  let punto = puntoProtegido;
   while (restante > 0 && indiceDibujo > desde) {
     const inicioSegmento = polyline[indiceDibujo];
     const largoHastaInicio = distanciaMetros(punto, inicioSegmento);
@@ -757,7 +795,7 @@ const recortarRutaDesdeVehiculo = (
   }
   return {
     puntos: [punto, ...polyline.slice(indiceDibujo + 1)],
-    indice: resultado.indice,
+    indice: indiceProtegido,
     snapPunto: resultado.punto,
     snapDistancia: resultado.distancia,
   };
@@ -2615,6 +2653,11 @@ export default function MapaTILA({
   // tick SIN volver a exigir un cruce nuevo (que ya no ocurriría — distanciaRuta ya bajó
   // del umbral) y sin perderse. Mismo ciclo de vida que maniobraAvisosEmitidosRef.
   const maniobraNivelesPendientesRef = useRef<Set<"lejano" | "medio" | "cercano">>(new Set());
+  // Identidad (ver claveManiobra) de la maniobra que apunta maniobraActualIndiceRef —
+  // null si no hay ninguna en seguimiento. Permite, tras un recálculo, distinguir "es la
+  // misma maniobra real, sólo cambió su índice en el array de steps nuevo" (preserva
+  // avisos ya emitidos) de "la próxima maniobra realmente cambió" (sí reinicializa).
+  const maniobraClaveActualRef = useRef<string | null>(null);
   const ultimoLogDistanciaManiobraTsRef = useRef(0);
   // Estado del cooldown/prioridad — ver COOLDOWN_ANUNCIO_MISMA_PRIORIDAD_MS.
   const ultimoAnuncioTsRef        = useRef(0);
@@ -2713,11 +2756,40 @@ export default function MapaTILA({
     const pasos = legsParaVoz.flatMap(l => l.steps ?? []);
     const rutaKey = `${pasos.length}-${directions.routes?.[0]?.overview_path?.length ?? 0}`;
     if (rutaKeyVozRef.current !== rutaKey) {
+      const rutaKeyAnterior = rutaKeyVozRef.current;
       rutaKeyVozRef.current = rutaKey;
-      maniobraActualIndiceRef.current = null;
-      maniobraAvisosEmitidosRef.current = new Set();
-      maniobraNivelesPendientesRef.current = new Set();
-      maniobraDistanciaAnteriorRef.current = null;
+
+      // Antes, cualquier cambio de rutaKey (prácticamente TODO recálculo, ya que el
+      // array de steps/overview_path casi nunca coincide byte a byte entre dos
+      // respuestas de Directions aunque el trayecto real sea casi idéntico) reseteaba
+      // ciegamente avisos/pendientes/distanciaAnterior — eso hacía que un reroute
+      // equivalente re-anunciara 600/400/200 ya emitidos para la MISMA maniobra real.
+      // Ahora, antes de resetear, se busca en `pasos` (la ruta nueva) un step con la
+      // misma identidad (claveManiobra) que la maniobra que se venía siguiendo — si
+      // existe, es la misma maniobra real y sólo cambió su posición en el array nuevo:
+      // se conserva la deduplicación. Si no existe (o no había ninguna maniobra en
+      // seguimiento todavía), recién ahí se reinicializa todo, igual que antes.
+      const claveAnterior = maniobraClaveActualRef.current;
+      const indiceEquivalente = claveAnterior !== null
+        ? pasos.findIndex(p => claveManiobra(p) === claveAnterior)
+        : -1;
+
+      if (indiceEquivalente !== -1) {
+        maniobraActualIndiceRef.current = indiceEquivalente;
+        diagLog(
+          `[TILA_NAV_DIAG] MANIOBRA_PRESERVADA_TRAS_RECALCULO rutaKeyAnterior=${rutaKeyAnterior ?? "n/a"} `
+          + `rutaKeyNueva=${rutaKey} stepNuevo=${indiceEquivalente} avisosConservados=${[...maniobraAvisosEmitidosRef.current].join(",") || "ninguno"} `
+          + `t=${Math.round(performance.now())}`
+        );
+        // avisos/pendientes/distanciaAnterior NO se tocan: sigue siendo la misma
+        // maniobra real, los niveles ya anunciados siguen contando como anunciados.
+      } else {
+        maniobraActualIndiceRef.current = null;
+        maniobraAvisosEmitidosRef.current = new Set();
+        maniobraNivelesPendientesRef.current = new Set();
+        maniobraDistanciaAnteriorRef.current = null;
+        maniobraClaveActualRef.current = null;
+      }
     }
 
     const polyline = rutaPolylineRef.current;
@@ -2747,6 +2819,7 @@ export default function MapaTILA({
       }
       if (candidato === null) return; // no queda ninguna maniobra por delante
       maniobraActualIndiceRef.current = candidato;
+      maniobraClaveActualRef.current = claveManiobra(pasos[candidato]);
       maniobraAvisosEmitidosRef.current = new Set();
       maniobraNivelesPendientesRef.current = new Set();
       maniobraDistanciaAnteriorRef.current = null;
@@ -2764,6 +2837,7 @@ export default function MapaTILA({
       diagLog(`[TILA_NAV_DIAG] MANIOBRA_COMPLETADA requestId=${requestIdDeEsteTick} step=${i} t=${Math.round(performance.now())}`);
       const siguiente = i + 1;
       maniobraActualIndiceRef.current = siguiente;
+      maniobraClaveActualRef.current = siguiente < pasos.length ? claveManiobra(pasos[siguiente]) : null;
       maniobraAvisosEmitidosRef.current = new Set();
       maniobraNivelesPendientesRef.current = new Set();
       maniobraDistanciaAnteriorRef.current = null;
@@ -2869,6 +2943,7 @@ export default function MapaTILA({
     calculandoRutaNavRef.current = false;
     lecturasFueraDeRutaRef.current = 0;
     maniobraActualIndiceRef.current = null;
+    maniobraClaveActualRef.current = null;
     maniobraAvisosEmitidosRef.current = new Set();
     maniobraNivelesPendientesRef.current = new Set();
     maniobraDistanciaAnteriorRef.current = null;
