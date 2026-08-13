@@ -223,6 +223,17 @@ const VELOCIDAD_MIN_HEADING_CONFIABLE_MPS = 2.5;
 // corta el caso de 110m documentado.
 const UMBRAL_ACCURACY_MALA_METROS = 50;
 
+// Techo absoluto de toleranciaOrigen en sembrarProgresoRutaNueva (excepción de siembra
+// del índice 0 — ver ese callback). Sin techo, un accuracy alto pero no filtrado ahí
+// (a diferencia del efecto de desvío/recorte, que directamente ignoran el fix si
+// accuracy > UMBRAL_ACCURACY_MALA_METROS) podía ensanchar la tolerancia hasta el mismo
+// orden de magnitud que la separación típica entre calzadas de una autopista dividida o
+// una colectora paralela, permitiendo "priorizar" un candidato que en los hechos está
+// sobre la calzada incorrecta. Reutiliza UMBRAL_DISTANCIA_CONSISTENCIA_METROS (15m): ya
+// es, en este mismo archivo, el criterio de "por debajo de esto, ruido de geometría/GPS,
+// no señal real" — mismo valor, en vez de un segundo número arbitrario sin motivo.
+const TOPE_TOLERANCIA_ORIGEN_SIEMBRA_METROS = UMBRAL_DISTANCIA_CONSISTENCIA_METROS;
+
 // Dos candidatos NO adyacentes (>2 índices de diferencia — evita disparar por puntos
 // vecinos normales de la misma curva) a una distancia perpendicular casi idéntica:
 // señal de ambigüedad real entre dos calzadas/ramales distintos, digna de loguear.
@@ -525,6 +536,16 @@ interface ResultadoSeleccionSegmento {
   descartadoPorSentido: boolean;
   saltoIndices: number;
   candidatosEnVentana: number;
+  // Candidato geométrico REAL (mejorGlobal) — el más cercano a la posición, SIN filtro de
+  // sentido, independiente de si terminó descartado por heading. indice/distancia/punto
+  // de arriba siguen siendo el resultado FILTRADO por sentido (elegido), que es lo que
+  // corresponde usar para snap/progreso/recorte (ahí el sentido sí importa — evita
+  // "pegarse" a la calzada contraria en autopistas divididas). Estos 3 campos son para
+  // quien necesite la distancia/posición real a la ruta SIN que ese filtro la infle (ver
+  // efecto de desvío y sembrarProgresoRutaNueva).
+  distanciaGeometrica: number;
+  indiceGeometrico: number;
+  puntoGeometrico: google.maps.LatLngLiteral;
 }
 
 interface ContextoSeleccionSegmento {
@@ -630,6 +651,9 @@ const elegirSegmentoActivo = (
     descartadoPorSentido,
     saltoIndices: elegido.indice - ctx.indiceActual,
     candidatosEnVentana: candidatos.length,
+    distanciaGeometrica: mejorGlobal.distancia,
+    indiceGeometrico: mejorGlobal.indice,
+    puntoGeometrico: mejorGlobal.punto,
   };
 };
 
@@ -644,12 +668,14 @@ const distanciaMinAPolyline = (
   velocidadVehiculoMps: number | null,
   accuracyMetros: number | null,
   rutaRequestId: number
-): { distancia: number; indice: number } | null => {
+): { distancia: number; indice: number; distanciaGeometrica: number } | null => {
   const resultado = elegirSegmentoActivo(puntos, p, {
     indiceActual: indiceDesde, headingVehiculo, velocidadVehiculoMps, accuracyMetros,
     origen: "desvio", rutaRequestId,
   });
-  return resultado ? { distancia: resultado.distancia, indice: resultado.indice } : null;
+  return resultado
+    ? { distancia: resultado.distancia, indice: resultado.indice, distanciaGeometrica: resultado.distanciaGeometrica }
+    : null;
 };
 
 // ─── Recorte visual de la traza (SOLO representación — rutaPolylineRef sigue intacta
@@ -1296,19 +1322,51 @@ export default function MapaTILA({
     sincronizarIndiceConRuta(polyline);
     const posicionActual = fixValidoActualRef.current;
     if (!posicionActual || polyline.length < 2) return;
+    const accuracyDisponible = accuracyRef.current ?? null;
     const resultado = elegirSegmentoActivo(polyline, posicionActual, {
       indiceActual: 0,
       headingVehiculo: headingValido(headingRef.current),
       velocidadVehiculoMps: velocidadMPorMsRef.current > 0 ? velocidadMPorMsRef.current * 1000 : null,
-      accuracyMetros: accuracyRef.current ?? null,
+      accuracyMetros: accuracyDisponible,
       origen: "siembra",
       rutaRequestId: requestId,
     });
     if (resultado) {
-      avanzarIndiceProgreso(resultado.indice);
+      // Caso especial: el ARRANQUE de una ruta recién calculada. Directions siempre
+      // arranca la ruta prácticamente EN el punto de origen que se le pidió (el GPS real
+      // de hace un instante) — si el candidato geométricamente más cercano (sin filtro de
+      // sentido) cae justo en ese primer segmento (índice 0) y está a una distancia
+      // compatible con el accuracy reportado (mismo criterio que
+      // UMBRAL_DISTANCIA_CONSISTENCIA_METROS: por debajo de eso, un bearing puntual raro
+      // es ruido de geometría/GPS, no motivo real para descartar el punto), se prioriza
+      // sobre el `elegido` filtrado por sentido. Caso confirmado que esto corrige:
+      // segmento 0 a 0m descartado por bearing casi opuesto al heading, sembrando el
+      // progreso en el índice 1 a 38m — la ruta nueva (pedida para "corregir" un desvío)
+      // arrancaba ya adelantada por un descarte espurio. Fuera de este caso puntual
+      // (arranque + distancia chica), se respeta el filtro de sentido tal cual — una ruta
+      // que realmente arranca en la calzada contraria sigue sin priorizarse acá.
+      const toleranciaOrigen = accuracyDisponible !== null
+        ? Math.min(accuracyDisponible, TOPE_TOLERANCIA_ORIGEN_SIEMBRA_METROS)
+        : TOPE_TOLERANCIA_ORIGEN_SIEMBRA_METROS;
+      const priorizarOrigenGeometrico =
+        resultado.descartadoPorSentido
+        && resultado.indiceGeometrico === 0
+        && resultado.distanciaGeometrica <= toleranciaOrigen;
+
+      const indiceSembrado    = priorizarOrigenGeometrico ? resultado.indiceGeometrico : resultado.indice;
+      const distanciaSembrada = priorizarOrigenGeometrico ? resultado.distanciaGeometrica : resultado.distancia;
+
+      avanzarIndiceProgreso(indiceSembrado);
+      if (priorizarOrigenGeometrico) {
+        diagLog(
+          `[TILA_NAV_DIAG] PROGRESO_SEMBRADO_ORIGEN_PRIORIZADO requestId=${requestId} `
+          + `indiceDescartadoPorSentido=${resultado.indice} distanciaDescartadoPorSentido=${Math.round(resultado.distancia)}m `
+          + `distanciaGeometrica=${Math.round(resultado.distanciaGeometrica)}m toleranciaOrigen=${Math.round(toleranciaOrigen)}m t=${Math.round(performance.now())}`
+        );
+      }
       diagLog(
-        `[TILA_NAV_DIAG] PROGRESO_SEMBRADO_RUTA_NUEVA requestId=${requestId} indiceSembrado=${resultado.indice} `
-        + `distanciaAlPunto=${Math.round(resultado.distancia)}m t=${Math.round(performance.now())}`
+        `[TILA_NAV_DIAG] PROGRESO_SEMBRADO_RUTA_NUEVA requestId=${requestId} indiceSembrado=${indiceSembrado} `
+        + `distanciaAlPunto=${Math.round(distanciaSembrada)}m t=${Math.round(performance.now())}`
       );
     }
   }, [sincronizarIndiceConRuta, avanzarIndiceProgreso]);
@@ -2500,12 +2558,24 @@ export default function MapaTILA({
         headingValido(heading), velocidadMPorMsRef.current > 0 ? velocidadMPorMsRef.current * 1000 : null,
         accuracyActualDesvio, rutaRequestIdRef.current
       );
-      const distancia    = resultado?.distancia ?? null;
-      const fueraDeRuta = distancia !== null && distancia >= UMBRAL_DESVIO_RUTA_METROS;
-      const desvioObvio = distancia !== null && distancia >= UMBRAL_DESVIO_INMEDIATO_METROS;
+      // distanciaGeometricaReal: distancia mínima REAL a la polyline, sin filtro de
+      // sentido — es lo que decide fueraDeRuta/desvioObvio. Causa confirmada de
+      // recálculo prematuro: usar distancia (el "elegido" filtrado por sentido) acá podía
+      // reportar 38m de un candidato sentido-compatible aunque el punto geométricamente
+      // más cercano estuviera a 0m (descartado por bearing puntual anómalo, ver
+      // DESCARTADO_POR_SENTIDO) — un desvío que nunca existió. distanciaSegmentoActivo
+      // (elegido, sentido-aware) se conserva sólo para el índice de progreso más abajo y
+      // para el log comparativo — el sentido SÍ importa ahí (evita "pegarse" a la calzada
+      // contraria en autopistas divididas).
+      const distanciaGeometricaReal = resultado?.distanciaGeometrica ?? null;
+      const distanciaSegmentoActivo = resultado?.distancia ?? null;
+      const fueraDeRuta = distanciaGeometricaReal !== null && distanciaGeometricaReal >= UMBRAL_DESVIO_RUTA_METROS;
+      const desvioObvio = distanciaGeometricaReal !== null && distanciaGeometricaReal >= UMBRAL_DESVIO_INMEDIATO_METROS;
       // avanzarIndiceProgreso, no asignación cruda: este camino usa el fix GPS real, pero
       // el otro escritor (recorte, posición interpolada) puede haber escrito recién un
-      // valor mayor este mismo ciclo — nunca retroceder el progreso ya confirmado.
+      // valor mayor este mismo ciclo — nunca retroceder el progreso ya confirmado. Sigue
+      // usando resultado.indice (sentido-aware, no el geométrico) — el progreso real
+      // nunca debe "pegarse" a la calzada contraria sólo porque esté unos metros más cerca.
       if (resultado) avanzarIndiceProgreso(resultado.indice);
       lecturasFueraDeRutaRef.current = fueraDeRuta ? lecturasFueraDeRutaRef.current + 1 : 0;
       // Capturado ANTES de un posible reset por confirmación (más abajo) — si no, el log
@@ -2525,7 +2595,11 @@ export default function MapaTILA({
           lecturasFueraDeRutaRef.current = 0;
         }
       }
-      diagLog(`[TILA_NAV_DIAG] desvio-efecto distanciaAPolyline=${distancia === null ? "null" : Math.round(distancia)} lecturasFueraDeRuta=${lecturasFueraDeRutaParaLog} desvioConfirmado=${desvioConfirmado} t=${Math.round(performance.now())}`);
+      diagLog(
+        `[TILA_NAV_DIAG] desvio-efecto distanciaGeométricaReal=${distanciaGeometricaReal === null ? "null" : Math.round(distanciaGeometricaReal)} `
+        + `distanciaSegmentoActivo=${distanciaSegmentoActivo === null ? "null" : Math.round(distanciaSegmentoActivo)} `
+        + `lecturasFueraDeRuta=${lecturasFueraDeRutaParaLog} desvioConfirmado=${desvioConfirmado} t=${Math.round(performance.now())}`
+      );
       }
     }
 
