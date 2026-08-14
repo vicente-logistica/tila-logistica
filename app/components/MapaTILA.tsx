@@ -210,6 +210,20 @@ const VENTANA_ADELANTE_METROS = 500;
 // — para no introducir un segundo número arbitrario distinto sin motivo).
 const UMBRAL_DIFERENCIA_ANGULAR_SEGMENTO_GRADOS = 90;
 
+// Techo (metros) de cuánto más lejos que mejorGlobal (el candidato geométricamente más
+// cercano, sin filtro de sentido) puede estar mejorCompatible para que el sentido pueda
+// reemplazarlo. Causa confirmada real: un heading puntualmente erróneo/ruidoso (accuracy
+// 29m, velocidad 3.5m/s) hizo que un candidato compatible por sentido a 435m (90° de
+// diferencia, apenas dentro del umbral angular) le ganara a uno geométricamente correcto
+// a 3m (122°, fuera del umbral por poco) — saltando el progreso ~435m de golpe,
+// irreversible (avanzarIndiceProgreso nunca retrocede), y dejando la ventana de búsqueda
+// de los siguientes ticks sin el segmento real donde estaba el vehículo (causa raíz de
+// la "cola" + desvíos falsos + recálculo reportados en prueba real). Constante propia,
+// NO reutiliza UMBRAL_DESVIO_INMEDIATO_METROS aunque el valor numérico coincida hoy:
+// selección de segmento y confirmación de desvío son conceptos distintos — un cambio
+// futuro del umbral de desvío no debe alterar accidentalmente esta selección.
+const MAX_EXCESO_DISTANCIA_POR_SENTIDO_METROS = 120;
+
 // Heading (GPS real o interpolado) por debajo de esta velocidad NO se usa para
 // descartar segmentos por sentido — a paso de hombre o detenido, el heading reportado
 // es ruidoso y no representa una dirección de marcha real. ~9 km/h.
@@ -603,8 +617,36 @@ const elegirSegmentoActivo = (
   }
 
   const descartadoPorSentido = headingConfiable && !esCompatible(mejorGlobal);
-  const elegido = (headingConfiable && mejorCompatible) ? mejorCompatible : mejorGlobal;
+
+  // El heading puede desempatar entre candidatos geométricamente razonables, pero nunca
+  // debe permitir elegir un segmento cientos de metros más lejano que el geométricamente
+  // más cercano (mejorGlobal) — ver MAX_EXCESO_DISTANCIA_POR_SENTIDO_METROS. Sólo puede
+  // ser true cuando mejorGlobal ya es incompatible (si fuera compatible, sería también
+  // el propio mejorCompatible, exceso=0) — mismo caso que descartadoPorSentido, más la
+  // condición de distancia.
+  const excesoDistanciaCompatible = mejorCompatible !== null
+    ? mejorCompatible.distancia - mejorGlobal.distancia
+    : null;
+  const compatibleDemasiadoLejos = excesoDistanciaCompatible !== null
+    && excesoDistanciaCompatible > MAX_EXCESO_DISTANCIA_POR_SENTIDO_METROS;
+
+  const elegido = (headingConfiable && mejorCompatible && !compatibleDemasiadoLejos) ? mejorCompatible : mejorGlobal;
   const diferenciaAngular = headingConfiable ? diferenciaAngularGrados(ctx.headingVehiculo!, elegido.bearing) : null;
+
+  if (compatibleDemasiadoLejos && mejorCompatible) {
+    diagLog(
+      `[TILA_NAV_DIAG] segmento-activo(${ctx.origen}) CANDIDATO_COMPATIBLE_DEMASIADO_LEJOS `
+      + `indiceGlobal=${mejorGlobal.indice} distanciaGlobal=${Math.round(mejorGlobal.distancia)}m `
+      + `diferenciaAngularGlobal=${Math.round(diferenciaAngularGrados(ctx.headingVehiculo!, mejorGlobal.bearing))}° `
+      + `indiceCompatible=${mejorCompatible.indice} distanciaCompatible=${Math.round(mejorCompatible.distancia)}m `
+      + `diferenciaAngularCompatible=${Math.round(diferenciaAngularGrados(ctx.headingVehiculo!, mejorCompatible.bearing))}° `
+      + `excesoMetros=${Math.round(excesoDistanciaCompatible!)} `
+      + `headingVehiculo=${Math.round(ctx.headingVehiculo!)}° `
+      + `accuracy=${ctx.accuracyMetros ?? "n/a"} `
+      + `velocidad=${ctx.velocidadVehiculoMps !== null ? ctx.velocidadVehiculoMps.toFixed(1) : "n/a"}m/s `
+      + `rutaRequestId=${ctx.rutaRequestId} elegido=global t=${Math.round(performance.now())}`
+    );
+  }
 
   // Log SELECTIVO — nunca por cada candidato evaluado (ver requerimiento de no
   // inundar el panel): sólo cuando el más cercano crudo fue rechazado por sentido, o
