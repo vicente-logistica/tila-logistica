@@ -729,6 +729,32 @@ const calcularDistanciaRutaHastaIndice = (
   return total;
 };
 
+// TILA_NAV_DIAG — SOLO diagnóstico, no participa de ninguna decisión funcional (snap/
+// progreso/recorte siguen usando exclusivamente elegirSegmentoActivo, sin cambios acá).
+// Busca el punto más cercano en TODA la polyline recién aplicada, SIN ventana (a
+// diferencia de elegirSegmentoActivo, que sólo mira desde el progreso ya confirmado en
+// adelante) — para poder ver, apenas aterriza una ruta nueva, si esa polyline ya trae
+// geometría por delante del GPS actual o si conserva metros de tramo anterior al punto
+// más cercano (ver POLYLINE_ESTADO). indiceMasCercano/metrosAntesDelGps quedan en null
+// si la polyline tiene menos de 2 puntos o no hay posición GPS conocida.
+const diagnosticarPolylineEstado = (
+  polyline: google.maps.LatLngLiteral[],
+  gpsActual: google.maps.LatLngLiteral | null
+): { indiceMasCercano: number | null; metrosAntesDelGps: number | null } => {
+  if (polyline.length < 2 || !gpsActual) return { indiceMasCercano: null, metrosAntesDelGps: null };
+  let mejorIndice = 0;
+  let mejorDistancia = Infinity;
+  for (let i = 0; i < polyline.length - 1; i++) {
+    const { distancia } = proyeccionEnSegmento(gpsActual, polyline[i], polyline[i + 1]);
+    if (distancia < mejorDistancia) { mejorDistancia = distancia; mejorIndice = i; }
+  }
+  let metrosAntesDelGps = 0;
+  for (let i = 0; i < mejorIndice; i++) {
+    metrosAntesDelGps += distanciaMetros(polyline[i], polyline[i + 1]);
+  }
+  return { indiceMasCercano: mejorIndice, metrosAntesDelGps };
+};
+
 // Texto de voz para la maniobra actual — sólo derecha/izquierda ("no quiero mensajes
 // innecesarios"); llamantes ya filtran maniobras sin lado antes de invocar esto.
 const construirTextoManiobra = (esSalida: boolean, lado: string, metros: number): string => {
@@ -1926,6 +1952,10 @@ export default function MapaTILA({
   // llamadores existentes (recorrido antes de aceptar, multietapa de sólo lectura,
   // modo simple) no lo pasan, así que su comportamiento no cambia.
   const calcularRuta = useCallback((
+    // TILA_NAV_DIAG: identifica INEQUÍVOCAMENTE, en los logs, cuál de los call-sites
+    // disparó esta invocación (diagnóstico puro — no participa de ninguna decisión
+    // funcional, ver CALCULAR_RUTA_ENTRADA/RESPUESTA/APLICADA más abajo).
+    motivo: string,
     origin: string | google.maps.LatLngLiteral,
     destinationStr: string,
     waypoints: google.maps.DirectionsWaypoint[],
@@ -1948,7 +1978,11 @@ export default function MapaTILA({
 
     // TILA_NAV_DIAG: origen/destino EXACTOS enviados a Directions para este pedido.
     const origenDiag = typeof origin === "string" ? origin : `${origin.lat.toFixed(6)},${origin.lng.toFixed(6)}`;
-    diagLog(`[TILA_NAV_DIAG] calcularRuta requestId=${miRequestId} origen=${origenDiag} destino=${destinationStr} waypoints=${waypoints.length} t=${Math.round(performance.now())}`);
+    diagLog(
+      `[TILA_NAV_DIAG] CALCULAR_RUTA_ENTRADA requestId=${miRequestId} motivo=${motivo} `
+      + `origen=${origenDiag} destino=${destinationStr} waypoints=${waypoints.length} legsActivos=${legsActivos ?? "n/a"} `
+      + `t=${Math.round(performance.now())}`
+    );
 
     directionsServiceRef.current.route(
       {
@@ -1959,8 +1993,16 @@ export default function MapaTILA({
         travelMode: google.maps.TravelMode.DRIVING,
       },
       (result, status) => {
-        diagLog(`[TILA_NAV_DIAG] respuesta Directions requestId=${miRequestId} status=${status} obsoleta=${miRequestId !== rutaRequestIdRef.current} t=${Math.round(performance.now())}`);
+        // obsoleta=true: se disparó OTRO calcularRuta (de cualquier motivo/origen — es
+        // un único contador compartido, rutaRequestIdRef) mientras ésta estaba en vuelo.
+        // Protección existente contra fuera-de-orden: por diseño no importa si ESTA
+        // respuesta llega antes o después que la de la llamada más nueva — lo único que
+        // importa es si rutaRequestIdRef.current YA fue adelantado por esa llamada más
+        // nueva para cuando ESTA respuesta se procesa. Si sí, se descarta acá, siempre,
+        // sin excepción — nunca puede pisar un resultado más nuevo ya aplicado.
+        diagLog(`[TILA_NAV_DIAG] CALCULAR_RUTA_RESPUESTA requestId=${miRequestId} motivo=${motivo} status=${status} obsoleta=${miRequestId !== rutaRequestIdRef.current} t=${Math.round(performance.now())}`);
         if (miRequestId !== rutaRequestIdRef.current) return; // respuesta obsoleta
+        diagLog(`[TILA_NAV_DIAG] CALCULAR_RUTA_APLICADA requestId=${miRequestId} motivo=${motivo} requestActual=${rutaRequestIdRef.current} t=${Math.round(performance.now())}`);
         setDiagnostico(d => ({ ...d, directionsStatus: status }));
         // Cualquier ruta nueva que efectivamente se aplica (éxito o fallback) reinicia
         // la ventana de gracia del detector de desvío — el cooldown pasa a contarse
@@ -2006,6 +2048,28 @@ export default function MapaTILA({
             + `distanciaOrigenAPrimerPunto=${distanciaOrigenAPrimerPunto !== null ? `${Math.round(distanciaOrigenAPrimerPunto)}m` : "n/a"} `
             + `requestId=${miRequestId} t=${Math.round(performance.now())}`
           );
+          // TILA_NAV_DIAG: ver diagnosticarPolylineEstado — SOLO diagnóstico, no cambia
+          // nada de lo que ya se aplicó arriba. gpsActualDiag es la posición GPS más
+          // reciente CONOCIDA al momento de aplicar esta ruta (puede no ser exactamente
+          // la usada como origen del pedido — el round-trip a Directions toma tiempo).
+          const gpsActualDiag = fixValidoActualRef.current ?? ultimoFixValidoRef.current;
+          const diagPolyEstado = diagnosticarPolylineEstado(rutaPolylineRef.current, gpsActualDiag);
+          const ultimoPuntoDiag = rutaPolylineRef.current[rutaPolylineRef.current.length - 1] ?? null;
+          const gpsAPrimerPuntoDiagM = gpsActualDiag && primerPuntoNuevo
+            ? distanciaMetros(gpsActualDiag, primerPuntoNuevo)
+            : null;
+          diagLog(
+            `[TILA_NAV_DIAG] POLYLINE_ESTADO requestId=${miRequestId} motivo=${motivo} `
+            + `legsTotales=${result.routes?.[0]?.legs?.length ?? "n/a"} legsActivos=${legsActivos ?? "n/a"} `
+            + `puntos=${rutaPolylineRef.current.length} `
+            + `primerPunto=${primerPuntoNuevo ? `${primerPuntoNuevo.lat.toFixed(6)},${primerPuntoNuevo.lng.toFixed(6)}` : "n/a"} `
+            + `ultimoPunto=${ultimoPuntoDiag ? `${ultimoPuntoDiag.lat.toFixed(6)},${ultimoPuntoDiag.lng.toFixed(6)}` : "n/a"} `
+            + `gpsActual=${gpsActualDiag ? `${gpsActualDiag.lat.toFixed(6)},${gpsActualDiag.lng.toFixed(6)}` : "n/a"} `
+            + `gpsAPrimerPuntoM=${gpsAPrimerPuntoDiagM !== null ? Math.round(gpsAPrimerPuntoDiagM) : "n/a"} `
+            + `indiceMasCercano=${diagPolyEstado.indiceMasCercano ?? "n/a"} `
+            + `metrosAntesDelGps=${diagPolyEstado.metrosAntesDelGps !== null ? Math.round(diagPolyEstado.metrosAntesDelGps) : "n/a"} `
+            + `t=${Math.round(performance.now())}`
+          );
           setDirections(result);
           setPolylinePuntos([]); // limpiar fallback si Directions funcionó
           encuadrarDesdeRuta(result);
@@ -2019,6 +2083,26 @@ export default function MapaTILA({
           if (habiaRutaAnterior) {
             diagLog(`[TILA_NAV_DIAG] FALLBACK_ANTERIOR_LIMPIADO requestId=${miRequestId} t=${Math.round(performance.now())}`);
           }
+          // TILA_NAV_DIAG: mismo diagnóstico que la rama OK, sin legs (no hay
+          // DirectionsResult en el fallback).
+          const gpsActualDiagFallback = fixValidoActualRef.current ?? ultimoFixValidoRef.current;
+          const diagPolyEstadoFallback = diagnosticarPolylineEstado(rutaPolylineRef.current, gpsActualDiagFallback);
+          const primerPuntoFallback = rutaPolylineRef.current[0] ?? null;
+          const ultimoPuntoFallback = rutaPolylineRef.current[rutaPolylineRef.current.length - 1] ?? null;
+          const gpsAPrimerPuntoFallbackM = gpsActualDiagFallback && primerPuntoFallback
+            ? distanciaMetros(gpsActualDiagFallback, primerPuntoFallback)
+            : null;
+          diagLog(
+            `[TILA_NAV_DIAG] POLYLINE_ESTADO requestId=${miRequestId} motivo=${motivo} `
+            + `legsTotales=n/a(fallback) legsActivos=${legsActivos ?? "n/a"} puntos=${rutaPolylineRef.current.length} `
+            + `primerPunto=${primerPuntoFallback ? `${primerPuntoFallback.lat.toFixed(6)},${primerPuntoFallback.lng.toFixed(6)}` : "n/a"} `
+            + `ultimoPunto=${ultimoPuntoFallback ? `${ultimoPuntoFallback.lat.toFixed(6)},${ultimoPuntoFallback.lng.toFixed(6)}` : "n/a"} `
+            + `gpsActual=${gpsActualDiagFallback ? `${gpsActualDiagFallback.lat.toFixed(6)},${gpsActualDiagFallback.lng.toFixed(6)}` : "n/a"} `
+            + `gpsAPrimerPuntoM=${gpsAPrimerPuntoFallbackM !== null ? Math.round(gpsAPrimerPuntoFallbackM) : "n/a"} `
+            + `indiceMasCercano=${diagPolyEstadoFallback.indiceMasCercano ?? "n/a"} `
+            + `metrosAntesDelGps=${diagPolyEstadoFallback.metrosAntesDelGps !== null ? Math.round(diagPolyEstadoFallback.metrosAntesDelGps) : "n/a"} `
+            + `t=${Math.round(performance.now())}`
+          );
           aplicarPolylineFallback(fallbackPuntos);
         }
         if (onSettled) onSettled();
@@ -2083,6 +2167,7 @@ export default function MapaTILA({
         // fallback sólo se usa si Directions falla (aplicarPolylineFallback).
 
         calcularRuta(
+          "recorrido-chofer",
           { lat, lng },
           destino,
           [{ location: `${origen}, Argentina`, stopover: true }],
@@ -2132,7 +2217,7 @@ export default function MapaTILA({
           if (lat && lng) fallback.push({ lat, lng });
           validos.forEach(v => fallback.push(v));
 
-          calcularRuta(origin, destination, waypoints, fallback);
+          calcularRuta("multietapa-inicial", origin, destination, waypoints, fallback);
         }
       });
     });
@@ -2173,7 +2258,7 @@ export default function MapaTILA({
         origenResuelto ?? `${origen}, Argentina`;
       const destinoFinal = paradaActivaDireccion ?? destino;
 
-      calcularRuta(originParam, destinoFinal, [], fallback);
+      calcularRuta("simple", originParam, destinoFinal, [], fallback);
     };
 
     if (!origenResuelto) {
@@ -2464,7 +2549,7 @@ export default function MapaTILA({
   // el propio callback se re-invoque a sí mismo al drenar un pendiente sin un
   // auto-referencia directa a la const (evita el ciclo de declaración) y de paso
   // nunca queda con una versión vieja del closure entre renders.
-  const dispararCalculoNavRef = useRef<() => void>(() => {});
+  const dispararCalculoNavRef = useRef<(motivo?: string) => void>(() => {});
 
   // Detección de desvío real: lecturas GPS consecutivas por encima de
   // UMBRAL_DESVIO_RUTA_METROS respecto de rutaPolylineRef, más un cooldown mínimo
@@ -2473,7 +2558,7 @@ export default function MapaTILA({
   const lecturasFueraDeRutaRef     = useRef(0);
   const ultimoRecalculoDesvioTsRef = useRef(0);
 
-  const dispararCalculoNav = useCallback(() => {
+  const dispararCalculoNav = useCallback((motivo: string = "navegacion") => {
     if (calculandoRutaNavRef.current) {
       recalculoPendienteNavRef.current = true;
       return;
@@ -2499,11 +2584,16 @@ export default function MapaTILA({
     // origen y la respuesta nueva como única fuente de verdad (ver más abajo).
     const legsActivos = pendientes.some(p => p.tipo === "retiro") ? 1 : undefined;
 
-    calcularRuta({ lat: latLng.lat, lng: latLng.lng }, destino, waypoints, fallback, undefined, () => {
+    calcularRuta(motivo, { lat: latLng.lat, lng: latLng.lng }, destino, waypoints, fallback, undefined, () => {
       calculandoRutaNavRef.current = false;
       if (recalculoPendienteNavRef.current) {
         recalculoPendienteNavRef.current = false;
-        dispararCalculoNavRef.current();
+        // TILA_NAV_DIAG: el motivo ORIGINAL que quedó encolado (cambioDeParadas/
+        // primerGps/desvioConfirmado de aquel momento) no se preserva acá — es un
+        // simple flag booleano (recalculoPendienteNavRef), no guarda el string. Motivo
+        // genérico, deliberado: identifica el patrón "quedó pendiente mientras había
+        // uno en vuelo, se drena solo al terminar" sin inventar un dato que no existe.
+        dispararCalculoNavRef.current("navegacion-pendiente-drenado");
       }
     }, legsActivos);
   }, [calcularRuta, paradasCoords]);
@@ -2550,7 +2640,7 @@ export default function MapaTILA({
       if (cambioDeParadas || primerGps) {
         diagLog(`[TILA_NAV_DIAG] desvio-efecto: recálculo en vuelo pero cambioDeParadas/primerGps → encola t=${Math.round(performance.now())}`);
         primerGpsMultietapaRef.current = true;
-        dispararCalculoNav();
+        dispararCalculoNav(`navegacion-encolado(cambioDeParadas=${cambioDeParadas},primerGps=${primerGps})`);
       }
       return;
     }
@@ -2638,7 +2728,7 @@ export default function MapaTILA({
 
     diagLog(`[TILA_NAV_DIAG] desvio-efecto DISPARANDO dispararCalculoNav cambioDeParadas=${cambioDeParadas} primerGps=${primerGps} desvioConfirmado=${desvioConfirmado} t=${Math.round(performance.now())}`);
     primerGpsMultietapaRef.current = true;
-    dispararCalculoNav();
+    dispararCalculoNav(`navegacion(cambioDeParadas=${cambioDeParadas},primerGps=${primerGps},desvioConfirmado=${desvioConfirmado})`);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isLoaded, modoNavegacion, tieneParadas, modoMultiChofer, navegacionTilaActiva, lat, lng, JSON.stringify(paradas?.map(p => ({ d: p.direccion, e: p.estado }))), dispararCalculoNav, sincronizarIndiceConRuta, avanzarIndiceProgreso]);
 
