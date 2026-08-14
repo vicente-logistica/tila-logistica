@@ -1140,11 +1140,6 @@ export default function MapaTILA({
   // valor más reciente sin recrear el callback en cada cambio de accuracy.
   const accuracyRef = useRef(accuracy);
   useEffect(() => { accuracyRef.current = accuracy; }, [accuracy]);
-  // Espejo en ref del prop heading — mismo patrón que accuracyRef, para que
-  // sembrarProgresoRutaNueva (callback estable, no puede depender de props en su array
-  // de deps sin recrearse en cada tick de GPS) lea siempre el heading más reciente.
-  const headingRef = useRef(heading);
-  useEffect(() => { headingRef.current = heading; }, [heading]);
   // true mientras restaurarCamaraNavegacion ("Mi ubicación") está aplicando su propia
   // actualización atómica de cámara — pasoAnimacion y el efecto de panelTopPx NO escriben
   // sobre center/heading mientras esto sea true, para que exista una única autoridad de
@@ -1325,7 +1320,7 @@ export default function MapaTILA({
     const accuracyDisponible = accuracyRef.current ?? null;
     const resultado = elegirSegmentoActivo(polyline, posicionActual, {
       indiceActual: 0,
-      headingVehiculo: headingValido(headingRef.current),
+      headingVehiculo: headingAceptadoRef.current,
       velocidadVehiculoMps: velocidadMPorMsRef.current > 0 ? velocidadMPorMsRef.current * 1000 : null,
       accuracyMetros: accuracyDisponible,
       origen: "siembra",
@@ -2249,6 +2244,18 @@ export default function MapaTILA({
   const ultimoFixValidoTsRef  = useRef<number | null>(null);
   const penultimoFixValidoRef = useRef<google.maps.LatLngLiteral | null>(null);
   const fixValidoActualRef    = useRef<google.maps.LatLngLiteral | null>(null);
+  // Heading del ÚLTIMO fix ACEPTADO por el efecto de validación (bootstrap o
+  // evaluarConsistenciaFix) — a diferencia del heading prop crudo, que refleja
+  // CUALQUIER fix reportado por el GPS, aceptado o no. Se actualiza EXCLUSIVAMENTE en
+  // los mismos puntos donde fixValidoActualRef pasa a un valor no-null (nunca en los
+  // rechazos, ver aceptarHeadingDeEsteFix más abajo), siempre con el heading de ESE
+  // MISMO tick — nunca el de un tick posterior/rechazado. Causa confirmada de heading
+  // ~180° invertido en elegirSegmentoActivo: un fix rechazado (velocidadImplicita/
+  // rumboInconsistente) no movía la posición operativa, pero el heading prop crudo
+  // (ViajeActivoPage lo actualiza en cada watchPosition, sin saber si MapaTILA aceptó
+  // esa posición) sí seguía cambiando — quedando disponible para el próximo fix
+  // aceptado, sin relación garantizada con su posición real.
+  const headingAceptadoRef    = useRef<number | null>(null);
   // Candidatos a reenganche: fixes RECHAZADOS pero coherentes entre sí, acumulados sólo
   // mientras hace mucho que no se acepta ninguno — ver UMBRAL_MS_SIN_ACEPTAR_PARA_REENGANCHE.
   const candidatosReenganceRef = useRef<google.maps.LatLngLiteral[]>([]);
@@ -2301,6 +2308,16 @@ export default function MapaTILA({
     const nuevo  = { lat, lng };
     const ahora  = Date.now();
 
+    // Heading de ESTE MISMO fix (mismo tick, mismo closure) — se llama junto a cada
+    // asignación de fixValidoActualRef a un valor no-null más abajo, nunca en las ramas
+    // de rechazo. heading null en un fix aceptado (GPS sin rumbo confiable: detenido,
+    // señal débil) preserva el último heading aceptado conocido en vez de pisarlo con
+    // null — mismo criterio que ya usa ViajeActivoPage para headingChofer.
+    const aceptarHeadingDeEsteFix = () => {
+      const headingDeEsteFix = headingValido(heading);
+      if (headingDeEsteFix !== null) headingAceptadoRef.current = headingDeEsteFix;
+    };
+
     // ── Fase de adquisición (bootstrap) ─────────────────────────────────────
     // Mientras no estabilizó, NO pasa por evaluarConsistenciaFix — esa función
     // compara contra una base que acá todavía no confirmamos que sea correcta, así
@@ -2314,6 +2331,7 @@ export default function MapaTILA({
         ultimoFixValidoRef.current    = nuevo;
         ultimoFixValidoTsRef.current  = ahora;
         fixValidoActualRef.current    = nuevo;
+        aceptarHeadingDeEsteFix();
         bootstrapMejorAccuracyRef.current = accuracyActual;
         bootstrapCandidatosCoherentesRef.current = [nuevo];
         diagLog(`[TILA_NAV_DIAG] GPS_BOOTSTRAP_CANDIDATO primero=true lat=${lat.toFixed(6)} lng=${lng.toFixed(6)} accuracy=${accuracyActual ?? "n/a"} t=${Math.round(performance.now())}`);
@@ -2337,6 +2355,7 @@ export default function MapaTILA({
         // El mapa sigue mostrando el fix crudo de este tick aunque no reemplace la
         // base — "puede recibirse GPS" durante la adquisición.
         fixValidoActualRef.current = nuevo;
+        aceptarHeadingDeEsteFix();
 
         // Vía alternativa de estabilización: varios candidatos SEGUIDOS mutuamente
         // cercanos, aunque ninguno individualmente tenga accuracy "buena".
@@ -2362,6 +2381,7 @@ export default function MapaTILA({
         ultimoFixValidoTsRef.current  = ahora;
         penultimoFixValidoRef.current = null; // arranca limpio el régimen estable
         fixValidoActualRef.current    = baseFinal;
+        aceptarHeadingDeEsteFix();
         gpsInicialEstabilizadoRef.current = true;
         diagLog(
           `[TILA_NAV_DIAG] GPS_INICIAL_ESTABILIZADO motivo=${motivo} `
@@ -2405,6 +2425,7 @@ export default function MapaTILA({
         ultimoFixValidoRef.current    = nuevo;
         ultimoFixValidoTsRef.current  = ahora;
         fixValidoActualRef.current    = nuevo;
+        aceptarHeadingDeEsteFix();
         candidatosReenganceRef.current = [];
         diagLog(
           `[TILA_NAV_DIAG] gps-reenganche BASE_REEMPLAZADA `
@@ -2417,6 +2438,7 @@ export default function MapaTILA({
     // El fix se usa siempre que fue aceptado — sólo cambia si además adelanta la base
     // (ver actualizarBase=false para duplicados de alta frecuencia en evaluarConsistenciaFix).
     fixValidoActualRef.current = nuevo;
+    aceptarHeadingDeEsteFix();
     if (resultado.actualizarBase) {
       penultimoFixValidoRef.current = ultimoFixValidoRef.current;
       ultimoFixValidoRef.current    = nuevo;
@@ -2555,7 +2577,7 @@ export default function MapaTILA({
       // sincronizó esta misma polyline en un frame anterior, no hace nada distinto).
       const resultado   = distanciaMinAPolyline(
         fix, rutaPolylineRef.current, sincronizarIndiceConRuta(rutaPolylineRef.current),
-        headingValido(heading), velocidadMPorMsRef.current > 0 ? velocidadMPorMsRef.current * 1000 : null,
+        headingAceptadoRef.current, velocidadMPorMsRef.current > 0 ? velocidadMPorMsRef.current * 1000 : null,
         accuracyActualDesvio, rutaRequestIdRef.current
       );
       // distanciaGeometricaReal: distancia mínima REAL a la polyline, sin filtro de
@@ -2672,7 +2694,7 @@ export default function MapaTILA({
         + `visual=${visual ? `${visual.lat.toFixed(6)},${visual.lng.toFixed(6)}` : "null"} `
         + `distGpsVisualM=${diagDistanciaGpsVisualRef.current === null ? "null" : diagDistanciaGpsVisualRef.current.toFixed(1)} `
         + `edadFixMs=${edadFixMs} extrapolando=${diagExtrapolandoRef.current} `
-        + `headingGps=${headingValido(heading) ?? "null"} headingCalculado=${diagHeadingCalculadoRef.current ?? "null"} `
+        + `headingGps=${headingValido(heading) ?? "null"} headingAceptado=${headingAceptadoRef.current ?? "null"} headingCalculado=${diagHeadingCalculadoRef.current ?? "null"} `
         + `headingAplicado=${diagUltimoHeadingAplicadoRef.current ?? "null"}(${diagUltimaFuenteHeadingRef.current}) `
         + `mapHeadingReal=${mapRef.current?.getHeading() ?? "null"} `
         + `siguiendoChofer=${siguiendoChoferRef.current} restaurandoCamara=${restaurandoCamaraRef.current} calculandoRuta=${calculandoRutaNavRef.current} `
@@ -3140,7 +3162,10 @@ export default function MapaTILA({
     };
     // El marcador y la cámara (si corresponde) se actualizan juntos, de forma suave,
     // a través del único loop de animación — ya no hay un salto instantáneo acá.
-    animarHaciaPosicion(fix.lat, fix.lng, headingValido(heading));
+    // headingAceptadoRef (no heading crudo): garantiza que el heading pertenezca al
+    // MISMO fix que fix (fixValidoActualRef.current) — un fix rechazado nunca puede
+    // aportar su heading acá, aunque heading (prop) ya se haya actualizado con él.
+    animarHaciaPosicion(fix.lat, fix.lng, headingAceptadoRef.current);
   }, [lat, lng, heading, modoMultiChofer, animarHaciaPosicion]);
 
   // ─── Botones de control manual de cámara (solo modoNavegacion) ────────────
