@@ -19,12 +19,16 @@ const LABELS = ["A", "B", "C", "D", "E", "F"];
 
 // Zoom y tilt aplicados por "Mi ubicación" al restaurar la cámara de navegación.
 // Sólo se fijan una vez, al reactivar el seguimiento — no se reaplican en cada tick
-// de GPS. TILT subido de 45 a 65 (cerca del máximo real de Maps con mapId vectorial)
-// para una vista tipo navegador GPS: más "desde atrás, mirando al horizonte" y menos
-// cenital. ZOOM subido de 18 a 18.5 — el camión gana protagonismo sin perder demasiada
+// de GPS. ZOOM subido de 18 a 18.5 — el camión gana protagonismo sin perder demasiada
 // visión del camino hacia adelante (un salto entero, a 19, dejaba ver muy poca ruta).
+// TILT bajado de 65 a 45: con tilt alto la cámara mira casi al horizonte, lo que hace
+// que las fachadas de los edificios 3D (motor vectorial, ver mapId) dominen la pantalla
+// en zonas densas como CABA — complementa (no reemplaza) el cambio de estilo "Buildings"
+// en Cloud Console (3D → Footprints). No afecta headingInteractionEnabled/setHeading —
+// la rotación de la cámara por sentido de marcha queda intacta, tilt y heading son ejes
+// independientes en el motor vectorial.
 const ZOOM_NAVEGACION = 18.5;
-const TILT_NAVEGACION = 65;
+const TILT_NAVEGACION = 45;
 
 // ─── Suavizado de marcador/cámara (interpolación por requestAnimationFrame) ───
 // Ventana de animación por cada lectura GPS nueva: nunca más corta que el mínimo (para
