@@ -771,6 +771,202 @@ const calcularDistanciaRutaHastaIndice = (
   return total;
 };
 
+// ═══════════════════════════════════════════════════════════════════════════
+// NÚCLEO DE PROGRESO — SHADOW (fase de comparación, ver Alternativa 2). Estas dos
+// funciones NO están conectadas al camino real todavía — corren en paralelo,
+// exclusivamente diagnóstico, desde un único useEffect dedicado (ver más abajo en el
+// componente) que se dispara UNA VEZ POR FIX GPS ACEPTADO — nunca desde pasoAnimacion
+// (rAF, ~60fps) y nunca con posición interpolada/visual. snapGeometrico/
+// decidirProgreso son puras, sin estado propio — todo el estado shadow vive en los
+// refs que declara el efecto que las llama.
+// ═══════════════════════════════════════════════════════════════════════════
+
+interface SnapGeometricoResultado {
+  indice: number;
+  punto: google.maps.LatLngLiteral;
+  distancia: number;
+  bearing: number;
+  ambiguo: boolean;
+  desempatadoPorHeading: boolean;
+}
+
+// Snap PURO — sólo responde "¿cuál es el punto/segmento geométricamente razonable?".
+// No escribe progreso, no aplica monotonicidad, no mueve cámara, no decide maniobras.
+// Diferencia estructural clave respecto de elegirSegmentoActivo: acá el heading NUNCA
+// compite contra un candidato lejano. Sólo desempata DENTRO de un grupo de candidatos
+// ya ambiguos entre sí (misma distancia perpendicular, dentro de UMBRAL_AMBIGUEDAD_METROS
+// — 5m, el mismo umbral que ya usa elegirSegmentoActivo para detectar ambigüedad real
+// entre calzadas/ramales, no un número nuevo). Si el más cercano no tiene ningún otro
+// candidato a esa distancia, el heading no participa en absoluto — geométricamente no
+// puede haber un "candidato a 435m" ganándole a uno "a 3m": 435m nunca puede estar
+// dentro de 5m del más cercano, así que ni siquiera entra al grupo que el heading
+// puede desempatar.
+const snapGeometrico = (
+  polyline: google.maps.LatLngLiteral[],
+  posicion: google.maps.LatLngLiteral,
+  indiceReferencia: number,
+  headingVehiculo: number | null,
+  velocidadVehiculoMps: number | null
+): SnapGeometricoResultado | null => {
+  if (polyline.length < 2) return null;
+  // Misma ventana ya validada que usa elegirSegmentoActivo — sin cambios.
+  const desde = Math.min(Math.max(indiceReferencia - VENTANA_ATRAS_SEGMENTOS, 0), polyline.length - 2);
+  let hasta = desde;
+  let acumuladoMetros = 0;
+  while (hasta < polyline.length - 2 && acumuladoMetros < VENTANA_ADELANTE_METROS) {
+    acumuladoMetros += distanciaMetros(polyline[hasta], polyline[hasta + 1]);
+    hasta++;
+  }
+
+  type Candidato = { indice: number; distancia: number; punto: google.maps.LatLngLiteral; bearing: number };
+  const candidatos: Candidato[] = [];
+  for (let i = desde; i <= hasta; i++) {
+    const { distancia, punto } = proyeccionEnSegmento(posicion, polyline[i], polyline[i + 1]);
+    candidatos.push({ indice: i, distancia, punto, bearing: calcularBearing(polyline[i], polyline[i + 1]) });
+  }
+  if (candidatos.length === 0) return null;
+
+  let mejor = candidatos[0];
+  for (const c of candidatos) if (c.distancia < mejor.distancia) mejor = c;
+
+  const ambiguos = candidatos.filter(c =>
+    c.indice !== mejor.indice
+    && Math.abs(c.indice - mejor.indice) > 2
+    && Math.abs(c.distancia - mejor.distancia) <= UMBRAL_AMBIGUEDAD_METROS
+  );
+
+  let elegido = mejor;
+  let desempatadoPorHeading = false;
+  const headingConfiable =
+    headingVehiculo !== null && velocidadVehiculoMps !== null && velocidadVehiculoMps >= VELOCIDAD_MIN_HEADING_CONFIABLE_MPS;
+
+  if (ambiguos.length > 0 && headingConfiable) {
+    const grupo = [mejor, ...ambiguos];
+    const compatibles = grupo.filter(c => diferenciaAngularGrados(headingVehiculo!, c.bearing) <= UMBRAL_DIFERENCIA_ANGULAR_SEGMENTO_GRADOS);
+    if (compatibles.length > 0 && compatibles.length < grupo.length) {
+      let mejorCompatible = compatibles[0];
+      for (const c of compatibles) if (c.distancia < mejorCompatible.distancia) mejorCompatible = c;
+      if (mejorCompatible.indice !== mejor.indice) {
+        elegido = mejorCompatible;
+        desempatadoPorHeading = true;
+      }
+    }
+  }
+
+  return {
+    indice: elegido.indice,
+    punto: elegido.punto,
+    distancia: elegido.distancia,
+    bearing: elegido.bearing,
+    ambiguo: ambiguos.length > 0,
+    desempatadoPorHeading,
+  };
+};
+
+interface ProgresoConfirmado {
+  indice: number;
+  // Proyección real sobre la polyline en el momento en que se confirmó este progreso
+  // — ancla para medir el PRÓXIMO avance (no alcanza con el índice: dentro del mismo
+  // segmento hace falta el punto exacto para no perder/inflar metros).
+  punto: google.maps.LatLngLiteral;
+  distanciaAcumulada: number;
+  timestamp: number;
+}
+
+interface CandidatoPendienteProgreso {
+  indice: number;
+  punto: google.maps.LatLngLiteral;
+  timestampPrimeraLectura: number;
+}
+
+interface ResultadoDecisionProgreso {
+  progreso: ProgresoConfirmado;
+  avanzo: boolean;
+  motivo: "avanzo" | "sin_avance" | "salto_no_confirmado" | "salto_confirmado";
+}
+
+// Margen de seguridad EXPLÍCITO sobre "distancia = velocidad × tiempo" — no es un
+// techo de distancia fijo (exactamente lo que falló en elegirSegmentoActivo: un
+// número en metros que no escala con la velocidad real). Declarado como factor, no
+// oculto: 3x cubre una aceleración fuerte entre dos fixes GPS (intervalos típicos
+// 1-3s, ver DURACION_ANIMACION_MAX_MS) más el margen de error de la velocidad
+// instantánea que reporta el GPS. Sin velocidad conocida (arranque), el techo de
+// emergencia es VELOCIDAD_MAX_FIX_MPS — constante YA EXISTENTE (evaluarConsistenciaFix),
+// no un número nuevo.
+const MARGEN_SEGURIDAD_VELOCIDAD_PROGRESO = 3;
+
+// Única puerta de escritura del progreso SHADOW. Recibe EXCLUSIVAMENTE GPS validado
+// (gpsValidado) — nunca posición interpolada/visual; eso es responsabilidad exclusiva
+// de pasoAnimacion/animarHaciaPosicion, que no tocan esta función.
+const decidirProgreso = (
+  progresoAnterior: ProgresoConfirmado,
+  snap: SnapGeometricoResultado,
+  polyline: google.maps.LatLngLiteral[],
+  timestampAhora: number,
+  velocidadConocidaMps: number | null,
+  candidatoPendienteRef: { current: CandidatoPendienteProgreso | null }
+): ResultadoDecisionProgreso => {
+  // Retrocedió (o quedó en el mismo segmento pero "antes"): nunca es avance real,
+  // se trata como jitter — el progreso anterior queda intacto, sin necesitar
+  // comparar magnitudes.
+  if (snap.indice < progresoAnterior.indice) {
+    return { progreso: progresoAnterior, avanzo: false, motivo: "sin_avance" };
+  }
+
+  const avanceCandidato = snap.indice === progresoAnterior.indice
+    ? distanciaMetros(progresoAnterior.punto, snap.punto)
+    : calcularDistanciaRutaHastaIndice(polyline, progresoAnterior.indice, progresoAnterior.punto, snap.indice)
+      + distanciaMetros(polyline[snap.indice], snap.punto);
+
+  if (avanceCandidato <= 0) {
+    return { progreso: progresoAnterior, avanzo: false, motivo: "sin_avance" };
+  }
+
+  const deltaSegundos = Math.max(0, (timestampAhora - progresoAnterior.timestamp) / 1000);
+  const techoVelocidad = velocidadConocidaMps !== null && velocidadConocidaMps > 0 ? velocidadConocidaMps : VELOCIDAD_MAX_FIX_MPS;
+  const avanceMaximoPlausible = deltaSegundos * techoVelocidad * MARGEN_SEGURIDAD_VELOCIDAD_PROGRESO;
+
+  if (avanceCandidato <= avanceMaximoPlausible) {
+    candidatoPendienteRef.current = null;
+    return {
+      progreso: {
+        indice: snap.indice,
+        punto: snap.punto,
+        distanciaAcumulada: progresoAnterior.distanciaAcumulada + avanceCandidato,
+        timestamp: timestampAhora,
+      },
+      avanzo: true,
+      motivo: "avanzo",
+    };
+  }
+
+  // Salto anómalo: NO se acepta ni se descarta de una — exige confirmación de una
+  // segunda lectura coherente con la primera (mismo patrón ya probado en producción
+  // para desvío/reenganche de GPS: nunca una sola lectura alcanza para un cambio
+  // grande). UMBRAL_DISTANCIA_REENGANCHE_METROS: constante YA EXISTENTE, mismo
+  // criterio de "candidatos sucesivos mutuamente cercanos confirman una base nueva".
+  const pendiente = candidatoPendienteRef.current;
+  const coherenteConPendiente = pendiente !== null
+    && distanciaMetros(pendiente.punto, snap.punto) <= UMBRAL_DISTANCIA_REENGANCHE_METROS;
+
+  if (coherenteConPendiente) {
+    candidatoPendienteRef.current = null;
+    return {
+      progreso: {
+        indice: snap.indice,
+        punto: snap.punto,
+        distanciaAcumulada: progresoAnterior.distanciaAcumulada + avanceCandidato,
+        timestamp: timestampAhora,
+      },
+      avanzo: true,
+      motivo: "salto_confirmado",
+    };
+  }
+
+  candidatoPendienteRef.current = { indice: snap.indice, punto: snap.punto, timestampPrimeraLectura: timestampAhora };
+  return { progreso: progresoAnterior, avanzo: false, motivo: "salto_no_confirmado" };
+};
+
 // TILA_NAV_DIAG — SOLO diagnóstico, no participa de ninguna decisión funcional (snap/
 // progreso/recorte siguen usando exclusivamente elegirSegmentoActivo, sin cambios acá).
 // Busca el punto más cercano en TODA la polyline recién aplicada, SIN ventana (a
@@ -2773,6 +2969,90 @@ export default function MapaTILA({
     dispararCalculoNav(`navegacion(cambioDeParadas=${cambioDeParadas},primerGps=${primerGps},desvioConfirmado=${desvioConfirmado})`);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isLoaded, modoNavegacion, tieneParadas, modoMultiChofer, navegacionTilaActiva, lat, lng, JSON.stringify(paradas?.map(p => ({ d: p.direccion, e: p.estado }))), dispararCalculoNav, sincronizarIndiceConRuta, avanzarIndiceProgreso]);
+
+  // Estado del progreso SHADOW — exclusivo del efecto de abajo, nadie más los lee.
+  // ultimaRutaRefVistaShadowRef: detecta ruta nueva por identidad de referencia,
+  // igual criterio que ultimaRutaRefVistaRef (real) pero en su propio ref — nunca
+  // comparte ni lee el real, para no acoplar el shadow al sistema que audita.
+  const ultimaRutaRefVistaShadowRef = useRef<google.maps.LatLngLiteral[] | null>(null);
+  const progresoShadowRef = useRef<ProgresoConfirmado>({ indice: 0, punto: { lat: 0, lng: 0 }, distanciaAcumulada: 0, timestamp: 0 });
+  const candidatoPendienteShadowRef = useRef<CandidatoPendienteProgreso | null>(null);
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // PROGRESO SHADOW — núcleo nuevo (snapGeometrico + decidirProgreso), fase de
+  // comparación. NO escribe indiceRutaVisibleRef, rutaVisibleDesdeVehiculo,
+  // posicionSnapRutaRef ni ningún otro estado real — sólo sus propios refs, y sólo
+  // para loguear. Deliberadamente en SU PROPIO efecto, separado de:
+  //   - pasoAnimacion (rAF ~60fps): esa cadencia es para animación/marcador/cámara/
+  //     snap VISUAL, nunca para decidir progreso — decidirProgreso exige GPS
+  //     validado, no posición interpolada.
+  //   - el efecto de desvío de arriba: tiene su propio gating (calculandoRutaNavRef,
+  //     cambioDeParadas/primerGps) que es sobre CUÁNDO RECALCULAR RUTA, ajeno a si
+  //     corresponde trackear progreso — mezclar ambos hubiera repetido el mismo
+  //     patrón de "dos escritores independientes" que causó el bug real de progreso
+  //     que motivó todo este rediseño.
+  // Corre una única vez por fix GPS ACEPTADO (fixValidoActualRef no-null en este
+  // tick) — la MISMA cadencia, ni más ni menos, que tendría el núcleo nuevo el día
+  // que reemplace al viejo.
+  useEffect(() => {
+    if (!modoNavegacion || modoMultiChofer || !navegacionTilaActiva) return;
+    if (!gpsInicialEstabilizadoRef.current) return;
+    const fix = fixValidoActualRef.current;
+    if (!fix) return; // fix rechazado este tick — el shadow tampoco avanza con él
+    const polyline = rutaPolylineRef.current;
+    if (polyline.length < 2) return;
+
+    const ahora = Date.now();
+    const indiceViejo = indiceRutaVisibleRef.current;
+
+    // Ruta nueva (misma detección por identidad de referencia que sincronizarIndiceConRuta,
+    // sin depender de ella ni tocarla): el shadow siembra su propio progreso desde el GPS
+    // real actual — mismo criterio conceptual que sembrarProgresoRutaNueva, pero en su
+    // propio estado, aislado del real.
+    if (polyline !== ultimaRutaRefVistaShadowRef.current) {
+      ultimaRutaRefVistaShadowRef.current = polyline;
+      candidatoPendienteShadowRef.current = null;
+      const snapInicial = snapGeometrico(polyline, fix, 0, headingAceptadoRef.current, velocidadMPorMsRef.current > 0 ? velocidadMPorMsRef.current * 1000 : null);
+      progresoShadowRef.current = snapInicial
+        ? { indice: snapInicial.indice, punto: snapInicial.punto, distanciaAcumulada: 0, timestamp: ahora }
+        : { indice: 0, punto: polyline[0], distanciaAcumulada: 0, timestamp: ahora };
+      diagLog(
+        `[TILA_NAV_DIAG] PROGRESO_SHADOW_RUTA_NUEVA indiceSembrado=${progresoShadowRef.current.indice} `
+        + `gps=${fix.lat.toFixed(6)},${fix.lng.toFixed(6)} t=${Math.round(performance.now())}`
+      );
+      return; // este tick sólo siembra — recién el próximo evalúa avance
+    }
+
+    const snap = snapGeometrico(
+      polyline, fix, progresoShadowRef.current.indice,
+      headingAceptadoRef.current,
+      velocidadMPorMsRef.current > 0 ? velocidadMPorMsRef.current * 1000 : null
+    );
+    if (!snap) return;
+
+    const resultado = decidirProgreso(
+      progresoShadowRef.current, snap, polyline, ahora,
+      velocidadMPorMsRef.current > 0 ? velocidadMPorMsRef.current * 1000 : null,
+      candidatoPendienteShadowRef
+    );
+    if (resultado.avanzo) progresoShadowRef.current = resultado.progreso;
+
+    // diferenciaMetros: aproximación diagnóstica (distancia siguiendo la polyline
+    // entre el índice que hoy usa el sistema REAL y el que sostiene el shadow) — no
+    // se usa para ninguna decisión, sólo para poder leer de un vistazo cuánto
+    // divergieron en este tick.
+    const indiceMenor = Math.min(indiceViejo, progresoShadowRef.current.indice);
+    const indiceMayor = Math.max(indiceViejo, progresoShadowRef.current.indice);
+    const diferenciaMetros = indiceMenor === indiceMayor
+      ? 0
+      : calcularDistanciaRutaHastaIndice(polyline, indiceMenor, polyline[indiceMenor] ?? fix, indiceMayor);
+
+    diagLog(
+      `[TILA_NAV_DIAG] PROGRESO_SHADOW viejoIndice=${indiceViejo} nuevoIndice=${progresoShadowRef.current.indice} `
+      + `diferenciaMetros=${Math.round(diferenciaMetros)} motivoDiferencia=${resultado.motivo} `
+      + `gps=${fix.lat.toFixed(6)},${fix.lng.toFixed(6)} t=${Math.round(performance.now())}`
+    );
+  }, [lat, lng, heading, modoNavegacion, modoMultiChofer, navegacionTilaActiva]);
 
   // ─── modoNavegacion: encuadre inicial único ────────────────────────────────
   // Único lugar que hace el fitBounds/setCenter automático de arranque en modoNavegacion.
