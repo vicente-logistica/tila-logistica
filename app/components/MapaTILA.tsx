@@ -12,10 +12,23 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 // este import junto con el resto de la instrumentación cuando se retire el diagnóstico.
 import { diagLog, diagObtenerTexto, diagContarEventos, diagLimpiar } from "../utils/diagLoggerNav";
 
-const LIBRARIES: ("places" | "geometry" | "drawing")[] = [];
+// "geometry": necesaria para google.maps.geometry.encoding.decodePath — decodifica el
+// polyline codificado que devuelve Routes API (calcularRutaNavegacionDireccional), en
+// vez de reimplementar el algoritmo de decodificación a mano.
+const LIBRARIES: ("places" | "geometry" | "drawing")[] = ["geometry"];
 
 const centroArgentina = { lat: -34.6037, lng: -58.3816 };
 const LABELS = ["A", "B", "C", "D", "E", "F"];
+
+// Interruptor de reversión: navegación activa (dispararCalculoNav) usa Routes API
+// (calcularRutaNavegacionDireccional, con heading direccional del origen — ver
+// construirWaypointOrigenDireccional) en vez de DirectionsService clásico
+// (calcularRuta) cuando esto es true. Volver a false revierte sin tocar código, sin
+// redeploy de config — un solo commit cambiando este valor. Los otros 3 call-sites de
+// calcularRuta (recorrido-chofer antes de aceptar, multietapa de sólo lectura, modo
+// simple) NO leen este flag — siguen usando DirectionsService siempre, sin excepción;
+// esta migración es exclusiva de navegación activa.
+const USAR_ROUTES_API_NAVEGACION = true;
 
 // Zoom y tilt aplicados por "Mi ubicación" al restaurar la cámara de navegación.
 // Sólo se fijan una vez, al reactivar el seguimiento — no se reaplican en cada tick
@@ -528,6 +541,104 @@ const construirPolylineDetalladaDesdeRuta = (
     });
   });
   return { puntos, indicePorStep };
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ROUTES API — exclusivo de navegación activa (calcularRutaNavegacionDireccional más
+// abajo en el componente). Los otros 3 call-sites de calcularRuta (recorrido-chofer,
+// multietapa, simple) siguen usando DirectionsService, sin tocar.
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Field mask mínimo — sólo los campos que el adaptador de abajo realmente lee.
+// computeRoutes lo exige (sin esto la respuesta viene vacía); pedir sólo lo necesario
+// es la recomendación explícita de Google (mejor performance/estabilidad que "*").
+const FIELD_MASK_ROUTES_API_NAVEGACION =
+  "routes.legs.steps.navigationInstruction,routes.legs.steps.polyline.encodedPolyline,"
+  + "routes.legs.steps.startLocation,routes.legs.steps.endLocation,"
+  + "routes.legs.startLocation,routes.legs.endLocation";
+
+// Routes API devuelve maniobras en MAYUSCULA_CON_GUION_BAJO (TURN_LEFT, UTURN_RIGHT,
+// ...); la máquina de voz ya existente (construirTextoManiobra, lado/esSalida en el
+// efecto de maniobras) espera el formato clásico de DirectionsService (minúscula con
+// guiones: "turn-left"). Mapeo mecánico, sin lógica — la voz no cambia una línea.
+const MANIOBRA_ROUTES_API_A_CLASICA: Record<string, string> = {
+  TURN_SLIGHT_LEFT: "turn-slight-left",
+  TURN_SHARP_LEFT: "turn-sharp-left",
+  UTURN_LEFT: "uturn-left",
+  TURN_LEFT: "turn-left",
+  TURN_SLIGHT_RIGHT: "turn-slight-right",
+  TURN_SHARP_RIGHT: "turn-sharp-right",
+  UTURN_RIGHT: "uturn-right",
+  TURN_RIGHT: "turn-right",
+  STRAIGHT: "straight",
+  RAMP_LEFT: "ramp-left",
+  RAMP_RIGHT: "ramp-right",
+  MERGE: "merge",
+  FORK_LEFT: "fork-left",
+  FORK_RIGHT: "fork-right",
+  FERRY: "ferry",
+  FERRY_TRAIN: "ferry-train",
+  ROUNDABOUT_LEFT: "roundabout-left",
+  ROUNDABOUT_RIGHT: "roundabout-right",
+  DEPART: "depart",
+  ARRIVE: "arrive",
+  NAME_CHANGE: "name-change",
+};
+
+interface RoutesApiLatLng { latitude: number; longitude: number }
+interface RoutesApiStep {
+  navigationInstruction?: { maneuver?: string };
+  polyline?: { encodedPolyline?: string };
+  startLocation?: { latLng?: RoutesApiLatLng };
+  endLocation?: { latLng?: RoutesApiLatLng };
+}
+interface RoutesApiLeg {
+  steps?: RoutesApiStep[];
+  startLocation?: { latLng?: RoutesApiLatLng };
+  endLocation?: { latLng?: RoutesApiLatLng };
+}
+interface RoutesApiResponse {
+  routes?: { legs?: RoutesApiLeg[] }[];
+}
+
+// Waypoint de origen para Routes API — incluye heading SOLO si headingConfiable no es
+// null (siempre headingAceptadoRef.current en el call-site real — NUNCA heading crudo/
+// rechazado). Sin heading confiable se manda sólo lat/lng, igual que DirectionsService
+// siempre hizo (nunca tuvo heading para empezar). Redondeado y normalizado a [0,360) —
+// Routes API espera un entero de grados.
+const construirWaypointOrigenDireccional = (
+  fix: google.maps.LatLngLiteral,
+  headingConfiable: number | null
+) => ({
+  location: { latLng: { latitude: fix.lat, longitude: fix.lng } },
+  ...(headingConfiable !== null ? { heading: Math.round(((headingConfiable % 360) + 360) % 360) } : {}),
+});
+
+// Adapta la respuesta de Routes API a una forma compatible con
+// google.maps.DirectionsResult — SOLO los campos que el resto de MapaTILA ya lee en
+// modoNavegacion (construirPolylineDetalladaDesdeRuta, la máquina de voz,
+// encuadrarDesdeRuta). Ninguno de esos consumidores cambia: siguen leyendo
+// exactamente la misma forma que con DirectionsService. El cast final a
+// DirectionsResult es deliberado (duck typing) — cubre sólo los campos realmente
+// usados en el camino de navegación, no el shape completo de la API real.
+const adaptarRespuestaRoutesAPI = (json: RoutesApiResponse): google.maps.DirectionsResult | null => {
+  const ruta = json.routes?.[0];
+  if (!ruta) return null;
+  const aLatLng = (l?: { latLng?: RoutesApiLatLng }) =>
+    l?.latLng ? new google.maps.LatLng(l.latLng.latitude, l.latLng.longitude) : undefined;
+  const legs = (ruta.legs ?? []).map(leg => ({
+    start_location: aLatLng(leg.startLocation),
+    end_location: aLatLng(leg.endLocation),
+    steps: (leg.steps ?? []).map(step => ({
+      path: step.polyline?.encodedPolyline
+        ? google.maps.geometry.encoding.decodePath(step.polyline.encodedPolyline)
+        : [],
+      maneuver: MANIOBRA_ROUTES_API_A_CLASICA[step.navigationInstruction?.maneuver ?? ""] ?? "",
+      start_location: aLatLng(step.startLocation),
+      end_location: aLatLng(step.endLocation),
+    })),
+  }));
+  return { routes: [{ legs, overview_path: [] }] } as unknown as google.maps.DirectionsResult;
 };
 
 // ─── Selección de segmento activo (compartida por desvío y recorte visual) ────────
@@ -2352,6 +2463,155 @@ export default function MapaTILA({
     );
   }, [aplicarPolylineFallback, encuadrarDesdeRuta, sembrarProgresoRutaNueva]);
 
+  // ─── Calcular ruta de NAVEGACIÓN ACTIVA vía Routes API ─────────────────────
+  // Exclusivo de dispararCalculoNav (ver USAR_ROUTES_API_NAVEGACION) — los otros 3
+  // call-sites de calcularRuta (recorrido-chofer, multietapa, simple) no lo usan y no
+  // cambian. Duplica deliberadamente el orquestado de éxito/fallback de calcularRuta
+  // en vez de compartirlo — mantiene calcularRuta (DirectionsService) intacto, cero
+  // riesgo de regresión en las otras 3 pantallas, y permite revertir esta función sola
+  // sin tocar la otra. Comparte rutaRequestIdRef (mismo contador, misma protección
+  // contra respuestas fuera de orden que ya usa calcularRuta — ver el chequeo
+  // `miRequestId !== rutaRequestIdRef.current`).
+  const calcularRutaNavegacionDireccional = useCallback((
+    motivo: string,
+    fixOrigen: google.maps.LatLngLiteral,
+    destinationStr: string,
+    waypoints: google.maps.DirectionsWaypoint[],
+    fallbackPuntos: google.maps.LatLngLiteral[],
+    onSettled?: () => void,
+    legsActivos?: number
+  ) => {
+    const miRequestId = ++rutaRequestIdRef.current;
+    // Capturado AHORA (momento del pedido) — headingAceptadoRef.current puede cambiar
+    // mientras el request está en vuelo; RUTA_DIRECCIONAL necesita el heading que
+    // realmente se mandó, no el que haya en el momento de la respuesta.
+    const headingAlPedir = headingAceptadoRef.current;
+    setDiagnostico(d => ({ ...d, directionsStatus: "calculando..." }));
+
+    const origenDiag = `${fixOrigen.lat.toFixed(6)},${fixOrigen.lng.toFixed(6)}`;
+    diagLog(
+      `[TILA_NAV_DIAG] CALCULAR_RUTA_ENTRADA requestId=${miRequestId} motivo=${motivo} `
+      + `origen=${origenDiag} destino=${destinationStr} legsActivos=${legsActivos ?? "n/a"} `
+      + `via=routesApi headingOrigen=${headingAlPedir ?? "n/a"} t=${Math.round(performance.now())}`
+    );
+
+    const aplicarFallback = () => {
+      const habiaRutaAnterior = rutaPolylineRef.current.length >= 2;
+      rutaPolylineRef.current = fallbackPuntos;
+      sembrarProgresoRutaNueva(rutaPolylineRef.current, miRequestId);
+      if (habiaRutaAnterior) {
+        diagLog(`[TILA_NAV_DIAG] FALLBACK_ANTERIOR_LIMPIADO requestId=${miRequestId} t=${Math.round(performance.now())}`);
+      }
+      aplicarPolylineFallback(fallbackPuntos);
+      if (onSettled) onSettled();
+    };
+
+    const body = {
+      origin: construirWaypointOrigenDireccional(fixOrigen, headingAlPedir),
+      destination: { address: `${destinationStr}, Argentina` },
+      intermediates: waypoints.map(w => ({ address: String(w.location) })),
+      travelMode: "DRIVE",
+      // TRAFFIC_AWARE, no _OPTIMAL: heading ya sube el request al SKU Advanced —
+      // no sumar además el costo de _OPTIMAL sin necesidad confirmada en campo.
+      routingPreference: "TRAFFIC_AWARE",
+    };
+
+    fetch("https://routes.googleapis.com/directions/v2:computeRoutes", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Goog-Api-Key": process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || "",
+        "X-Goog-FieldMask": FIELD_MASK_ROUTES_API_NAVEGACION,
+      },
+      body: JSON.stringify(body),
+    })
+      .then(res => (res.ok ? res.json() : Promise.reject(new Error(`status ${res.status}`))))
+      .then((json: RoutesApiResponse) => {
+        diagLog(
+          `[TILA_NAV_DIAG] CALCULAR_RUTA_RESPUESTA requestId=${miRequestId} motivo=${motivo} status=OK `
+          + `obsoleta=${miRequestId !== rutaRequestIdRef.current} via=routesApi t=${Math.round(performance.now())}`
+        );
+        if (miRequestId !== rutaRequestIdRef.current) return; // respuesta obsoleta
+        diagLog(`[TILA_NAV_DIAG] CALCULAR_RUTA_APLICADA requestId=${miRequestId} motivo=${motivo} requestActual=${rutaRequestIdRef.current} via=routesApi t=${Math.round(performance.now())}`);
+        setDiagnostico(d => ({ ...d, directionsStatus: "OK" }));
+        // Mismo reinicio de ventana de gracia del desvío que calcularRuta — cualquier
+        // ruta nueva que efectivamente se aplica reinicia el cooldown desde que
+        // ATERRIZÓ, no desde que se detectó el desvío original (ver calcularRuta).
+        lecturasFueraDeRutaRef.current = 0;
+        ultimoRecalculoDesvioTsRef.current = Date.now();
+
+        const result = adaptarRespuestaRoutesAPI(json);
+        if (!result) { aplicarFallback(); return; }
+
+        const habiaRutaAnterior = rutaPolylineRef.current.length >= 2;
+        const { puntos: puntosDetallados, indicePorStep } = construirPolylineDetalladaDesdeRuta(result, legsActivos);
+        if (puntosDetallados.length < 2) { aplicarFallback(); return; }
+        rutaPolylineRef.current = puntosDetallados;
+        legsActivosNavRef.current = legsActivos ?? null;
+        indicePorStepRef.current = indicePorStep;
+        // Siembra el progreso desde el GPS REAL actual (fixValidoActualRef, dentro de
+        // sembrarProgresoRutaNueva) — no desde fixOrigen (el usado al pedir, ya
+        // desactualizado durante el round-trip). Ya resuelto, sin cambios acá.
+        sembrarProgresoRutaNueva(rutaPolylineRef.current, miRequestId);
+        if (habiaRutaAnterior) {
+          diagLog(`[TILA_NAV_DIAG] DIRECTIONS_ANTERIOR_LIMPIADO requestId=${miRequestId} t=${Math.round(performance.now())}`);
+        }
+
+        // RUTA_DIRECCIONAL: valida si el heading enviado en el origen realmente evitó
+        // un primer tramo en sentido contrario — puramente diagnóstico, no decide nada.
+        const gpsAlResponder = fixValidoActualRef.current ?? ultimoFixValidoRef.current;
+        const bearingInicial = rutaPolylineRef.current.length >= 2
+          ? calcularBearing(rutaPolylineRef.current[0], rutaPolylineRef.current[1])
+          : null;
+        const diferenciaAngularInicial = headingAlPedir !== null && bearingInicial !== null
+          ? diferenciaAngularGrados(headingAlPedir, bearingInicial)
+          : null;
+        const recorridoDuranteRequestM = gpsAlResponder ? distanciaMetros(fixOrigen, gpsAlResponder) : null;
+        diagLog(
+          `[TILA_NAV_DIAG] RUTA_DIRECCIONAL requestId=${miRequestId} motivo=${motivo} `
+          + `headingOrigen=${headingAlPedir ?? "n/a"} bearingInicial=${bearingInicial !== null ? Math.round(bearingInicial) : "n/a"}° `
+          + `diferenciaAngular=${diferenciaAngularInicial !== null ? Math.round(diferenciaAngularInicial) : "n/a"}° `
+          + `recorridoDuranteRequestM=${recorridoDuranteRequestM !== null ? Math.round(recorridoDuranteRequestM) : "n/a"} `
+          + `t=${Math.round(performance.now())}`
+        );
+
+        const primerPuntoNuevo = rutaPolylineRef.current[0] ?? null;
+        const diagPolyEstado = diagnosticarPolylineEstado(rutaPolylineRef.current, gpsAlResponder);
+        const ultimoPuntoDiag = rutaPolylineRef.current[rutaPolylineRef.current.length - 1] ?? null;
+        const gpsAPrimerPuntoDiagM = gpsAlResponder && primerPuntoNuevo
+          ? distanciaMetros(gpsAlResponder, primerPuntoNuevo)
+          : null;
+        diagLog(
+          `[TILA_NAV_DIAG] POLYLINE_ESTADO requestId=${miRequestId} motivo=${motivo} `
+          + `legsTotales=${json.routes?.[0]?.legs?.length ?? "n/a"} legsActivos=${legsActivos ?? "n/a"} puntos=${rutaPolylineRef.current.length} `
+          + `primerPunto=${primerPuntoNuevo ? `${primerPuntoNuevo.lat.toFixed(6)},${primerPuntoNuevo.lng.toFixed(6)}` : "n/a"} `
+          + `ultimoPunto=${ultimoPuntoDiag ? `${ultimoPuntoDiag.lat.toFixed(6)},${ultimoPuntoDiag.lng.toFixed(6)}` : "n/a"} `
+          + `gpsActual=${gpsAlResponder ? `${gpsAlResponder.lat.toFixed(6)},${gpsAlResponder.lng.toFixed(6)}` : "n/a"} `
+          + `gpsAPrimerPuntoM=${gpsAPrimerPuntoDiagM !== null ? Math.round(gpsAPrimerPuntoDiagM) : "n/a"} `
+          + `indiceMasCercano=${diagPolyEstado.indiceMasCercano ?? "n/a"} `
+          + `metrosAntesDelGps=${diagPolyEstado.metrosAntesDelGps !== null ? Math.round(diagPolyEstado.metrosAntesDelGps) : "n/a"} `
+          + `via=routesApi t=${Math.round(performance.now())}`
+        );
+
+        setDirections(result);
+        setPolylinePuntos([]);
+        encuadrarDesdeRuta(result);
+        if (onSettled) onSettled();
+      })
+      .catch((err: unknown) => {
+        const mensaje = err instanceof Error ? err.message : String(err);
+        diagLog(
+          `[TILA_NAV_DIAG] CALCULAR_RUTA_RESPUESTA requestId=${miRequestId} motivo=${motivo} status=ERROR(${mensaje}) `
+          + `obsoleta=${miRequestId !== rutaRequestIdRef.current} via=routesApi t=${Math.round(performance.now())}`
+        );
+        if (miRequestId !== rutaRequestIdRef.current) return;
+        setDiagnostico(d => ({ ...d, directionsStatus: "ERROR" }));
+        lecturasFueraDeRutaRef.current = 0;
+        ultimoRecalculoDesvioTsRef.current = Date.now();
+        aplicarFallback();
+      });
+  }, [aplicarPolylineFallback, encuadrarDesdeRuta, sembrarProgresoRutaNueva]);
+
   // ─── Resumen de distancias/tiempos para mostrarRutaDesdeChofer ────────────
   const informarResumenRuta = useCallback((result: google.maps.DirectionsResult) => {
     if (!onResumenRuta) return;
@@ -2839,7 +3099,7 @@ export default function MapaTILA({
     // origen y la respuesta nueva como única fuente de verdad (ver más abajo).
     const legsActivos = pendientes.some(p => p.tipo === "retiro") ? 1 : undefined;
 
-    calcularRuta(motivo, { lat: latLng.lat, lng: latLng.lng }, destino, waypoints, fallback, undefined, () => {
+    const onSettledNav = () => {
       calculandoRutaNavRef.current = false;
       if (recalculoPendienteNavRef.current) {
         recalculoPendienteNavRef.current = false;
@@ -2850,8 +3110,19 @@ export default function MapaTILA({
         // uno en vuelo, se drena solo al terminar" sin inventar un dato que no existe.
         dispararCalculoNavRef.current("navegacion-pendiente-drenado");
       }
-    }, legsActivos);
-  }, [calcularRuta, paradasCoords]);
+    };
+
+    // USAR_ROUTES_API_NAVEGACION: ver el flag — interruptor de reversión entre Routes
+    // API (heading direccional del origen) y DirectionsService clásico, exclusivo de
+    // este call-site. Ningún otro camino de calcularRuta lee este flag.
+    if (USAR_ROUTES_API_NAVEGACION) {
+      calcularRutaNavegacionDireccional(
+        motivo, { lat: latLng.lat, lng: latLng.lng }, destino, waypoints, fallback, onSettledNav, legsActivos
+      );
+    } else {
+      calcularRuta(motivo, { lat: latLng.lat, lng: latLng.lng }, destino, waypoints, fallback, undefined, onSettledNav, legsActivos);
+    }
+  }, [calcularRuta, calcularRutaNavegacionDireccional, paradasCoords]);
   useEffect(() => {
     dispararCalculoNavRef.current = dispararCalculoNav;
   }, [dispararCalculoNav]);
