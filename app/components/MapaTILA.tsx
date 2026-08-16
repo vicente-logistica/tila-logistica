@@ -2811,6 +2811,19 @@ export default function MapaTILA({
     if (pendientes.length === 0) return; // no queda ningún tramo por recorrer
 
     calculandoRutaNavRef.current    = true;
+    // Causa confirmada de "el vehículo visual se queda atrás durante el recálculo":
+    // mientras calculandoRutaNavRef es true, el bloque de recorte dentro de
+    // pasoAnimacion (el único que actualiza posicionSnapRutaRef) queda pausado — pero
+    // la CÁMARA sigue moviéndose con la posición interpolada real (no depende de este
+    // ref). El marcador, en cambio, usa el último snap calculado SI todavía cae dentro
+    // de UMBRAL_CORREDOR_SNAP_VISUAL_METROS — y ese snap queda congelado en la ruta
+    // VIEJA durante todo el cálculo. Resultado: la cámara avanza, el ícono no, hasta
+    // que la ruta nueva aterriza y "salta" al lugar correcto. Invalidar el snap acá
+    // mismo hace que el marcador caiga de inmediato a la posición GPS/visual real
+    // (mismo fallback que ya usa cuando no hay snap fresco) y la siga sin pausa
+    // durante todo el round-trip — se vuelve a snapear solo cuando el próximo recorte
+    // (ya con la ruta nueva) calcule uno fresco.
+    posicionSnapRutaRef.current = null;
     diagLog(`[TILA_NAV_DIAG] dispararCalculoNav: calculandoRutaNavRef=true origen=${latLng.lat.toFixed(6)},${latLng.lng.toFixed(6)} t=${Math.round(performance.now())}`);
     paradasPendientesKeyRef.current = pendientes.map(p => p.direccion).join("|");
 
