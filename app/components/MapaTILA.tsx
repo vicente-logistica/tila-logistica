@@ -2514,6 +2514,8 @@ export default function MapaTILA({
       // TRAFFIC_AWARE, no _OPTIMAL: heading ya sube el request al SKU Advanced —
       // no sumar además el costo de _OPTIMAL sin necesidad confirmada en campo.
       routingPreference: "TRAFFIC_AWARE",
+      polylineQuality: "HIGH_QUALITY",
+      polylineEncoding: "ENCODED_POLYLINE",
     };
 
     fetch("https://routes.googleapis.com/directions/v2:computeRoutes", {
