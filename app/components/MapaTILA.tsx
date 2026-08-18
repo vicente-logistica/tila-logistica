@@ -2585,6 +2585,25 @@ export default function MapaTILA({
         rutaPolylineRef.current = puntosDetallados;
         legsActivosNavRef.current = legsActivos ?? null;
         indicePorStepRef.current = indicePorStep;
+        // TILA_NAV_DIAG — SOLO diagnóstico: confirma que indicePorStep realmente
+        // apunta al punto de la polyline donde arranca cada step (start_location) —
+        // la corrección de comparteInicio en construirPolylineDetalladaDesdeRuta es la
+        // que debería dejar distanciaM en ~0. Sólo los primeros 3 steps de la ruta
+        // recién instalada, para no inundar el log.
+        (result.routes?.[0]?.legs?.flatMap(l => l.steps ?? []) ?? []).slice(0, 3).forEach((paso, i) => {
+          const puntoIndice = rutaPolylineRef.current[indicePorStep[i]] ?? null;
+          const startLoc = paso.start_location
+            ? { lat: paso.start_location.lat(), lng: paso.start_location.lng() }
+            : null;
+          const distanciaCheck = startLoc && puntoIndice ? distanciaMetros(startLoc, puntoIndice) : null;
+          diagLog(
+            `[TILA_NAV_DIAG] INDICE_POR_STEP_CHECK requestId=${miRequestId} step=${i} maniobra=${paso.maneuver ?? "?"} `
+            + `indicePorStep=${indicePorStep[i] ?? "n/a"} `
+            + `startLocation=${startLoc ? `${startLoc.lat.toFixed(6)},${startLoc.lng.toFixed(6)}` : "n/a"} `
+            + `puntoEnIndice=${puntoIndice ? `${puntoIndice.lat.toFixed(6)},${puntoIndice.lng.toFixed(6)}` : "n/a"} `
+            + `distanciaM=${distanciaCheck !== null ? distanciaCheck.toFixed(1) : "n/a"} t=${Math.round(performance.now())}`
+          );
+        });
         // Siembra el progreso desde el GPS REAL actual (fixValidoActualRef, dentro de
         // sembrarProgresoRutaNueva) — no desde fixOrigen (el usado al pedir, ya
         // desactualizado durante el round-trip). Ya resuelto, sin cambios acá.
