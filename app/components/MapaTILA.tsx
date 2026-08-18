@@ -530,8 +530,25 @@ const construirPolylineDetalladaDesdeRuta = (
   const indicePorStep: number[] = [];
   legs.forEach(leg => {
     (leg.steps ?? []).forEach(step => {
-      indicePorStep.push(puntos.length);
-      (step.path ?? []).forEach(p => {
+      // El primer punto de step.path puede deduplicarse más abajo si coincide con el
+      // último punto ya agregado (el step anterior termina justo donde éste arranca —
+      // caso normal, casi todos los steps encadenan así). Si eso pasa, puntos.length
+      // (sin corregir) apuntaría al SIGUIENTE punto (el primero realmente nuevo de
+      // este step), no al punto donde ocurre la maniobra — causa confirmada de
+      // calcularDistanciaRutaHastaIndice sumando de más el tramo posterior al giro
+      // (ej.: aviso a 190m cuando el giro real estaba a ~70m). Si el primer punto del
+      // step NO coincide con el último ya agregado (arranque de leg, o geometría que
+      // no encadena exacto), el índice sigue siendo puntos.length, como antes.
+      const path = step.path ?? [];
+      const primerPath = path[0] ? { lat: path[0].lat(), lng: path[0].lng() } : null;
+      const ultimoExistente = puntos[puntos.length - 1];
+      const comparteInicio =
+        !!primerPath
+        && !!ultimoExistente
+        && ultimoExistente.lat === primerPath.lat
+        && ultimoExistente.lng === primerPath.lng;
+      indicePorStep.push(comparteInicio ? puntos.length - 1 : puntos.length);
+      path.forEach(p => {
         const punto = { lat: p.lat(), lng: p.lng() };
         const anterior = puntos[puntos.length - 1];
         if (!anterior || anterior.lat !== punto.lat || anterior.lng !== punto.lng) {
