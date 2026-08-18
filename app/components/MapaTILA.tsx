@@ -2533,7 +2533,18 @@ export default function MapaTILA({
       },
       body: JSON.stringify(body),
     })
-      .then(res => (res.ok ? res.json() : Promise.reject(new Error(`status ${res.status}`))))
+      .then(res => {
+        if (res.ok) return res.json();
+        // TILA_NAV_DIAG — SOLO diagnóstico: por qué Google devuelve 4xx/5xx. body de
+        // `body` (la variable de arriba, el request que se mandó) nunca contiene la
+        // API key — eso viaja únicamente en el header X-Goog-Api-Key, jamás en el
+        // cuerpo — así que loguearlo tal cual no expone nada sensible.
+        return res.text().then(bodyRespuesta => {
+          diagLog(`[TILA_NAV_DIAG] ROUTES_API_ERROR status=${res.status} body=${bodyRespuesta}`);
+          diagLog(`[TILA_NAV_DIAG] ROUTES_API_REQUEST_ERROR bodyEnviado=${JSON.stringify(body)}`);
+          return Promise.reject(new Error(`status ${res.status}`));
+        });
+      })
       .then((json: RoutesApiResponse) => {
         diagLog(
           `[TILA_NAV_DIAG] CALCULAR_RUTA_RESPUESTA requestId=${miRequestId} motivo=${motivo} status=OK `
