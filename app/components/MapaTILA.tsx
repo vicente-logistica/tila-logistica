@@ -606,12 +606,18 @@ interface RoutesApiResponse {
 // rechazado). Sin heading confiable se manda sólo lat/lng, igual que DirectionsService
 // siempre hizo (nunca tuvo heading para empezar). Redondeado y normalizado a [0,360) —
 // Routes API espera un entero de grados.
+// heading va DENTRO de location (hermano de latLng), no del Waypoint — confirmado
+// contra la referencia oficial del mensaje Location de Routes API. La versión
+// anterior lo ponía como hermano de location (un nivel afuera de donde corresponde),
+// candidato fuerte al 400 visto en prueba real (ver ROUTES_API_ERROR).
 const construirWaypointOrigenDireccional = (
   fix: google.maps.LatLngLiteral,
   headingConfiable: number | null
 ) => ({
-  location: { latLng: { latitude: fix.lat, longitude: fix.lng } },
-  ...(headingConfiable !== null ? { heading: Math.round(((headingConfiable % 360) + 360) % 360) } : {}),
+  location: {
+    latLng: { latitude: fix.lat, longitude: fix.lng },
+    ...(headingConfiable !== null ? { heading: Math.round(((headingConfiable % 360) + 360) % 360) } : {}),
+  },
 });
 
 // Adapta la respuesta de Routes API a una forma compatible con
