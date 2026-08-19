@@ -1,8 +1,38 @@
 "use client";
 
 import Link from "next/link";
+import { useEffect } from "react";
+import { useRouter } from "next/navigation";
 
 export default function Home() {
+  const router = useRouter();
+
+  // Caso excepcional: Android destruyó la Activity mientras Mercado Pago estaba
+  // abierto (Browser.open, ver panel-cliente) — Capacitor recarga el WebView desde
+  // cero en esta ruta, perdiendo la navegación a /panel-cliente. Esto NO es un
+  // redirect genérico por tener sesión — sólo actúa si tila_mp_checkout_activo quedó
+  // marcado (se limpia en cuanto panel-cliente detecta un cierre normal del
+  // navegador o una back_url real de MP). Sin ese marcador, esta página se comporta
+  // EXACTAMENTE igual que antes.
+  useEffect(() => {
+    try {
+      if (localStorage.getItem("tila_mp_checkout_activo") !== "1") return;
+      // Se limpia ACÁ MISMO, apenas se confirma que estaba activo — antes de
+      // cualquier chequeo que pueda fallar (sin usuario, JSON.parse roto, rol
+      // distinto). Así ningún camino de salida puede dejar el marcador colgado
+      // indefinidamente esperando una condición que nunca se va a cumplir.
+      localStorage.removeItem("tila_mp_checkout_activo");
+      const usuarioGuardado = localStorage.getItem("usuario");
+      if (!usuarioGuardado) return;
+      const usuario = JSON.parse(usuarioGuardado);
+      if (usuario?.rol !== "cliente") return;
+      router.replace("/panel-cliente");
+    } catch {
+      // localStorage corrupto — el marcador ya se limpió arriba (o nunca llegó a
+      // leerse como "1" si el primer getItem falló) — no hacer nada más.
+    }
+  }, [router]);
+
   return (
     <main className="min-h-screen bg-black text-white flex items-center justify-center px-4 py-6 overflow-hidden">
 
