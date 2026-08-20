@@ -1594,6 +1594,20 @@ export default function MapaTILA({
   // más nueva. Protege a los 4 call-sites de calcularRuta con un solo cambio.
   const rutaPolylineRef = useRef<google.maps.LatLngLiteral[]>([]);
   const rutaRequestIdRef = useRef(0);
+  // rutaAplicadaRequestIdRef: a diferencia de rutaRequestIdRef (último request
+  // INICIADO), este ref sólo se escribe inmediatamente antes de cada setDirections(result)
+  // realmente exitoso — nunca al iniciar/encolar/descartar-obsoleta/fallback. Es lo único
+  // que el efecto de voz de "Ruta recalculada" puede usar para saber qué ruta se aplicó
+  // de verdad: leer rutaRequestIdRef.current ahí sería incorrecto porque setDirections es
+  // asíncrono y otro request pudo haberlo incrementado antes de que el useEffect corra.
+  const rutaAplicadaRequestIdRef = useRef<number | null>(null);
+  // recalculosPorDesvioRef: asocia de forma inmutable requestId → fue originado por
+  // desvioConfirmado real (ver dispararCalculoNav). Un Set en vez de un booleano global
+  // porque cada id queda registrado bajo su propio número — ningún request puede pisar
+  // la marca de otro. Se limpia (delete) tanto al consumirse en la voz como en toda
+  // respuesta que jamás vaya a llegar a directions (obsoleta/fallback), para no acumular
+  // ids sin usar.
+  const recalculosPorDesvioRef = useRef<Set<number>>(new Set());
   // indicePorStepRef[i] = índice dentro de rutaPolylineRef.current donde arranca la
   // geometría del step i (steps de todos los legs concatenados, mismo orden que la
   // voz) — ver construirPolylineDetalladaDesdeRuta. Se recalcula junto con
@@ -2332,6 +2346,10 @@ export default function MapaTILA({
     // disparó esta invocación (diagnóstico puro — no participa de ninguna decisión
     // funcional, ver CALCULAR_RUTA_ENTRADA/RESPUESTA/APLICADA más abajo).
     motivo: string,
+    // true únicamente cuando este cálculo fue originado por desvioConfirmado real (ver
+    // dispararCalculoNav) — default false para no afectar a los otros 3 call-sites
+    // (recorrido-chofer, multietapa, simple), que nunca pasan este argumento.
+    esDesvio: boolean = false,
     origin: string | google.maps.LatLngLiteral,
     destinationStr: string,
     waypoints: google.maps.DirectionsWaypoint[],
@@ -2350,6 +2368,7 @@ export default function MapaTILA({
     // otro cálculo mientras ésta estaba en vuelo), se descarta en vez de aplicarse: evita
     // que una respuesta lenta/fuera de orden pise a una más nueva.
     const miRequestId = ++rutaRequestIdRef.current;
+    if (esDesvio) recalculosPorDesvioRef.current.add(miRequestId);
     setDiagnostico(d => ({ ...d, directionsStatus: "calculando..." }));
 
     // TILA_NAV_DIAG: origen/destino EXACTOS enviados a Directions para este pedido.
@@ -2377,7 +2396,7 @@ export default function MapaTILA({
         // nueva para cuando ESTA respuesta se procesa. Si sí, se descarta acá, siempre,
         // sin excepción — nunca puede pisar un resultado más nuevo ya aplicado.
         diagLog(`[TILA_NAV_DIAG] CALCULAR_RUTA_RESPUESTA requestId=${miRequestId} motivo=${motivo} status=${status} obsoleta=${miRequestId !== rutaRequestIdRef.current} t=${Math.round(performance.now())}`);
-        if (miRequestId !== rutaRequestIdRef.current) return; // respuesta obsoleta
+        if (miRequestId !== rutaRequestIdRef.current) { recalculosPorDesvioRef.current.delete(miRequestId); return; } // respuesta obsoleta — jamás llegará a directions
         diagLog(`[TILA_NAV_DIAG] CALCULAR_RUTA_APLICADA requestId=${miRequestId} motivo=${motivo} requestActual=${rutaRequestIdRef.current} t=${Math.round(performance.now())}`);
         setDiagnostico(d => ({ ...d, directionsStatus: status }));
         // Cualquier ruta nueva que efectivamente se aplica (éxito o fallback) reinicia
@@ -2446,6 +2465,7 @@ export default function MapaTILA({
             + `metrosAntesDelGps=${diagPolyEstado.metrosAntesDelGps !== null ? Math.round(diagPolyEstado.metrosAntesDelGps) : "n/a"} `
             + `t=${Math.round(performance.now())}`
           );
+          rutaAplicadaRequestIdRef.current = miRequestId;
           setDirections(result);
           setPolylinePuntos([]); // limpiar fallback si Directions funcionó
           encuadrarDesdeRuta(result);
@@ -2453,6 +2473,8 @@ export default function MapaTILA({
         } else {
           // FALLBACK: dibujar Polyline simple con los puntos que tenemos — también sirve
           // como polyline de referencia para medir desvío mientras no haya Directions real.
+          // No hay setDirections acá — este requestId nunca va a llegar a la voz, se limpia.
+          recalculosPorDesvioRef.current.delete(miRequestId);
           const habiaRutaAnterior = rutaPolylineRef.current.length >= 2;
           rutaPolylineRef.current = fallbackPuntos;
           sembrarProgresoRutaNueva(rutaPolylineRef.current, miRequestId);
@@ -2497,6 +2519,9 @@ export default function MapaTILA({
   // `miRequestId !== rutaRequestIdRef.current`).
   const calcularRutaNavegacionDireccional = useCallback((
     motivo: string,
+    // true únicamente cuando este cálculo fue originado por desvioConfirmado real (ver
+    // dispararCalculoNav) — es la única función que recibe true acá (USAR_ROUTES_API_NAVEGACION).
+    esDesvio: boolean,
     fixOrigen: google.maps.LatLngLiteral,
     destinationStr: string,
     waypoints: google.maps.DirectionsWaypoint[],
@@ -2505,6 +2530,7 @@ export default function MapaTILA({
     legsActivos?: number
   ) => {
     const miRequestId = ++rutaRequestIdRef.current;
+    if (esDesvio) recalculosPorDesvioRef.current.add(miRequestId);
     // Capturado AHORA (momento del pedido) — headingAceptadoRef.current puede cambiar
     // mientras el request está en vuelo; RUTA_DIRECCIONAL necesita el heading que
     // realmente se mandó, no el que haya en el momento de la respuesta.
@@ -2519,6 +2545,8 @@ export default function MapaTILA({
     );
 
     const aplicarFallback = () => {
+      // No hay setDirections en este camino — este requestId nunca va a llegar a la voz.
+      recalculosPorDesvioRef.current.delete(miRequestId);
       const habiaRutaAnterior = rutaPolylineRef.current.length >= 2;
       rutaPolylineRef.current = fallbackPuntos;
       sembrarProgresoRutaNueva(rutaPolylineRef.current, miRequestId);
@@ -2567,7 +2595,7 @@ export default function MapaTILA({
           `[TILA_NAV_DIAG] CALCULAR_RUTA_RESPUESTA requestId=${miRequestId} motivo=${motivo} status=OK `
           + `obsoleta=${miRequestId !== rutaRequestIdRef.current} via=routesApi t=${Math.round(performance.now())}`
         );
-        if (miRequestId !== rutaRequestIdRef.current) return; // respuesta obsoleta
+        if (miRequestId !== rutaRequestIdRef.current) { recalculosPorDesvioRef.current.delete(miRequestId); return; } // respuesta obsoleta — jamás llegará a directions
         diagLog(`[TILA_NAV_DIAG] CALCULAR_RUTA_APLICADA requestId=${miRequestId} motivo=${motivo} requestActual=${rutaRequestIdRef.current} via=routesApi t=${Math.round(performance.now())}`);
         setDiagnostico(d => ({ ...d, directionsStatus: "OK" }));
         // Mismo reinicio de ventana de gracia del desvío que calcularRuta — cualquier
@@ -2648,6 +2676,7 @@ export default function MapaTILA({
           + `via=routesApi t=${Math.round(performance.now())}`
         );
 
+        rutaAplicadaRequestIdRef.current = miRequestId;
         setDirections(result);
         setPolylinePuntos([]);
         encuadrarDesdeRuta(result);
@@ -2659,7 +2688,7 @@ export default function MapaTILA({
           `[TILA_NAV_DIAG] CALCULAR_RUTA_RESPUESTA requestId=${miRequestId} motivo=${motivo} status=ERROR(${mensaje}) `
           + `obsoleta=${miRequestId !== rutaRequestIdRef.current} via=routesApi t=${Math.round(performance.now())}`
         );
-        if (miRequestId !== rutaRequestIdRef.current) return;
+        if (miRequestId !== rutaRequestIdRef.current) { recalculosPorDesvioRef.current.delete(miRequestId); return; } // respuesta obsoleta — jamás llegará a directions
         setDiagnostico(d => ({ ...d, directionsStatus: "ERROR" }));
         lecturasFueraDeRutaRef.current = 0;
         ultimoRecalculoDesvioTsRef.current = Date.now();
@@ -2725,6 +2754,7 @@ export default function MapaTILA({
 
         calcularRuta(
           "recorrido-chofer",
+          false,
           { lat, lng },
           destino,
           [{ location: `${origen}, Argentina`, stopover: true }],
@@ -2774,7 +2804,7 @@ export default function MapaTILA({
           if (lat && lng) fallback.push({ lat, lng });
           validos.forEach(v => fallback.push(v));
 
-          calcularRuta("multietapa-inicial", origin, destination, waypoints, fallback);
+          calcularRuta("multietapa-inicial", false, origin, destination, waypoints, fallback);
         }
       });
     });
@@ -2815,7 +2845,7 @@ export default function MapaTILA({
         origenResuelto ?? `${origen}, Argentina`;
       const destinoFinal = paradaActivaDireccion ?? destino;
 
-      calcularRuta("simple", originParam, destinoFinal, [], fallback);
+      calcularRuta("simple", false, originParam, destinoFinal, [], fallback);
     };
 
     if (!origenResuelto) {
@@ -3106,7 +3136,7 @@ export default function MapaTILA({
   // el propio callback se re-invoque a sí mismo al drenar un pendiente sin un
   // auto-referencia directa a la const (evita el ciclo de declaración) y de paso
   // nunca queda con una versión vieja del closure entre renders.
-  const dispararCalculoNavRef = useRef<(motivo?: string) => void>(() => {});
+  const dispararCalculoNavRef = useRef<(motivo?: string, esDesvio?: boolean) => void>(() => {});
 
   // Detección de desvío real: lecturas GPS consecutivas por encima de
   // UMBRAL_DESVIO_RUTA_METROS respecto de rutaPolylineRef, más un cooldown mínimo
@@ -3115,7 +3145,7 @@ export default function MapaTILA({
   const lecturasFueraDeRutaRef     = useRef(0);
   const ultimoRecalculoDesvioTsRef = useRef(0);
 
-  const dispararCalculoNav = useCallback((motivo: string = "navegacion") => {
+  const dispararCalculoNav = useCallback((motivo: string = "navegacion", esDesvio: boolean = false) => {
     if (calculandoRutaNavRef.current) {
       recalculoPendienteNavRef.current = true;
       return;
@@ -3163,7 +3193,7 @@ export default function MapaTILA({
         // simple flag booleano (recalculoPendienteNavRef), no guarda el string. Motivo
         // genérico, deliberado: identifica el patrón "quedó pendiente mientras había
         // uno en vuelo, se drena solo al terminar" sin inventar un dato que no existe.
-        dispararCalculoNavRef.current("navegacion-pendiente-drenado");
+        dispararCalculoNavRef.current("navegacion-pendiente-drenado", false);
       }
     };
 
@@ -3172,10 +3202,10 @@ export default function MapaTILA({
     // este call-site. Ningún otro camino de calcularRuta lee este flag.
     if (USAR_ROUTES_API_NAVEGACION) {
       calcularRutaNavegacionDireccional(
-        motivo, { lat: latLng.lat, lng: latLng.lng }, destino, waypoints, fallback, onSettledNav, legsActivos
+        motivo, esDesvio, { lat: latLng.lat, lng: latLng.lng }, destino, waypoints, fallback, onSettledNav, legsActivos
       );
     } else {
-      calcularRuta(motivo, { lat: latLng.lat, lng: latLng.lng }, destino, waypoints, fallback, undefined, onSettledNav, legsActivos);
+      calcularRuta(motivo, esDesvio, { lat: latLng.lat, lng: latLng.lng }, destino, waypoints, fallback, undefined, onSettledNav, legsActivos);
     }
   }, [calcularRuta, calcularRutaNavegacionDireccional, paradasCoords]);
   useEffect(() => {
@@ -3221,7 +3251,7 @@ export default function MapaTILA({
       if (cambioDeParadas || primerGps) {
         diagLog(`[TILA_NAV_DIAG] desvio-efecto: recálculo en vuelo pero cambioDeParadas/primerGps → encola t=${Math.round(performance.now())}`);
         primerGpsMultietapaRef.current = true;
-        dispararCalculoNav(`navegacion-encolado(cambioDeParadas=${cambioDeParadas},primerGps=${primerGps})`);
+        dispararCalculoNav(`navegacion-encolado(cambioDeParadas=${cambioDeParadas},primerGps=${primerGps})`, false);
       }
       return;
     }
@@ -3309,7 +3339,7 @@ export default function MapaTILA({
 
     diagLog(`[TILA_NAV_DIAG] desvio-efecto DISPARANDO dispararCalculoNav cambioDeParadas=${cambioDeParadas} primerGps=${primerGps} desvioConfirmado=${desvioConfirmado} t=${Math.round(performance.now())}`);
     primerGpsMultietapaRef.current = true;
-    dispararCalculoNav(`navegacion(cambioDeParadas=${cambioDeParadas},primerGps=${primerGps},desvioConfirmado=${desvioConfirmado})`);
+    dispararCalculoNav(`navegacion(cambioDeParadas=${cambioDeParadas},primerGps=${primerGps},desvioConfirmado=${desvioConfirmado})`, desvioConfirmado);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isLoaded, modoNavegacion, tieneParadas, modoMultiChofer, navegacionTilaActiva, lat, lng, JSON.stringify(paradas?.map(p => ({ d: p.direccion, e: p.estado }))), dispararCalculoNav, sincronizarIndiceConRuta, avanzarIndiceProgreso]);
 
@@ -3554,10 +3584,14 @@ export default function MapaTILA({
   }, [onAnuncioVoz]);
 
   // "Ruta recalculada" — cualquier cambio de `directions` DESPUÉS del primero (el primer
-  // cálculo es el arranque normal del viaje, no un recálculo real). Además de anunciar,
-  // es el punto donde se invalida TODO el estado de voz de la generación anterior: se
-  // corta cualquier locución en curso YA (onDetenerVoz) y se resetean los pasos
-  // anunciados, para que nada de la ruta vieja pueda volver a hablar.
+  // cálculo es el arranque normal del viaje, no un recálculo real) invalida TODO el
+  // estado de voz de la generación anterior: se corta cualquier locución en curso YA
+  // (onDetenerVoz) y se resetean los pasos anunciados, para que nada de la ruta vieja
+  // pueda volver a hablar — esto pasa siempre, sin importar el motivo del recálculo.
+  // El ANUNCIO en sí ("Ruta recalculada.") es lo único condicional: sólo sale al aire
+  // si el requestId realmente aplicado fue originado por un desvío confirmado real (ver
+  // recalculosPorDesvioRef/dispararCalculoNav) — cambio de paradas, primer GPS y los
+  // recálculos encolados/drenados siguen ocurriendo exactamente igual, pero en silencio.
   useEffect(() => {
     if (!onAnuncioVoz || !modoNavegacion || modoMultiChofer) return;
     // Redundante en la práctica (directions no puede existir todavía si el GPS no
@@ -3572,15 +3606,27 @@ export default function MapaTILA({
     vozDirectionsPrevRef.current = directions;
     if (previa === null || previa === directions) return;
 
+    // Identifica la ruta REALMENTE aplicada por requestId — nunca rutaRequestIdRef.current
+    // (último request INICIADO): setDirections es asíncrono, así que para cuando este
+    // efecto corre puede haber arrancado (no aplicado todavía) un request más nuevo que
+    // ya incrementó ese contador. rutaAplicadaRequestIdRef sólo se escribe justo antes de
+    // cada setDirections(result) exitoso — ver calcularRuta/calcularRutaNavegacionDireccional.
+    const idAplicado = rutaAplicadaRequestIdRef.current;
+    if (idAplicado == null) return;
+
     const requestIdAnterior = vozRutaRequestIdRef.current;
-    vozRutaRequestIdRef.current = rutaRequestIdRef.current;
+    vozRutaRequestIdRef.current = idAplicado;
     rutaKeyVozRef.current = null; // fuerza también el reset del efecto de maniobras (incluye maniobraActualIndiceRef) si corre en este mismo render
 
     onDetenerVoz?.();
-    diagLog(`[TILA_NAV_DIAG] VOZ_DETENIDA_POR_RECALCULO requestIdAnterior=${requestIdAnterior ?? "n/a"} requestIdNuevo=${rutaRequestIdRef.current} t=${Math.round(performance.now())}`);
-    diagLog(`[TILA_NAV_DIAG] VOZ_RUTA_RESET requestId=${rutaRequestIdRef.current} t=${Math.round(performance.now())}`);
+    diagLog(`[TILA_NAV_DIAG] VOZ_DETENIDA_POR_RECALCULO requestIdAnterior=${requestIdAnterior ?? "n/a"} requestIdNuevo=${idAplicado} t=${Math.round(performance.now())}`);
+    diagLog(`[TILA_NAV_DIAG] VOZ_RUTA_RESET requestId=${idAplicado} t=${Math.round(performance.now())}`);
 
-    intentarAnunciar("Ruta recalculada.", "informativo", "recalculo", rutaRequestIdRef.current);
+    // delete() lee y consume en una sola operación atómica: si idAplicado fue registrado
+    // como desvío real, anuncia y lo saca del Set — así nunca anuncia dos veces el mismo id.
+    if (recalculosPorDesvioRef.current.delete(idAplicado)) {
+      intentarAnunciar("Ruta recalculada.", "informativo", "recalculo", idAplicado);
+    }
   }, [directions, modoNavegacion, modoMultiChofer, navegacionTilaActiva, onAnuncioVoz, onDetenerVoz, intentarAnunciar]);
 
   // Giros próximos — máquina de estado secuencial de UNA sola maniobra actual
