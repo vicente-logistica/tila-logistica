@@ -231,7 +231,7 @@ export default function PanelChoferPage() {
           audioRef.current.play().catch(() => {});
           setTimeout(() => {
             if (audioRef.current) { audioRef.current.pause(); audioRef.current.currentTime = 0; }
-          }, 3000);
+          }, 7100);
         }
       }
     }, 10000);

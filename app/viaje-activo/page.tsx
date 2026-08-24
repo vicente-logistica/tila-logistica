@@ -415,7 +415,7 @@ export default function ViajeActivoPage() {
           snd.volume = 1;
           snd.loop = false;
           snd.play().catch(() => {});
-          setTimeout(() => { snd.pause(); snd.currentTime = 0; }, 3000);
+          setTimeout(() => { snd.pause(); snd.currentTime = 0; }, 7100);
         } catch { /* silencioso */ }
         setViajeCanceladoPorCliente(true);
       }
