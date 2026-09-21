@@ -49,3 +49,6 @@ next-env.d.ts
 /ios/App/Pods
 /ios/App/build
 /ios/.build
+
+.vercel
+.env*
