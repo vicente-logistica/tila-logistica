@@ -1,0 +1,15 @@
+{
+  "formato": "tila-event-triggers-produccion/1",
+  "origen": "Resultado de LEER-EVENT-TRIGGERS-PRODUCCION.sql ejecutado por el usuario en el SQL Editor de PRODUCCIÓN (100 % solo lectura; transcripto de lo pegado en el chat, 2026-09-20). Solo metadatos.",
+  "propios_del_proyecto": ["ensure_rls"],
+  "gestionados_por_supabase": ["issue_graphql_placeholder", "issue_pg_cron_access", "issue_pg_graphql_access", "issue_pg_net_access", "pgrst_ddl_watch", "pgrst_drop_watch"],
+  "event_triggers": [
+    { "nombre": "ensure_rls", "evento": "ddl_command_end", "tags": ["CREATE TABLE", "CREATE TABLE AS", "SELECT INTO"], "habilitado": "O", "dueno": "postgres", "funcion": "public.rls_auto_enable", "funcion_security_definer": true },
+    { "nombre": "issue_graphql_placeholder", "evento": "sql_drop", "tags": ["DROP EXTENSION"], "habilitado": "O", "dueno": "supabase_admin", "funcion": "extensions.set_graphql_placeholder", "funcion_security_definer": false },
+    { "nombre": "issue_pg_cron_access", "evento": "ddl_command_end", "tags": ["CREATE EXTENSION"], "habilitado": "O", "dueno": "supabase_admin", "funcion": "extensions.grant_pg_cron_access", "funcion_security_definer": false },
+    { "nombre": "issue_pg_graphql_access", "evento": "ddl_command_end", "tags": ["CREATE EXTENSION"], "habilitado": "O", "dueno": "supabase_admin", "funcion": "extensions.grant_pg_graphql_access", "funcion_security_definer": false },
+    { "nombre": "issue_pg_net_access", "evento": "ddl_command_end", "tags": ["CREATE EXTENSION"], "habilitado": "O", "dueno": "supabase_admin", "funcion": "extensions.grant_pg_net_access", "funcion_security_definer": false },
+    { "nombre": "pgrst_ddl_watch", "evento": "ddl_command_end", "tags": null, "habilitado": "O", "dueno": "supabase_admin", "funcion": "extensions.pgrst_ddl_watch", "funcion_security_definer": false },
+    { "nombre": "pgrst_drop_watch", "evento": "sql_drop", "tags": null, "habilitado": "O", "dueno": "supabase_admin", "funcion": "extensions.pgrst_drop_watch", "funcion_security_definer": false }
+  ]
+}

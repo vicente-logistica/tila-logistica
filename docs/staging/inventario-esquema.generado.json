@@ -1,0 +1,673 @@
+{
+  "tablas": {
+    "billetera_chofer": {
+      "archivos": [
+        "app/api/admin/billetera/route.ts",
+        "app/api/chofer/billetera/acreditar/route.ts",
+        "app/api/chofer/billetera/route.ts"
+      ],
+      "columnas_leidas": [
+        "id"
+      ],
+      "columnas_filtradas": [
+        "chofer_id",
+        "created_at",
+        "viaje_id"
+      ],
+      "columnas_escritas": [
+        "chofer_id",
+        "viaje_id"
+      ],
+      "union": [
+        "chofer_id",
+        "created_at",
+        "id",
+        "viaje_id"
+      ],
+      "select_asterisco_en": [
+        "app/api/admin/billetera/route.ts",
+        "app/api/chofer/billetera/route.ts"
+      ]
+    },
+    "cargas": {
+      "archivos": [
+        "app/api/admin/cargas/estado/route.ts",
+        "app/api/admin/cargas/ocultar/route.ts",
+        "app/api/admin/cargas/route.ts",
+        "app/api/cargas/aceptar/route.ts",
+        "app/api/cargas/activa/route.ts",
+        "app/api/cargas/cancelar-chofer/route.ts",
+        "app/api/cargas/cancelar-cliente/route.ts",
+        "app/api/cargas/disponibles/route.ts",
+        "app/api/cargas/estado/route.ts",
+        "app/api/cargas/evidencia/route.ts",
+        "app/api/cargas/gps/route.ts",
+        "app/api/cargas/historial-chofer/route.ts",
+        "app/api/cargas/historial-cliente/route.ts",
+        "app/api/cargas/ocultar-historial/route.ts",
+        "app/api/cargas/publicar/route.ts",
+        "app/api/cargas/republicar/route.ts",
+        "app/api/chat/marcar-leidos/route.ts",
+        "app/api/chat/mensaje/route.ts",
+        "app/api/chat/mensajes-viaje/route.ts",
+        "app/api/chat/mensajes/route.ts",
+        "app/api/chat/no-leidos/route.ts",
+        "app/api/chofer/billetera/acreditar/route.ts",
+        "app/api/mercadopago/crear-preferencia/route.ts",
+        "app/api/mercadopago/webhook/route.ts"
+      ],
+      "columnas_leidas": [
+        "categoria_legal",
+        "chofer_id",
+        "cliente_id",
+        "created_at",
+        "destino",
+        "detalles",
+        "estado",
+        "id",
+        "km_estimados",
+        "mp_payment_id",
+        "origen",
+        "pago_chofer",
+        "pago_estado",
+        "peso",
+        "precio_cliente",
+        "tipo_carga",
+        "tipo_vehiculo",
+        "vehiculo"
+      ],
+      "columnas_filtradas": [
+        "chofer_id",
+        "cliente_id",
+        "created_at",
+        "estado",
+        "id",
+        "oculto_chofer",
+        "oculto_cliente"
+      ],
+      "columnas_escritas": [
+        "auto_oculto_at",
+        "categoria_legal",
+        "chofer_id",
+        "cliente_id",
+        "comision_plataforma",
+        "destino",
+        "detalles",
+        "estado",
+        "gps_actualizado",
+        "hora_aceptacion",
+        "hora_finalizacion",
+        "hora_inicio",
+        "km_estimados",
+        "lat",
+        "lng",
+        "mp_monto",
+        "mp_payment_id",
+        "mp_preference_id",
+        "mp_status",
+        "oculto_chofer",
+        "oculto_cliente",
+        "origen",
+        "pagado_cliente",
+        "pago_chofer",
+        "pago_estado",
+        "peso",
+        "precio_base",
+        "precio_cliente",
+        "tipo_carga",
+        "tipo_carroceria",
+        "tipo_vehiculo",
+        "tracking",
+        "vehiculo",
+        "velocidad",
+        "velocidad_kmh"
+      ],
+      "union": [
+        "auto_oculto_at",
+        "categoria_legal",
+        "chofer_id",
+        "cliente_id",
+        "comision_plataforma",
+        "created_at",
+        "destino",
+        "detalles",
+        "estado",
+        "gps_actualizado",
+        "hora_aceptacion",
+        "hora_finalizacion",
+        "hora_inicio",
+        "id",
+        "km_estimados",
+        "lat",
+        "lng",
+        "mp_monto",
+        "mp_payment_id",
+        "mp_preference_id",
+        "mp_status",
+        "oculto_chofer",
+        "oculto_cliente",
+        "origen",
+        "pagado_cliente",
+        "pago_chofer",
+        "pago_estado",
+        "peso",
+        "precio_base",
+        "precio_cliente",
+        "tipo_carga",
+        "tipo_carroceria",
+        "tipo_vehiculo",
+        "tracking",
+        "vehiculo",
+        "velocidad",
+        "velocidad_kmh"
+      ],
+      "select_asterisco_en": [
+        "app/api/admin/cargas/route.ts",
+        "app/api/cargas/activa/route.ts",
+        "app/api/cargas/historial-chofer/route.ts",
+        "app/api/cargas/historial-cliente/route.ts"
+      ]
+    },
+    "consentimientos_legales": {
+      "archivos": [
+        "app/lib/consentimiento.ts"
+      ],
+      "columnas_leidas": [],
+      "columnas_filtradas": [],
+      "columnas_escritas": [],
+      "union": [],
+      "select_asterisco_en": []
+    },
+    "documentacion_chofer": {
+      "archivos": [
+        "app/admin/page.tsx",
+        "app/api/chofer/documentacion/route.ts",
+        "app/components/GestionVehiculosChofer.tsx",
+        "app/components/SubirDocumentacion.tsx",
+        "app/panel-chofer/page.tsx"
+      ],
+      "columnas_leidas": [
+        "tipo",
+        "url"
+      ],
+      "columnas_filtradas": [
+        "chofer_id"
+      ],
+      "columnas_escritas": [
+        "chofer_id",
+        "tipo",
+        "url"
+      ],
+      "union": [
+        "chofer_id",
+        "tipo",
+        "url"
+      ],
+      "select_asterisco_en": []
+    },
+    "mensajes_viaje": {
+      "archivos": [
+        "app/api/chat/marcar-leidos/route.ts",
+        "app/api/chat/mensaje/route.ts",
+        "app/api/chat/mensajes-viaje/route.ts",
+        "app/api/chat/mensajes/route.ts",
+        "app/api/chat/no-leidos/route.ts",
+        "app/api/chat/resumen-admin/route.ts"
+      ],
+      "columnas_leidas": [
+        "created_at",
+        "id",
+        "leido",
+        "remitente_id",
+        "tipo_chat",
+        "viaje_id"
+      ],
+      "columnas_filtradas": [
+        "created_at",
+        "leido",
+        "remitente_id",
+        "tipo_chat",
+        "viaje_id"
+      ],
+      "columnas_escritas": [
+        "leido",
+        "mensaje",
+        "remitente_id",
+        "remitente_nombre",
+        "remitente_rol",
+        "tipo_chat",
+        "viaje_id"
+      ],
+      "union": [
+        "created_at",
+        "id",
+        "leido",
+        "mensaje",
+        "remitente_id",
+        "remitente_nombre",
+        "remitente_rol",
+        "tipo_chat",
+        "viaje_id"
+      ],
+      "select_asterisco_en": [
+        "app/api/chat/mensajes/route.ts"
+      ]
+    },
+    "paradas_viaje": {
+      "archivos": [
+        "app/admin/page.tsx",
+        "app/api/admin/cargas/route.ts",
+        "app/components/historial-chofer.tsx",
+        "app/components/historial-cliente.tsx",
+        "app/panel-chofer/page.tsx",
+        "app/panel-cliente/page.tsx",
+        "app/publicar/page.tsx",
+        "app/viaje-activo/page.tsx"
+      ],
+      "columnas_leidas": [],
+      "columnas_filtradas": [
+        "carga_id",
+        "id",
+        "orden"
+      ],
+      "columnas_escritas": [
+        "completada_at",
+        "estado"
+      ],
+      "union": [
+        "carga_id",
+        "completada_at",
+        "estado",
+        "id",
+        "orden"
+      ],
+      "select_asterisco_en": [
+        "app/admin/page.tsx",
+        "app/components/historial-chofer.tsx",
+        "app/components/historial-cliente.tsx",
+        "app/panel-chofer/page.tsx",
+        "app/panel-cliente/page.tsx",
+        "app/viaje-activo/page.tsx"
+      ]
+    },
+    "usuarios": {
+      "archivos": [
+        "app/admin/page.tsx",
+        "app/api/admin/billetera/route.ts",
+        "app/api/admin/cargas/estado/route.ts",
+        "app/api/admin/cargas/ocultar/route.ts",
+        "app/api/admin/cargas/route.ts",
+        "app/api/admin/reset-password/route.ts",
+        "app/api/admin/usuarios/[id]/estado/route.ts",
+        "app/api/admin/usuarios/[id]/route.ts",
+        "app/api/admin/usuarios/route.ts",
+        "app/api/auth/login/route.ts",
+        "app/api/cargas/aceptar/route.ts",
+        "app/api/cargas/activa/route.ts",
+        "app/api/cargas/cancelar-chofer/route.ts",
+        "app/api/cargas/cancelar-cliente/route.ts",
+        "app/api/cargas/disponibles/route.ts",
+        "app/api/cargas/estado/route.ts",
+        "app/api/cargas/evidencia/route.ts",
+        "app/api/cargas/gps/route.ts",
+        "app/api/cargas/historial-chofer/route.ts",
+        "app/api/cargas/historial-cliente/route.ts",
+        "app/api/cargas/ocultar-historial/route.ts",
+        "app/api/cargas/publicar/route.ts",
+        "app/api/cargas/republicar/route.ts",
+        "app/api/chat/marcar-leidos/route.ts",
+        "app/api/chat/mensaje/route.ts",
+        "app/api/chat/mensajes-viaje/route.ts",
+        "app/api/chat/mensajes/route.ts",
+        "app/api/chat/no-leidos/route.ts",
+        "app/api/chat/resumen-admin/route.ts",
+        "app/api/chofer/billetera/acreditar/route.ts",
+        "app/api/chofer/billetera/route.ts",
+        "app/api/chofer/documentacion/route.ts",
+        "app/api/chofer/vehiculos/[id]/activo/route.ts",
+        "app/api/chofer/vehiculos/route.ts",
+        "app/api/mercadopago/crear-preferencia/route.ts",
+        "app/api/usuarios/registro-chofer-usuario/route.ts",
+        "app/api/usuarios/registro-cliente/route.ts",
+        "app/components/GestionVehiculosChofer.tsx",
+        "app/components/historial-chofer.tsx",
+        "app/components/historial-cliente.tsx",
+        "app/panel-chofer/page.tsx",
+        "app/panel-cliente/page.tsx",
+        "app/viaje-activo/page.tsx"
+      ],
+      "columnas_leidas": [
+        "bateria_cargando",
+        "bateria_nivel",
+        "categoria_legal",
+        "created_at",
+        "dni",
+        "eliminado",
+        "email",
+        "estado_aprobacion",
+        "estado_doc",
+        "exact",
+        "id",
+        "navegador_preferido",
+        "nombre",
+        "online",
+        "rol",
+        "telefono",
+        "tipo_carroceria",
+        "tipo_vehiculo",
+        "ultima_senal_at",
+        "vehiculo",
+        "vehiculo_activo_id"
+      ],
+      "columnas_filtradas": [
+        "created_at",
+        "eliminado",
+        "email",
+        "id",
+        "rol"
+      ],
+      "columnas_escritas": [
+        "acepta_terminos",
+        "alias_cbu_cvu",
+        "banco_billetera",
+        "bateria_cargando",
+        "bateria_nivel",
+        "capacidad_carga",
+        "categoria_legal",
+        "cnrt_ruta",
+        "cuit_cuil",
+        "dni",
+        "email",
+        "estado_aprobacion",
+        "estado_doc",
+        "estado_validacion",
+        "fecha_aceptacion_terminos",
+        "licencia",
+        "metodo_cobro",
+        "navegador_preferido",
+        "nombre",
+        "online",
+        "password",
+        "patente",
+        "rol",
+        "seguro_carga",
+        "telefono",
+        "tipo_carroceria",
+        "tipo_vehiculo",
+        "titular_cuenta",
+        "ultima_senal_at",
+        "vehiculo",
+        "vehiculo_activo_id",
+        "zona_operativa"
+      ],
+      "union": [
+        "acepta_terminos",
+        "alias_cbu_cvu",
+        "banco_billetera",
+        "bateria_cargando",
+        "bateria_nivel",
+        "capacidad_carga",
+        "categoria_legal",
+        "cnrt_ruta",
+        "created_at",
+        "cuit_cuil",
+        "dni",
+        "eliminado",
+        "email",
+        "estado_aprobacion",
+        "estado_doc",
+        "estado_validacion",
+        "exact",
+        "fecha_aceptacion_terminos",
+        "id",
+        "licencia",
+        "metodo_cobro",
+        "navegador_preferido",
+        "nombre",
+        "online",
+        "password",
+        "patente",
+        "rol",
+        "seguro_carga",
+        "telefono",
+        "tipo_carroceria",
+        "tipo_vehiculo",
+        "titular_cuenta",
+        "ultima_senal_at",
+        "vehiculo",
+        "vehiculo_activo_id",
+        "zona_operativa"
+      ],
+      "select_asterisco_en": [
+        "app/api/auth/login/route.ts"
+      ]
+    },
+    "vehiculos": {
+      "archivos": [
+        "app/api/chofer/vehiculos/[id]/activo/route.ts",
+        "app/api/chofer/vehiculos/[id]/docs/route.ts",
+        "app/api/chofer/vehiculos/[id]/route.ts",
+        "app/api/chofer/vehiculos/route.ts",
+        "app/components/GestionVehiculosChofer.tsx",
+        "app/panel-chofer/page.tsx",
+        "app/panel-cliente/page.tsx"
+      ],
+      "columnas_leidas": [
+        "anio",
+        "chofer_id",
+        "exact",
+        "id",
+        "marca",
+        "modelo",
+        "patente",
+        "tipo_vehiculo"
+      ],
+      "columnas_filtradas": [
+        "chofer_id",
+        "created_at",
+        "id"
+      ],
+      "columnas_escritas": [
+        "activo",
+        "anio",
+        "capacidad_kg",
+        "chofer_id",
+        "estado_validacion",
+        "marca",
+        "modelo",
+        "patente",
+        "seguro_vencimiento",
+        "tipo_vehiculo",
+        "updated_at",
+        "vtv_rto_vencimiento"
+      ],
+      "union": [
+        "activo",
+        "anio",
+        "capacidad_kg",
+        "chofer_id",
+        "created_at",
+        "estado_validacion",
+        "exact",
+        "id",
+        "marca",
+        "modelo",
+        "patente",
+        "seguro_vencimiento",
+        "tipo_vehiculo",
+        "updated_at",
+        "vtv_rto_vencimiento"
+      ],
+      "select_asterisco_en": [
+        "app/components/GestionVehiculosChofer.tsx",
+        "app/panel-chofer/page.tsx"
+      ]
+    },
+    "viaje_evidencias": {
+      "archivos": [
+        "app/admin/page.tsx",
+        "app/api/cargas/evidencia/route.ts"
+      ],
+      "columnas_leidas": [],
+      "columnas_filtradas": [
+        "carga_id",
+        "created_at"
+      ],
+      "columnas_escritas": [
+        "carga_id",
+        "entrego_nombre",
+        "estado_viaje",
+        "evento",
+        "foto_url",
+        "lat",
+        "lng",
+        "nombre_receptor",
+        "observacion",
+        "recibio_nombre",
+        "rol_usuario",
+        "tipo_carga",
+        "tipo_operacion",
+        "usuario_id"
+      ],
+      "union": [
+        "carga_id",
+        "created_at",
+        "entrego_nombre",
+        "estado_viaje",
+        "evento",
+        "foto_url",
+        "lat",
+        "lng",
+        "nombre_receptor",
+        "observacion",
+        "recibio_nombre",
+        "rol_usuario",
+        "tipo_carga",
+        "tipo_operacion",
+        "usuario_id"
+      ],
+      "select_asterisco_en": [
+        "app/admin/page.tsx"
+      ]
+    }
+  },
+  "realtime": [
+    {
+      "archivo": "app/admin/page.tsx",
+      "canal": "admin-realtime"
+    },
+    {
+      "archivo": "app/admin/page.tsx",
+      "tabla": "cargas",
+      "evento": "*",
+      "filtro": null
+    },
+    {
+      "archivo": "app/admin/page.tsx",
+      "tabla": "usuarios",
+      "evento": "*",
+      "filtro": null
+    },
+    {
+      "archivo": "app/admin/page.tsx",
+      "tabla": "paradas_viaje",
+      "evento": "*",
+      "filtro": null
+    },
+    {
+      "archivo": "app/admin/page.tsx",
+      "tabla": "mensajes_viaje",
+      "evento": "*",
+      "filtro": null
+    },
+    {
+      "archivo": "app/hooks/useChatRealtime.ts",
+      "canal": "chat-rt-${viajeId}-${tipoChat}-${usuarioId}"
+    },
+    {
+      "archivo": "app/hooks/useChatRealtime.ts",
+      "tabla": "mensajes_viaje",
+      "evento": "INSERT",
+      "filtro": null
+    },
+    {
+      "archivo": "app/panel-chofer/page.tsx",
+      "canal": "panel-chofer-realtime"
+    },
+    {
+      "archivo": "app/panel-chofer/page.tsx",
+      "tabla": "cargas",
+      "evento": "INSERT",
+      "filtro": null
+    },
+    {
+      "archivo": "app/panel-chofer/page.tsx",
+      "tabla": "cargas",
+      "evento": "UPDATE",
+      "filtro": null
+    },
+    {
+      "archivo": "app/panel-chofer/page.tsx",
+      "tabla": "cargas",
+      "evento": "DELETE",
+      "filtro": null
+    },
+    {
+      "archivo": "app/panel-cliente/page.tsx",
+      "canal": "cliente-rt-${usuario.id}"
+    },
+    {
+      "archivo": "app/panel-cliente/page.tsx",
+      "canal": "cliente-mensajes-${uid}"
+    },
+    {
+      "archivo": "app/panel-cliente/page.tsx",
+      "tabla": "cargas",
+      "evento": "*",
+      "filtro": null
+    },
+    {
+      "archivo": "app/panel-cliente/page.tsx",
+      "tabla": "paradas_viaje",
+      "evento": "*",
+      "filtro": null
+    },
+    {
+      "archivo": "app/panel-cliente/page.tsx",
+      "tabla": "mensajes_viaje",
+      "evento": "INSERT",
+      "filtro": null
+    },
+    {
+      "archivo": "app/viaje-activo/page.tsx",
+      "canal": "viaje-activo-rt-${viajeId}"
+    },
+    {
+      "archivo": "app/viaje-activo/page.tsx",
+      "canal": "viaje-activo-chat-${viajeId}"
+    },
+    {
+      "archivo": "app/viaje-activo/page.tsx",
+      "tabla": "cargas",
+      "evento": "*",
+      "filtro": null
+    },
+    {
+      "archivo": "app/viaje-activo/page.tsx",
+      "tabla": "paradas_viaje",
+      "evento": "*",
+      "filtro": null
+    },
+    {
+      "archivo": "app/viaje-activo/page.tsx",
+      "tabla": "mensajes_viaje",
+      "evento": "INSERT",
+      "filtro": null
+    }
+  ],
+  "buckets_storage": [
+    "documentacion-choferes",
+    "variable:bucket"
+  ],
+  "rpc": []
+}
