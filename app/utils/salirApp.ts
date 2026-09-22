@@ -61,7 +61,7 @@ export async function cerrarSesionYSalir(): Promise<void> {
 
   try {
     const { Capacitor } = await import("@capacitor/core");
-    if (Capacitor.isNativePlatform()) {
+    if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === "android") {
       const { App } = await import("@capacitor/app");
       App.exitApp();
       return;
