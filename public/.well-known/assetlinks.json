@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.tilalogistica.app",
+      "sha256_cert_fingerprints": [
+        "C2:00:BC:7E:5B:3B:54:D1:DE:F1:03:E7:6D:E2:82:95:21:32:AC:77:3F:62:D8:F7:24:81:B9:F7:5D:A3:60:D3"
+      ]
+    }
+  }
+]

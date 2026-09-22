@@ -4,6 +4,7 @@ import "./globals.css";
 import CapacitorBackHandler from "./components/CapacitorBackHandler";
 import ServiceWorkerRegistrar from "./components/ServiceWorkerRegistrar";
 import SalirAppModal from "./components/SalirAppModal";
+import AppUrlOpenHandler from "./components/AppUrlOpenHandler";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -57,6 +58,7 @@ export default function RootLayout({
         <CapacitorBackHandler />
         <ServiceWorkerRegistrar />
         <SalirAppModal />
+        <AppUrlOpenHandler />
         {children}
       </body>
     </html>

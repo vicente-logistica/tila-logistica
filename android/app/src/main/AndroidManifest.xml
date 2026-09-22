@@ -22,6 +22,27 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
+            <!-- Android Verified App Links — retorno de Mercado Pago.
+                 Requiere https://tila-logistica.vercel.app/.well-known/assetlinks.json
+                 firmado con el(los) SHA-256 de este paquete. Hoy solo lista el
+                 fingerprint del keystore DEBUG; cuando exista un build de release
+                 subido a Play Store con Play App Signing habilitado, hay que AGREGAR
+                 ahí el SHA-256 de "App signing key certificate" de Play Console
+                 (no reemplaza al debug, se suman ambos al array). -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="tila-logistica.vercel.app" android:path="/" />
+            </intent-filter>
+
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="tila-logistica.vercel.app" android:path="/panel-cliente" />
+            </intent-filter>
+
         </activity>
 
         <provider

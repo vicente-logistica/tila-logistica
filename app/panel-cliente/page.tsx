@@ -1,7 +1,6 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../lib/supabase";
 import { useProtegerRuta } from "../hooks/useProtegerRuta";
@@ -389,7 +388,6 @@ function SeguimientoViaje({
 // ─── Panel principal ──────────────────────────────────────────────────────────
 export default function PanelClientePage() {
   const { autorizado } = useProtegerRuta("cliente");
-  const router = useRouter();
 
   const [viajes, setViajes]                   = useState<any[]>([]);
   const [paradasPorViaje, setParadasPorViaje] = useState<Record<string, any[]>>({});
@@ -450,30 +448,6 @@ export default function PanelClientePage() {
     }
     if (pago || publicado) window.history.replaceState({}, "", url.toString());
   }, []);
-
-  // Cierre del navegador in-app de Mercado Pago (Browser.open, ver los 3 call-sites
-  // más abajo) — listener ÚNICO y centralizado. Sólo limpia el marcador
-  // tila_mp_checkout_activo y asegura volver a /panel-cliente; nunca toca sesión ni
-  // pago_estado — el resultado real del pago sigue siendo exclusivamente
-  // responsabilidad del webhook + las back_urls (?pago=ok/error/pendiente, arriba).
-  useEffect(() => {
-    let removerListener: (() => void) | null = null;
-    (async () => {
-      try {
-        const { Capacitor } = await import("@capacitor/core");
-        if (!Capacitor.isNativePlatform()) return;
-        const { Browser } = await import("@capacitor/browser");
-        const listener = await Browser.addListener("browserFinished", () => {
-          localStorage.removeItem("tila_mp_checkout_activo");
-          router.replace("/panel-cliente");
-        });
-        removerListener = () => listener.remove();
-      } catch {
-        // No es Capacitor nativo — ignorar silenciosamente
-      }
-    })();
-    return () => { removerListener?.(); };
-  }, [router]);
 
   const audioRef              = useRef<HTMLAudioElement | null>(null);
   const audioDesbloquedoRef   = useRef(false); // true solo después de gesto exitoso del usuario
