@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { supabase } from "../lib/supabase";
 import { useProtegerRuta } from "../hooks/useProtegerRuta";
 import MapaTILA, { ParadaMapa } from "../components/MapaTILA";
+import HudChofer from "../components/HudChofer";
 import ChatAsistencia from "../components/ChatAsistencia";
 import ChatToast from "../components/ChatToast";
 import { registrarEvidenciaApi, estadoAEvento } from "../lib/evidencias";
@@ -1118,6 +1119,12 @@ export default function ViajeActivoPage() {
           onDetenerVoz={onDetenerVozTila}
           panelTopPx={panelTopPx}
           navegacionTilaActiva={navegacionTilaActiva}
+        />
+        <HudChofer
+          velocidadKmh={velocidadGps}
+          bateriaNivel={bateriaNivel}
+          bateriaDisponible={bateriaDisponible}
+          bateriaCargando={bateriaCargando}
         />
       </div>
 
