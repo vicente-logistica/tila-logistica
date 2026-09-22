@@ -1,4 +1,6 @@
-// Aplica el seed de staging (datos.mjs) a un Supabase de STAGING o LOCAL. Idempotente (upsert por id).
+// Aplica el seed de staging (datos.mjs) a un Supabase de STAGING o LOCAL. Idempotente (upsert por id),
+// EXCEPTO consentimientos_legales: esa tabla es append-only (ver upConsentimientosInsertOnly más abajo) —
+// ahí se compara e inserta solo lo faltante, nunca se hace upsert/UPDATE.
 //
 // Uso (por defecto es DRY-RUN: no escribe nada):
 //   TILA_ENTORNO=staging TILA_STAGING_SUPABASE_REF=<ref> \
@@ -84,6 +86,56 @@ const ok = (r, t) => { if (r.error) throw conCausa(t, r.error); };
 const up = async (t, filas, onConflict = "id") => { ok(await sb.from(t).upsert(filas, { onConflict }), t); console.log(`  ✔ ${t}: ${filas.length}`); };
 const codigoCausa = (e) => { let c = hijoDe(e); for (let n = 0; c && n < 4; n++, c = hijoDe(c)) if (typeof c?.code === "string" && c.code) return c.code; return null; };
 
+// consentimientos_legales es append-only (migración 20260922_inmutabilidad_consentimientos_legales.sql):
+// un UPDATE, aunque no cambie ningún valor, dispara el trigger BEFORE UPDATE y aborta la transacción. up()
+// (upsert genérico, usado por todas las demás tablas) NO sirve acá: PostgREST traduce upsert() en
+// INSERT ... ON CONFLICT (id) DO UPDATE SET ..., que SIEMPRE ejecuta el UPDATE sobre cada fila que ya
+// existe — sin importar si los valores entrantes son idénticos a los guardados.
+// Columnas que el seed realmente controla (las únicas que compara; decision/fecha_decision/
+// documento_legal_id/hash_documento/plataforma/tipo_evento/idempotency_key los completa la base con sus
+// defaults o quedan NULL — el fixture de datos.mjs nunca los define, así que no hay nada "esperado" contra
+// qué compararlos).
+const CAMPOS_SEED_CONSENTIMIENTOS = ["usuario_id", "tipo_documento", "version_documento", "fecha_hora", "ip_address", "user_agent", "metodo"];
+// fecha_hora vuelve de la base en un formato de texto distinto al que genera t() en datos.mjs
+// (ej. "...+00:00" vs "...Z"): comparar por valor temporal, no por string literal, para no marcar como
+// "diferente" una fila que en realidad es idéntica.
+const igualCampoConsentimiento = (campo, a, b) => campo === "fecha_hora" ? new Date(a).getTime() === new Date(b).getTime() : String(a) === String(b);
+
+/**
+ * INSERT-only para consentimientos_legales — nunca UPDATE, nunca DELETE, nunca toca el trigger:
+ *   - id no existe todavía          → se inserta.
+ *   - existe e idéntica (los 7 campos de arriba) → no se hace nada (el seed ya está aplicado para esa fila).
+ *   - existe pero AL MENOS UN campo difiere → error explícito; no se inserta ni modifica NADA de este
+ *     bloque (ni siquiera las filas legítimamente faltantes) — mismo criterio "todo o nada ante algo
+ *     inesperado" que ya usa el resto de este script y que usa registrarConsentimiento() en la app.
+ */
+async function upConsentimientosInsertOnly(filas) {
+  const ids = filas.map((f) => f.id);
+  const previas = await sb.from("consentimientos_legales").select(`id,${CAMPOS_SEED_CONSENTIMIENTOS.join(",")}`).in("id", ids);
+  ok(previas, "consentimientos_legales(select previo)");
+
+  const porId = new Map(previas.data.map((f) => [f.id, f]));
+  const faltantes = [];
+  const diferencias = [];
+  for (const fila of filas) {
+    const previa = porId.get(fila.id);
+    if (!previa) { faltantes.push(fila); continue; }
+    const camposDistintos = CAMPOS_SEED_CONSENTIMIENTOS.filter((c) => !igualCampoConsentimiento(c, previa[c], fila[c]));
+    if (camposDistintos.length > 0) diferencias.push({ id: fila.id, campos: camposDistintos });
+  }
+
+  if (diferencias.length > 0) {
+    const detalle = diferencias.map((d) => `id=${d.id} campos=[${d.campos.join(",")}]`).join(" · ");
+    throw conCausa("consentimientos_legales", new Error(
+      `${diferencias.length} fila(s) existente(s) difieren del seed esperado (${detalle}). consentimientos_legales ` +
+      `es append-only: no se corrige con UPDATE. Revisar manualmente — no se insertó ni modificó nada en este bloque.`
+    ));
+  }
+
+  if (faltantes.length > 0) ok(await sb.from("consentimientos_legales").insert(faltantes), "consentimientos_legales");
+  console.log(`  ✔ consentimientos_legales: ${filas.length} (nuevas: ${faltantes.length} · ya existían idénticas: ${filas.length - faltantes.length}; append-only, sin UPDATE)`);
+}
+
 try {
   if (reset) {
     console.log("reset del seed…");
@@ -122,7 +174,7 @@ try {
   await up("mensajes_viaje", mensajes);
   await up("billetera_chofer", billetera);
   await up("viaje_evidencias", evidencias);
-  await up("consentimientos_legales", consent);
+  await upConsentimientosInsertOnly(consent);
   // El seed inserta ids explícitos y NO avanza las secuencias: se informa el MAX(id) real y el paso manual (el ajuste lo hace el SQL 09; este script no puede).
   {
     const an = analizarSecuencias(D, base);
