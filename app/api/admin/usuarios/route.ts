@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
+import { resolverUsuario } from "../../../lib/auth/sesion";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -13,7 +14,7 @@ if (!_roleKey) throw new Error("Falta SUPABASE_SERVICE_ROLE_KEY (admin/usuarios)
 const supabaseAdmin = createClient(_url, _roleKey);
 
 export async function GET(req: Request) {
-  const userId = req.headers.get("x-user-id");
+  const userId = resolverUsuario(req).userId;
   if (!userId) {
     return NextResponse.json({ error: "No autorizado" }, { status: 401 });
   }

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import bcrypt from "bcryptjs";
 import { registrarConsentimiento } from "../../../lib/consentimiento";
+import { setCookieSesion } from "../../../lib/auth/sesion";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -125,7 +126,15 @@ export async function POST(req: Request) {
       );
     }
 
-    return NextResponse.json({ ok: true, usuario: nuevoUsuario }, { status: 201 });
+    const respuesta = NextResponse.json({ ok: true, usuario: nuevoUsuario }, { status: 201 });
+
+    // Sesión firmada de ALCANCE LIMITADO (ADITIVA): el chofer sube su documentación ANTES de poder
+    // iniciar sesión (la cuenta queda pendiente de aprobación). Esta sesión vence en 30 min y solo la
+    // aceptan las rutas de alta/documentación; no sirve para ningún panel. El login normal la reemplaza.
+    // Sin TILA_SESSION_SECRET no se emite nada y la respuesta es idéntica a la anterior.
+    const cookieRegistro = setCookieSesion(req, String(nuevoUsuario.id), { alcance: "registro" });
+    if (cookieRegistro) respuesta.headers.append("Set-Cookie", cookieRegistro);
+    return respuesta;
 
   } catch (error: any) {
     console.error("[registro-chofer-usuario] ❌ error general:", error?.message ?? String(error));

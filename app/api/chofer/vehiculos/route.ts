@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
+import { resolverUsuario } from "../../../lib/auth/sesion";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -14,7 +15,8 @@ const supabaseAdmin = createClient(_url, _roleKey);
 
 export async function POST(req: Request) {
   // ── 1. Verificar caller ────────────────────────────────────────────────────
-  const userId = req.headers.get("x-user-id");
+  // Acepta también la sesión de alcance "registro" (alta de chofer): estas rutas son las únicas que la admiten.
+  const userId = resolverUsuario(req, { permitirAlcanceRegistro: true }).userId;
   if (!userId) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
 
   const { data: usuario } = await supabaseAdmin

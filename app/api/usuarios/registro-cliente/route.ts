@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import bcrypt from "bcryptjs";
 import { registrarConsentimiento } from "../../../lib/consentimiento";
+import { setCookieSesion } from "../../../lib/auth/sesion";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -104,7 +105,14 @@ export async function POST(req: Request) {
     }
 
     // ── 7. Devolver solo datos seguros (sin password ni campos sensibles) ─────
-    return NextResponse.json({ ok: true, usuario: nuevo }, { status: 201 });
+    const respuesta = NextResponse.json({ ok: true, usuario: nuevo }, { status: 201 });
+
+    // Sesión firmada (ADITIVA): el alta de cliente ya es un login implícito en el frontend
+    // (guarda "usuario" y va al panel). Solo se emite si TILA_SESSION_SECRET está configurado;
+    // sin esa variable la respuesta es idéntica a la anterior.
+    const cookieSesion = setCookieSesion(req, String(nuevo.id));
+    if (cookieSesion) respuesta.headers.append("Set-Cookie", cookieSesion);
+    return respuesta;
 
   } catch (error: any) {
     console.error("[registro-cliente] ❌ error general:", error?.message ?? String(error));

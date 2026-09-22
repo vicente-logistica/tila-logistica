@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useProtegerRuta } from "../hooks/useProtegerRuta";
+import { cerrarSesionEnServidor } from "../utils/salirApp";
 
 export default function BilleteraChoferPage() {
   const { autorizado } = useProtegerRuta("chofer");
@@ -116,8 +117,9 @@ export default function BilleteraChoferPage() {
     </div>
 
     <button
-      onClick={() => {
+      onClick={async () => {
         localStorage.clear();
+        await cerrarSesionEnServidor();
         window.location.href = "/login";
       }}
       className="bg-red-700 hover:bg-red-600 border border-red-500 hover:border-red-400 text-white font-black text-sm px-5 py-3 rounded-2xl shadow-xl transition-all duration-200"

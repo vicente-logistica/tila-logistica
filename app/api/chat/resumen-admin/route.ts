@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
+import { resolverUsuario } from "../../../lib/auth/sesion";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -14,7 +15,7 @@ const supabaseAdmin = createClient(_url, _roleKey);
 
 export async function GET(req: Request) {
   // ── 1. Leer x-user-id ────────────────────────────────────────────────────────
-  const userId = req.headers.get("x-user-id");
+  const userId = resolverUsuario(req).userId;
   if (!userId) {
     return NextResponse.json({ error: "No autorizado: falta x-user-id" }, { status: 401 });
   }

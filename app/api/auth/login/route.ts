@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import bcrypt from "bcryptjs";
+import { firmarSesion, cabeceraSetCookie, requestEsHttps } from "../../../lib/auth/sesion";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -124,7 +125,16 @@ export async function POST(req: Request) {
 
     console.log("[auth/login] ✅ login exitoso — user:", usuario.id, "| rol:", usuario.rol, "| hash:", esHash);
 
-    return NextResponse.json({ ok: true, usuario: usuarioSeguro });
+    const respuesta = NextResponse.json({ ok: true, usuario: usuarioSeguro });
+
+    // Sesión firmada (ADITIVA): solo se emite si TILA_SESSION_SECRET está configurado.
+    // Sin esa variable no se agrega nada y la respuesta es idéntica a la anterior.
+    // El frontend y las APIs todavía no la exigen (TILA_AUTH_MODE=legacy por defecto).
+    const tokenSesion = firmarSesion(String(usuario.id));
+    if (tokenSesion) {
+      respuesta.headers.append("Set-Cookie", cabeceraSetCookie(tokenSesion, { secure: requestEsHttps(req) }));
+    }
+    return respuesta;
 
   } catch (error: any) {
     console.error("[auth/login] ❌ error general:", error?.message ?? String(error));
