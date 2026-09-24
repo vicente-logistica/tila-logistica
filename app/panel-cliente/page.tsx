@@ -114,11 +114,20 @@ function SeguimientoViaje({
   const precio   = viaje?.precio_cliente ? Number(viaje.precio_cliente) : null;
   const vLabel   = vehiculoLabel(vehiculoInfo, choferInfo, viaje);
 
-  const paradasParaMapa: ParadaMapa[] = paradas.map(p => ({
-    direccion: p.direccion,
-    tipo:      p.tipo as "retiro" | "entrega" | "parada",
-    estado:    p.estado as "pendiente" | "en_curso" | "completada",
-  }));
+  // Memoizado por CONTENIDO (direccion/tipo/estado), no por la referencia de `paradas` —
+  // el padre (PanelClientePage) reconstruye ese array en cada cargarViajes() aunque las
+  // paradas reales no hayan cambiado (viaje re-creado por Realtime/polling), lo que antes
+  // reconstruía este array — y re-renderizaba todo lo que lo usa, incluido MapaTILA — en
+  // cada ping de GPS del chofer. Con esta clave, solo se reconstruye cuando alguno de los
+  // tres campos que en verdad importan cambió.
+  const paradasParaMapa: ParadaMapa[] = useMemo(
+    () => paradas.map(p => ({
+      direccion: p.direccion,
+      tipo:      p.tipo as "retiro" | "entrega" | "parada",
+      estado:    p.estado as "pendiente" | "en_curso" | "completada",
+    })),
+    [JSON.stringify(paradas.map(p => [p.direccion, p.tipo, p.estado]))]
+  );
 
   // Altura mapa = total - header(56px) - bottom(140px)
   const alturaMapaStr = "calc(100dvh - 196px)";
@@ -455,6 +464,22 @@ export default function PanelClientePage() {
   const ultimoEstadoRef       = useRef<Record<string, string>>({});
   const primeraVezRef         = useRef(true);  // evita falsos positivos en la primera carga
   const festejoClienteRef     = useRef<Set<string>>(new Set()); // IDs ya celebrados — evita repetir por polling
+  // Deduplicación de cargarViajes(): Realtime (cada ping de GPS del chofer sobre `cargas`,
+  // más cualquier cambio de `paradas_viaje`) y el polling de 5s de respaldo llaman a la
+  // MISMA función sin coordinarse entre sí — cuando un evento de Realtime cae cerca de un
+  // tick del polling, corrían dos fetches completos casi seguidos (dos veces
+  // /api/cargas/historial-cliente + dos reconstrucciones de `viajes`). Ninguno de los dos
+  // disparadores se elimina: ambos siguen llamando a cargarViajesCoalescido más abajo, que
+  // solo colapsa las llamadas que caen pegadas en el tiempo (ver esa función para la
+  // justificación de la ventana) — nunca las que llegan separadas por el tiempo normal
+  // entre pings de GPS. cargarViajesPendienteRef: si una señal nueva llega mientras YA hay
+  // un fetch en vuelo, no se descarta sin más — queda marcada para dispararse UNA vez
+  // apenas termine ese fetch (ver ejecutarCargaDeViajes), así un cambio de estado real
+  // (viaje/parada) que coincida con un fetch en curso no queda esperando hasta el próximo
+  // tick del polling (hasta 5s después).
+  const cargarViajesEnCursoRef   = useRef(false);
+  const ultimaCargaViajesTsRef   = useRef(0);
+  const cargarViajesPendienteRef = useRef(false);
   const [festejoViaje, setFestejoViaje] = useState<any>(null); // viaje que disparó el festejo del cliente
 
   const usuario = useMemo(() => {
@@ -586,16 +611,76 @@ export default function PanelClientePage() {
     setCargando(false);
   };
 
+  // cargarViajes se redefine entera en cada render (no está en useCallback) — guardar la
+  // versión VIGENTE en un ref (reasignado en cada render, ver el useEffect sin deps de
+  // abajo) es lo que le permite a cargarViajesCoalescido/ejecutarCargaDeViajes quedar
+  // memoizadas con useCallback([]) SIN capturar una versión stale: nunca llaman a
+  // `cargarViajes` directo, siempre a `cargarViajesRef.current()`, que en el momento de
+  // ejecutarse (siempre asíncrono — Realtime, setInterval o el .finally de otro fetch) ya
+  // apunta a la del último render. Auditado además que, hoy, cargarViajes en sí solo lee
+  // por closure: `usuario` (useMemo con deps [], constante tras el primer render), los
+  // setters de useState (React garantiza que son estables) y refs (.current siempre se lee
+  // en el momento de ejecutar, nunca queda desactualizado) — o sea que ni siquiera hoy
+  // había un stale closure real, pero el ref elimina la dependencia de que eso siga siendo
+  // cierto si `cargarViajes` cambia en el futuro.
+  const cargarViajesRef = useRef(cargarViajes);
+  useEffect(() => { cargarViajesRef.current = cargarViajes; });
+
+  // Ventana de coalescencia: 300ms (antes 1200ms — ver por qué se corrigió). El único
+  // solapamiento real que hay que colapsar es Realtime y el tick del polling de 5s
+  // disparándose casi en el mismo instante (jitter de red/event-loop: siempre de un puñado
+  // de milisegundos, nunca de segundos) — 300ms le da un margen amplio a eso. 1200ms era
+  // 4x más ancho de lo necesario para ese caso puntual y, como efecto secundario NO
+  // buscado, con pings de GPS a ~1/seg (watchPosition) terminaba descartando de a uno:
+  // t=0 ejecuta, t≈1s se descarta (1000ms < 1200ms), t≈2s ejecuta — la cadencia visible
+  // real quedaba en ~1 actualización cada 2s, la mitad de la frecuencia real del GPS, sin
+  // que nadie lo hubiera pedido. Con 300ms, dos pings reales separados por ~1000ms (el caso
+  // normal) SIEMPRE superan la ventana y se ejecutan los dos — no se pierde ninguna
+  // actualización de posición legítima; solo colapsa duplicados que llegan pegados.
+  const VENTANA_COALESCENCIA_CARGAR_VIAJES_MS = 300;
+
+  const ejecutarCargaDeViajes = useCallback(() => {
+    cargarViajesEnCursoRef.current = true;
+    ultimaCargaViajesTsRef.current = Date.now();
+    cargarViajesRef.current().finally(() => {
+      cargarViajesEnCursoRef.current = false;
+      if (cargarViajesPendienteRef.current) {
+        // Llegó (al menos) una señal nueva MIENTRAS este fetch estaba en vuelo — no se
+        // perdió: se refleja con una única recarga más, no con una tormenta (el flag es
+        // un booleano, no un contador; varias señales durante el mismo fetch en vuelo
+        // colapsan igual en UNA sola recarga de más).
+        cargarViajesPendienteRef.current = false;
+        ejecutarCargaDeViajes();
+      }
+    });
+  }, []);
+
+  const cargarViajesCoalescido = useCallback(() => {
+    if (cargarViajesEnCursoRef.current) {
+      // No se descarta: se marca para dispararse una vez apenas termine el fetch en
+      // vuelo — así un cambio de estado real que coincida con un fetch en curso no queda
+      // esperando hasta el próximo tick del polling (hasta 5s después).
+      cargarViajesPendienteRef.current = true;
+      return;
+    }
+    if (Date.now() - ultimaCargaViajesTsRef.current < VENTANA_COALESCENCIA_CARGAR_VIAJES_MS) {
+      // Duplicado casi simultáneo de un fetch que YA terminó hace instantes: sin acción,
+      // esos datos frescos ya reflejan este mismo cambio — no hace falta reprogramar nada.
+      return;
+    }
+    ejecutarCargaDeViajes();
+  }, [ejecutarCargaDeViajes]);
+
   useEffect(() => {
-    cargarViajes();
+    cargarViajesCoalescido();
     if (!usuario?.id) return;
     const canal = supabase.channel(`cliente-rt-${usuario.id}`)
-      .on("postgres_changes", { event: "*", schema: "public", table: "cargas", filter: `cliente_id=eq.${usuario.id}` }, () => cargarViajes())
-      .on("postgres_changes", { event: "*", schema: "public", table: "paradas_viaje" }, () => cargarViajes())
+      .on("postgres_changes", { event: "*", schema: "public", table: "cargas", filter: `cliente_id=eq.${usuario.id}` }, () => cargarViajesCoalescido())
+      .on("postgres_changes", { event: "*", schema: "public", table: "paradas_viaje" }, () => cargarViajesCoalescido())
       .subscribe();
-    const tick = setInterval(cargarViajes, 5000);
+    const tick = setInterval(cargarViajesCoalescido, 5000);
     return () => { supabase.removeChannel(canal); clearInterval(tick); };
-  }, [usuario?.id]);
+  }, [usuario?.id, cargarViajesCoalescido]);
 
   // ── No leídos: un único detector por viaje, sin efecto separado de "carga inicial" ──
   // (fusiona los dos efectos previos — evita la carrera entre "baseline" y "sonido"
