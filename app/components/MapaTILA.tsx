@@ -2845,7 +2845,16 @@ export default function MapaTILA({
         origenResuelto ?? `${origen}, Argentina`;
       const destinoFinal = paradaActivaDireccion ?? destino;
 
-      calcularRuta("simple", false, originParam, destinoFinal, [], fallback);
+      // Cuando el origen real de la ruta es el GPS del chofer (no `origen` geocodificado),
+      // `origen` (retiro, A) pasa a ser un waypoint intermedio — así la línea dibujada
+      // representa el recorrido completo GPS → A → B, no un salto directo de GPS a B. Sin
+      // GPS, originParam YA ES `origen`; agregarlo también como waypoint sería un punto
+      // duplicado, así que ese caso sigue sin waypoints, como antes. El marker A (que
+      // depende de origenCoords, no de este waypoint) no se toca.
+      const waypoints: google.maps.DirectionsWaypoint[] =
+        (lat && lng) ? [{ location: `${origen}, Argentina`, stopover: true }] : [];
+
+      calcularRuta("simple", false, originParam, destinoFinal, waypoints, fallback);
     };
 
     if (!origenResuelto) {
