@@ -2883,7 +2883,25 @@ export default function MapaTILA({
         if (lat && lng) fallback.push({ lat, lng });
         validos.forEach(v => fallback.push(v));
 
-        calcularRuta("multietapa-inicial", false, origin, destination, waypoints, fallback);
+        // Cuando Directions responde OK, sus propias coordenadas (start/end_location de
+        // cada leg) pasan a ser la fuente de los markers A/B/C/… — más confiables que un
+        // Geocoder aparte: si Directions dibujó la ruta empezando en A, esa MISMA
+        // coordenada es la que usa el marker de A, así nunca pueden desalinearse entre sí.
+        // El geocoding de arriba (con reintento) queda como FALLBACK: es lo que ya se
+        // pintó mientras Directions todavía no respondía, y sigue siendo lo único
+        // disponible si Directions falla o si por algún motivo no trae la cantidad de
+        // legs esperada (N paradas → N-1 legs; cualquier otra cosa se descarta, no se
+        // fuerza un armado parcial/desalineado).
+        calcularRuta("multietapa-inicial", false, origin, destination, waypoints, fallback, (result) => {
+          if (estaCancelado()) return;
+          const legs = result.routes?.[0]?.legs ?? [];
+          if (legs.length + 1 !== listaParadas.length) return;
+          const desdeDirections: google.maps.LatLngLiteral[] = [
+            { lat: legs[0].start_location.lat(), lng: legs[0].start_location.lng() },
+            ...legs.map(leg => ({ lat: leg.end_location.lat(), lng: leg.end_location.lng() })),
+          ];
+          setParadasCoords(desdeDirections);
+        });
         return;
       }
       geocodificarConReintento(listaParadas[index].direccion, (result) => {
