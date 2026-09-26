@@ -2332,6 +2332,55 @@ export default function MapaTILA({
     []
   );
 
+  // ─── Geocodificar CON reintento — acotado al mapa de sólo lectura/multietapa del
+  // cliente (ver el efecto "MODO MULTIETAPA sólo lectura" más abajo). NO reemplaza a
+  // geocodificar() de arriba: modoNavegacion y el resto de los modos siguen usando esa,
+  // sin cambios de comportamiento.
+  // Reintenta ÚNICAMENTE ante errores TRANSITORIOS del Geocoder: OVER_QUERY_LIMIT (límite
+  // de tasa no documentado de la API ante pedidos pegados en el tiempo — la causa real de
+  // que una parada desapareciera al azar) y UNKNOWN_ERROR (falla de red/servidor
+  // transitoria). Nunca reintenta ZERO_RESULTS/INVALID_REQUEST/etc — esos son errores
+  // PERMANENTES (la dirección está mal escrita o no existe): reintentar no cambia nada,
+  // sólo demora un resultado que ya sabemos que va a fallar. Máximo 2 reintentos (3
+  // intentos en total, REINTENTOS_GEOCODE_MS.length), con backoff corto entre ellos —
+  // separa los pedidos en el tiempo para no volver a pisar el mismo límite de tasa que
+  // causó el primer fallo. `estaCancelado()` corta cualquier reintento programado si el
+  // efecto que llamó a esto ya se desmontó o volvió a correr — nunca hace callback (y por
+  // lo tanto nunca un setState) sobre un resultado que a nadie le importa ya.
+  const REINTENTOS_GEOCODE_MS = [350, 800];
+  const geocodificarConReintento = useCallback(
+    (
+      direccion: string,
+      callback: (coords: google.maps.LatLngLiteral | null) => void,
+      estaCancelado: () => boolean,
+      intento = 0
+    ) => {
+      if (estaCancelado()) return;
+      if (!geocoderRef.current) { callback(null); return; }
+      geocoderRef.current.geocode(
+        { address: `${direccion}, Argentina` },
+        (results, status) => {
+          if (estaCancelado()) return;
+          if (status === "OK" && results?.[0]) {
+            const loc = results[0].geometry.location;
+            callback({ lat: loc.lat(), lng: loc.lng() });
+            return;
+          }
+          const transitorio = status === "OVER_QUERY_LIMIT" || status === "UNKNOWN_ERROR";
+          if (transitorio && intento < REINTENTOS_GEOCODE_MS.length) {
+            setTimeout(() => {
+              if (estaCancelado()) return;
+              geocodificarConReintento(direccion, callback, estaCancelado, intento + 1);
+            }, REINTENTOS_GEOCODE_MS[intento]);
+            return;
+          }
+          callback(null); // error permanente, o ya se agotaron los reintentos: termina limpio
+        }
+      );
+    },
+    []
+  );
+
   // ─── Encuadrar usando las coordenadas que ya trae Directions ──────────────
   // Evita depender del Geocoding API (puede estar deshabilitado en el proyecto de Google
   // Cloud) para el encuadre inicial: Directions ya resuelve origen/paradas/destino como
@@ -2783,6 +2832,19 @@ export default function MapaTILA({
   // En modoNavegacion (Viaje Activo) este efecto NO corre — lo reemplazan los dos
   // efectos dedicados de más abajo, que usan la posición real del chofer como
   // origen y recalculan cuando corresponde (no una única vez al montar).
+  //
+  // Geocodifica las paradas SECUENCIALMENTE (una a la vez, con sus reintentos incluidos,
+  // recién arranca la siguiente cuando la anterior terminó) — a propósito, para no
+  // disparar varios pedidos al Geocoder en el mismo instante: esa ráfaga simultánea era
+  // lo que ocasionalmente pisaba el límite de tasa (OVER_QUERY_LIMIT) y hacía desaparecer
+  // una parada al azar. El orden de `paradas` (índice 0 = A, 1 = B, 2 = C…) se conserva
+  // siempre: cada resultado se escribe en coords[index], nunca por orden de llegada.
+  // NO filtra por `estado` — a diferencia del efecto de modoNavegacion (que sólo muestra
+  // el tramo pendiente), acá A/B/C/… siguen representando el recorrido completo mientras
+  // haya paradas, estén completadas o no (así lo pide panel-cliente).
+  // `cancelado`: se pone en true en el cleanup — si el efecto vuelve a correr (paradas
+  // realmente cambiaron) o el componente se desmonta a mitad de una cadena de reintentos,
+  // ningún callback/timeout pendiente de la corrida VIEJA llega a tocar el estado.
   useEffect(() => {
     if (!isLoaded || !tieneParadas || modoMultiChofer || modoNavegacion) return;
     if (!geocoderRef.current) geocoderRef.current = new google.maps.Geocoder();
@@ -2791,36 +2853,48 @@ export default function MapaTILA({
     setDirections(null);
     setPolylinePuntos([]);
 
-    const coords: (google.maps.LatLngLiteral | null)[] = new Array(paradas!.length).fill(null);
-    let pendientes = paradas!.length;
+    let cancelado = false;
+    const estaCancelado = () => cancelado;
 
-    paradas!.forEach((parada, index) => {
-      geocodificar(parada.direccion, (result) => {
+    const listaParadas = paradas!;
+    const coords: (google.maps.LatLngLiteral | null)[] = new Array(listaParadas.length).fill(null);
+
+    const geocodificarSiguiente = (index: number) => {
+      if (estaCancelado()) return;
+      if (index >= listaParadas.length) {
+        setParadasCoords([...coords]);
+        const validos = coords.filter(Boolean) as google.maps.LatLngLiteral[];
+        if (lat && lng) validos.unshift({ lat, lng });
+        // El encuadre "real" lo hace encuadrarDesdeRuta() cuando Directions responda;
+        // validos sólo se usa para armar el fallback si Directions falla.
+
+        // Directions SIN CAMBIOS respecto de antes: A = origin, última parada =
+        // destination, el resto = waypoints en orden — con 2, 3, 4+ paradas por igual.
+        // El GPS del camión sigue sin entrar acá (no se recalcula ruta por cada ping).
+        const origin      = `${listaParadas[0].direccion}, Argentina`;
+        const destination = listaParadas[listaParadas.length - 1].direccion;
+        const waypoints    = listaParadas.slice(1, -1).map(p => ({
+          location: `${p.direccion}, Argentina`,
+          stopover: true,
+        }));
+
+        // fallback = todos los puntos geocodificados en orden
+        const fallback: google.maps.LatLngLiteral[] = [];
+        if (lat && lng) fallback.push({ lat, lng });
+        validos.forEach(v => fallback.push(v));
+
+        calcularRuta("multietapa-inicial", false, origin, destination, waypoints, fallback);
+        return;
+      }
+      geocodificarConReintento(listaParadas[index].direccion, (result) => {
+        if (estaCancelado()) return;
         coords[index] = result;
-        pendientes--;
-        if (pendientes === 0) {
-          setParadasCoords([...coords]);
-          const validos = coords.filter(Boolean) as google.maps.LatLngLiteral[];
-          if (lat && lng) validos.unshift({ lat, lng });
-          // El encuadre "real" lo hace encuadrarDesdeRuta() cuando Directions responda;
-          // validos sólo se usa para armar el fallback si Directions falla.
+        geocodificarSiguiente(index + 1);
+      }, estaCancelado);
+    };
+    geocodificarSiguiente(0);
 
-          const origin      = `${paradas![0].direccion}, Argentina`;
-          const destination = paradas![paradas!.length - 1].direccion;
-          const waypoints   = paradas!.slice(1, -1).map(p => ({
-            location: `${p.direccion}, Argentina`,
-            stopover: true,
-          }));
-
-          // fallback = todos los puntos geocodificados en orden
-          const fallback: google.maps.LatLngLiteral[] = [];
-          if (lat && lng) fallback.push({ lat, lng });
-          validos.forEach(v => fallback.push(v));
-
-          calcularRuta("multietapa-inicial", false, origin, destination, waypoints, fallback);
-        }
-      });
-    });
+    return () => { cancelado = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isLoaded, tieneParadas, modoMultiChofer, JSON.stringify(paradas?.map(p => p.direccion))]);
 
@@ -4425,9 +4499,18 @@ export default function MapaTILA({
           no multi-chofer). Único botón: alterna entre "siguiendo" (relleno) y "pausado"
           (tocar para volver a centrar en el chofer), mismo lenguaje visual que el botón
           📍 de modoNavegacion. Reactivar el seguimiento es SIEMPRE una acción explícita
-          del cliente — nunca un timeout — para no quitarle el control mientras mira. */}
+          del cliente — nunca un timeout — para no quitarle el control mientras mira.
+          Esquina inferior IZQUIERDA, ELEVADA (bottom-16, no bottom-3): zoomControl
+          (arriba, sin zoomControlOptions.position propio en este archivo) usa la posición
+          default de la API de Google Maps, que en este modo cae en la esquina inferior
+          DERECHA (+/- tapados si nuestro botón estaba ahí). El lado izquierdo evita el
+          zoom, pero pegado al borde (bottom-3) coincidía con la franja donde Google
+          dibuja su logo/atribución/enlace "Términos" — bottom-16 lo levanta por encima
+          de esa franja, sin invadir el panel inferior de viaje-activo (este botón ni
+          siquiera se renderiza ahí: modoNavegacion=true en esa pantalla). No se toca
+          ningún control nativo de Google; se reubica únicamente el nuestro. */}
       {!modoNavegacion && !modoMultiChofer && lat != null && lng != null && (
-        <div className="absolute right-3 bottom-3 z-20">
+        <div className="absolute left-3 bottom-16 z-20">
           <button
             type="button"
             onClick={volverASeguirChofer}
