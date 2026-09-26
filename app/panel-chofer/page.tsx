@@ -9,6 +9,7 @@ import MapaTILA, { ParadaMapa, ResumenRuta } from "../components/MapaTILA";
 import GestionVehiculosChofer from "../components/GestionVehiculosChofer";
 import { labelVehiculo, VehiculoRow } from "../lib/vehiculos";
 import { evaluarChoferOnline } from "../lib/validacion-chofer";
+import { useCargasCercanas } from "../hooks/useCargasCercanas";
 
 const LABELS = ["A", "B", "C", "D", "E", "F"];
 const SOPORTE_WHATSAPP = "5491158689383";
@@ -56,6 +57,14 @@ export default function PanelChoferPage() {
   const [mostrarConfigNav, setMostrarConfigNav] = useState(false);
   const [navegadorPreferido, setNavegadorPreferido] = useState<string | null>(null);
   const [guardandoNav, setGuardandoNav] = useState(false);
+
+  // ─── Cercanía al punto A (radio 35/50km) ───────────────────────────────────
+  // Capa DERIVADA sobre `cargas` — cargarCargas() (hash, alarma, polling, filtro por
+  // tipo de vehículo) sigue exactamente igual, sin ningún cambio. cargasCercanas es lo
+  // único que se usa para decidir qué se muestra/acepta/rechaza en el listado; ver
+  // useCargasCercanas para el fallback si no hay GPS o el cálculo falla por completo.
+  const { cargasVisibles: cargasCercanas, distancias: distanciasCercanas } =
+    useCargasCercanas(cargas, online, choferId ?? undefined);
 
   // ─── Refs estables — no causan re-renders ─────────────────────────────────
   const audioRef          = useRef<HTMLAudioElement | null>(null);
@@ -568,23 +577,26 @@ export default function PanelChoferPage() {
 
   // ─── Rechazar ────────────────────────────────────────────────────────────
   const rechazarViaje = () => {
-    console.log("DEBUG_RECHAZAR_ENTRY", { online, viajeActivoId: viajeActivo?.id ?? null, cargaRechazadaId: cargas[indice]?.id ?? null, cargasLength: cargas.length, indice, idsActuales: cargas.map((c) => c.id) });
+    // A partir de acá, todo lo que decide "cuántos hay"/"cuál sigue" usa cargasCercanas
+    // (ya filtrada por radio), NO `cargas` cruda — así `indice` nunca queda apuntando a
+    // una carga distinta de la que el chofer realmente está viendo en pantalla.
+    console.log("DEBUG_RECHAZAR_ENTRY", { online, viajeActivoId: viajeActivo?.id ?? null, cargaRechazadaId: cargasCercanas[indice]?.id ?? null, cargasLength: cargasCercanas.length, indice, idsActuales: cargasCercanas.map((c) => c.id) });
     detenerAlarmaViaje("rechazarViaje:entrada");
     setMostrarMapa(false);
     rechazosConsecutivosRef.current += 1;
     const siguiente = indice + 1;
-    console.log("[RECHAZAR] viaje rechazado", { indice, total: cargas.length, rechazos: rechazosConsecutivosRef.current });
+    console.log("[RECHAZAR] viaje rechazado", { indice, total: cargasCercanas.length, rechazos: rechazosConsecutivosRef.current });
 
     if (rechazosConsecutivosRef.current >= 3) {
       // 3 rechazos consecutivos — silenciar hasta nueva novedad real (INSERT) o que el chofer vuelva a ONLINE
       console.log("[RECHAZAR] 3 rechazos consecutivos — silenciando alarma");
       silenciadoRef.current = true;
       setIndice(0); // volver al primero sin alarma (viajes siguen visibles)
-    } else if (siguiente < cargas.length) {
+    } else if (siguiente < cargasCercanas.length) {
       // Hay más viajes disponibles y no llegamos al límite — alarmar para el siguiente
       console.log("[RECHAZAR] siguiente viaje:", siguiente);
       setIndice(siguiente);
-      setTimeout(() => iniciarAlarmaViaje("rechazar:siguiente-viaje", [String(cargas[siguiente]?.id)]), 300);
+      setTimeout(() => iniciarAlarmaViaje("rechazar:siguiente-viaje", [String(cargasCercanas[siguiente]?.id)]), 300);
     } else {
       // Sin más viajes en la lista local — recargar
       console.log("[RECHAZAR] sin más viajes — limpiando y recargando");
@@ -593,7 +605,7 @@ export default function PanelChoferPage() {
       cargasHashRef.current = "";
       cargarCargasRef.current("rechazar:sin-mas-viajes");
     }
-    console.log("DEBUG_RECHAZAR_EXIT", { online, viajeActivoId: viajeActivo?.id ?? null, cargasLength: cargas.length, indice, idsActuales: cargas.map((c) => c.id) });
+    console.log("DEBUG_RECHAZAR_EXIT", { online, viajeActivoId: viajeActivo?.id ?? null, cargasLength: cargasCercanas.length, indice, idsActuales: cargasCercanas.map((c) => c.id) });
   };
 
   // ─── Aceptar ─────────────────────────────────────────────────────────────
@@ -605,7 +617,7 @@ export default function PanelChoferPage() {
       alert("Completá vehículo y documentación antes de aceptar viajes");
       return;
     }
-    const carga = cargas[indice];
+    const carga = cargasCercanas[indice]; // misma fuente que cargaActual/rechazarViaje — nunca acepta una carga distinta de la que se ve en pantalla
     if (!carga?.id) return;
     detenerAlarmaViaje("aceptarViaje:entrada");
     rechazosConsecutivosRef.current = 0;
@@ -657,13 +669,14 @@ export default function PanelChoferPage() {
     return "📍 Parada intermedia";
   };
 
-  const cargaActual    = online ? cargas[indice] : null;
+  const cargaActual    = online ? cargasCercanas[indice] : null;
   const paradasActuales = cargaActual ? (paradasPorCarga[String(cargaActual.id)] || []) : [];
+  const distanciaActual = cargaActual ? distanciasCercanas[cargaActual.id] : undefined;
 
   console.log("DEBUG_RENDER", {
     online,
     viajeActivoId: viajeActivo?.id ?? null,
-    cargasLength: cargas.length,
+    cargasLength: cargasCercanas.length,
     indice,
     cargaActualId: cargaActual?.id ?? null,
     necesitaDesbloqueo,
@@ -1022,7 +1035,25 @@ export default function PanelChoferPage() {
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-lg md:text-2xl mb-6 text-left">
                 <p>🚛 <strong>Vehículo:</strong> {cargaActual.vehiculo || "Sin dato"}</p>
-                <p>📍 <strong>Distancia:</strong> {cargaActual.km_estimados ? `${cargaActual.km_estimados} km` : "Sin calcular"}</p>
+                {/* Distancia personalizada (GPS del chofer → A → B, vía Directions) — ver
+                    useCargasCercanas/api/chofer/distancias-cercanas. Fallback al valor
+                    estático de siempre (km_estimados) si todavía no hay GPS, o si el
+                    cálculo para ESTA carga puntual falló (nunca se inventa un km). */}
+                <div className="md:col-span-2 text-base md:text-lg">
+                  {distanciaActual?.estado === "ok" ? (
+                    <>
+                      <p>📍 <strong>Hasta la carga:</strong> {distanciaActual.hastaCargaTexto}
+                        {distanciaActual.duracionHastaCargaTexto ? ` · ⏱️ ${distanciaActual.duracionHastaCargaTexto}` : ""}
+                      </p>
+                      {distanciaActual.recorridoCargaTexto && (
+                        <p>🚚 <strong>Carga → entrega:</strong> {distanciaActual.recorridoCargaTexto}</p>
+                      )}
+                      <p className="text-yellow-400 font-black">🛣️ Total: {distanciaActual.totalTexto}</p>
+                    </>
+                  ) : (
+                    <p>📍 <strong>Distancia:</strong> {cargaActual.km_estimados ? `${cargaActual.km_estimados} km` : "Sin calcular"}</p>
+                  )}
+                </div>
                 <p>⚖️ <strong>Peso:</strong> {cargaActual.peso || "Sin dato"}</p>
                 <p>💰 <strong>Ganancia chofer:</strong> ${Number(cargaActual.pago_chofer || 0).toLocaleString()}</p>
                 <p>📦 <strong>Tipo:</strong> {cargaActual.tipo_carga || "Sin dato"}</p>
@@ -1093,7 +1124,7 @@ export default function PanelChoferPage() {
               </button>
               {bloquesSoporte}
               <div className="mt-5 flex justify-center"><BotonCerrarSesion /></div>
-              <p className="text-zinc-500 text-center mt-6">Viaje {indice + 1} de {cargas.length}</p>
+              <p className="text-zinc-500 text-center mt-6">Viaje {indice + 1} de {cargasCercanas.length}</p>
             </section>
           )}
         </div>
