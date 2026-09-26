@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../lib/supabase";
 import { useProtegerRuta } from "../hooks/useProtegerRuta";
-import MapaTILA from "../components/MapaTILA";
+import MapaTILA, { ResumenRuta } from "../components/MapaTILA";
 import ChatAsistencia from "../components/ChatAsistencia";
 import ChatToast from "../components/ChatToast";
 import BotonCerrarSesion from "../components/BotonCerrarSesion";
@@ -113,6 +113,13 @@ function SeguimientoViaje({
   const tieneGps = viaje?.lat != null && viaje?.lng != null;
   const precio   = viaje?.precio_cliente ? Number(viaje.precio_cliente) : null;
   const vLabel   = vehiculoLabel(vehiculoInfo, choferInfo, viaje);
+  // Distancia vial restante REAL (GPS del chofer → retiro → entrega), calculada por
+  // Directions — suma de TODOS los legs (result.routes[0].legs), nunca distancia lineal
+  // ni una re-geocodificación aparte. Se recibe vía onResumenRuta (mecanismo ya existente
+  // en MapaTILA, hasta ahora sólo conectado a mostrarRutaDesdeChofer) — null mientras
+  // Directions todavía no respondió, o si no hay GPS (en ese caso MapaTILA ni siquiera
+  // llama a este callback: ver informarResumenRuta, legs.length < 2).
+  const [resumenRuta, setResumenRuta] = useState<ResumenRuta | null>(null);
 
   const paradasParaMapa: ParadaMapa[] = paradas.map(p => ({
     direccion: p.direccion,
@@ -151,6 +158,7 @@ function SeguimientoViaje({
             origen={viaje.origen} destino={viaje.destino}
             soloLectura={true} altura={alturaMapaStr}
             paradas={paradasParaMapa.length >= 2 ? paradasParaMapa : undefined}
+            onResumenRuta={setResumenRuta}
           />
         ) : viaje.origen && viaje.destino ? (
           <MapaTILA
@@ -179,6 +187,13 @@ function SeguimientoViaje({
               )}
               <span className="text-zinc-400">{relativo(choferInfo.ultima_senal_at)}</span>
             </div>
+            {/* Distancia vial restante real (GPS → retiro → entrega), suma de los legs de
+                Directions — no es viaje.km_estimados (ese es fijo, calculado al publicar). */}
+            {resumenRuta && (
+              <p className="text-zinc-400 text-[11px] mt-0.5">
+                🛣️ {resumenRuta.total.distanciaTexto} restantes
+              </p>
+            )}
           </div>
         )}
 
