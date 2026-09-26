@@ -2859,6 +2859,14 @@ export default function MapaTILA({
       });
     } else {
       setDiagnostico(d => ({ ...d, geocodingOrigen: "GPS" }));
+      // El origen de Directions/seguimiento sigue siendo el GPS real (origenResuelto,
+      // SIN cambios acá abajo) — este geocode es EXCLUSIVAMENTE para la posición visual
+      // del marker A, que depende de origenCoords (nunca de origenResuelto/GPS). A
+      // propósito NO participa de `pendientes`/intentarRuta: no debe demorar ni afectar
+      // el cálculo de la ruta, que ya arranca con el GPS disponible de inmediato.
+      geocodificar(origen, (coords) => {
+        if (coords) setOrigenCoords(coords);
+      });
     }
 
     pendientes++;
