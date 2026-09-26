@@ -1505,14 +1505,21 @@ export default function MapaTILA({
   const directionsServiceRef = useRef<google.maps.DirectionsService | null>(null);
 
   // ─── Control de cámara en modoNavegacion ──────────────────────────────────
-  // siguiendoChoferRef: false por defecto — el usuario tiene control total apenas se muestra
-  // la ruta inicial. Sólo pasa a true cuando el usuario presiona "Mi ubicación".
+  // siguiendoChoferRef: false por defecto EN modoNavegacion — el usuario tiene control total
+  // apenas se muestra la ruta inicial. Sólo pasa a true cuando el usuario presiona "Mi ubicación".
+  // Fuera de modoNavegacion (mapa de sólo lectura del cliente siguiendo al chofer) arranca en
+  // true: hoy ya sigue al chofer automáticamente sin ningún botón previo, y el objetivo es
+  // preservar ese comportamiento por defecto — sólo pasa a false cuando el cliente interactúa
+  // manualmente con el mapa (ver el bloque de listeners en onMapLoad y el botón "Volver a
+  // seguir al chofer" más abajo). modoMultiChofer no usa este ref en absoluto (su efecto de
+  // animación ni siquiera corre — ver el early return por modoMultiChofer más abajo), así que
+  // el valor por defecto le es indiferente.
   // encuadreInicialHechoRef: garantiza que el fitBounds/setCenter automático de arranque en
   // modoNavegacion ocurra UNA sola vez. Después de eso, ningún efecto vuelve a mover la cámara
   // por su cuenta — sólo los botones explícitos ("Mi ubicación", "Ver recorrido completo").
   // programaticoRef: true mientras el propio componente mueve la cámara por código, para no
   // confundir esos movimientos con una interacción real del usuario en zoom_changed.
-  const siguiendoChoferRef   = useRef(false);
+  const siguiendoChoferRef   = useRef(!modoNavegacion);
   const encuadreInicialHechoRef = useRef(false);
   const programaticoRef      = useRef(false);
   // Guarda el id del timeout que libera programaticoRef, para poder cancelarlo si
@@ -1625,7 +1632,7 @@ export default function MapaTILA({
   // pueda pintarse distinto según el seguimiento esté activo o pausado. La lógica de
   // cámara sigue leyendo el ref (rápido, síncrono, sin depender del ciclo de render);
   // este setState sólo se dispara cuando el valor realmente cambia, no en cada tick de GPS.
-  const [siguiendoActivo, setSiguiendoActivo] = useState(false);
+  const [siguiendoActivo, setSiguiendoActivo] = useState(!modoNavegacion);
   const actualizarSeguimiento = useCallback((activo: boolean) => {
     if (siguiendoChoferRef.current === activo) return;
     siguiendoChoferRef.current = activo;
@@ -2207,7 +2214,13 @@ export default function MapaTILA({
           }
         }
       }
-    } else {
+    } else if (siguiendoChoferRef.current) {
+      // Mapa de sólo lectura (cliente siguiendo al chofer): mismo principio que
+      // modoNavegacion — mientras el seguimiento esté activo, la cámara centra sobre la
+      // posición interpolada en cada frame. En cuanto el cliente arrastra o hace zoom
+      // manualmente (ver el listener en onMapLoad, más abajo), siguiendoChoferRef pasa a
+      // false y este bloque deja de tocar la cámara — el marcador sigue moviéndose igual
+      // (ya se posicionó arriba, fuera de este if), sólo se suspende el recentrado.
       moverCamara(() => { mapRef.current!.setCenter({ lat: latActual, lng: lngActual }); }, "pasoAnimacion-lectura");
     }
 
@@ -3929,6 +3942,21 @@ export default function MapaTILA({
       mapa.addListener("zoom_changed", () => { diagContadoresRef.current.eventoZoomChanged++; });
       mapa.addListener("tilt_changed", () => { diagContadoresRef.current.eventoTiltChanged++; });
       mapa.addListener("idle", () => { diagContadoresRef.current.eventoIdle++; });
+    } else if (!modoMultiChofer) {
+      // Mapa de sólo lectura (panel-cliente siguiendo al chofer): mismo principio que
+      // arriba, versión mínima — sin los contadores TILA_NAV_DIAG (son instrumentación
+      // específica de la navegación turn-by-turn del chofer, no aplica acá) y sin
+      // heading_changed/tilt_changed (este mapa nunca rota ni inclina la cámara
+      // programáticamente, así que esos eventos no pueden originarse en código propio).
+      // Pan (dragstart) y zoom (zoom_changed) son los dos gestos que pide suspender el
+      // seguimiento; zoom_changed se guarda contra programaticoRef porque moverCamara()
+      // sí puede disparar ese evento como eco de un setCenter propio.
+      mapa.addListener("dragstart", () => {
+        actualizarSeguimiento(false);
+      });
+      mapa.addListener("zoom_changed", () => {
+        if (!programaticoRef.current) actualizarSeguimiento(false);
+      });
     }
   }, [asegurarMarcadorChofer, lat, lng, heading, modoMultiChofer, modoNavegacion, actualizarSeguimiento]);
 
@@ -4066,6 +4094,18 @@ export default function MapaTILA({
       });
     }, "restaurarCamaraNavegacion");
   }, [lat, lng, heading, moverCamara, actualizarSeguimiento, calcularOffsetVerticalCamara]);
+
+  // Equivalente de restaurarCamaraNavegacion para el mapa de sólo lectura del cliente
+  // ("Volver a seguir al chofer") — deliberadamente MÁS simple: sin look-ahead, sin
+  // heading/tilt/zoom de navegación (este mapa nunca rota ni inclina la cámara), porque
+  // pasoAnimacion en su rama de lectura sólo hace setCenter. Sólo reactiva el seguimiento
+  // y centra una vez sobre la posición actual — pasoAnimacion retoma el recentrado
+  // continuo en el próximo frame, ya con siguiendoChoferRef.current de nuevo en true.
+  const volverASeguirChofer = useCallback(() => {
+    if (lat == null || lng == null) return;
+    actualizarSeguimiento(true);
+    moverCamara(() => { mapRef.current!.setCenter({ lat, lng }); }, "volverASeguirChofer");
+  }, [lat, lng, moverCamara, actualizarSeguimiento]);
 
   // Reaplica el centrado con offset ya mismo cuando cambia panelTopPx (expandir/minimizar,
   // cambio de orientación, resize — lo que sea que haya movido el borde superior del
@@ -4377,6 +4417,30 @@ export default function MapaTILA({
             className="w-11 h-11 rounded-full bg-pink-600 border border-pink-300 text-white flex items-center justify-center text-lg shadow-lg active:scale-95 transition"
           >
             🐞
+          </button>
+        </div>
+      )}
+
+      {/* Control discreto de seguimiento — sólo mapa de lectura del cliente (no chofer,
+          no multi-chofer). Único botón: alterna entre "siguiendo" (relleno) y "pausado"
+          (tocar para volver a centrar en el chofer), mismo lenguaje visual que el botón
+          📍 de modoNavegacion. Reactivar el seguimiento es SIEMPRE una acción explícita
+          del cliente — nunca un timeout — para no quitarle el control mientras mira. */}
+      {!modoNavegacion && !modoMultiChofer && lat != null && lng != null && (
+        <div className="absolute right-3 bottom-3 z-20">
+          <button
+            type="button"
+            onClick={volverASeguirChofer}
+            title={siguiendoActivo ? "Siguiendo al chofer" : "Volver a seguir al chofer"}
+            aria-label={siguiendoActivo ? "Siguiendo al chofer — tocá para recentrar" : "Volver a seguir al chofer"}
+            aria-pressed={siguiendoActivo}
+            className={`w-11 h-11 rounded-full border flex items-center justify-center text-lg shadow-lg active:scale-95 transition ${
+              siguiendoActivo
+                ? "bg-yellow-400 border-yellow-400 text-black"
+                : "bg-black/85 border-yellow-400 text-yellow-400"
+            }`}
+          >
+            📍
           </button>
         </div>
       )}
