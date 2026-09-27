@@ -24,6 +24,10 @@ export interface ResultadoDistanciaLegs {
   recorridoCargaDuracionTexto: string | null;
   totalKm: number;
   totalTexto: string;
+  /** Duración de TODO el recorrido GPS→A→...→destino final: suma de los segundos de
+   *  TODOS los legs ya obtenidos (sin llamada extra a Google). null si algún leg no trae
+   *  segundos — nunca se muestra un total parcial como si fuera el total. */
+  totalDuracionTexto: string | null;
   duracionHastaCargaTexto: string | null;
 }
 
@@ -47,10 +51,10 @@ export function formatearDuracion(segundos: number): string {
  *
  * legs[0] es SIEMPRE el tramo GPS del chofer → A (nunca cambia, sea carga simple o
  * multietapa: el origen del pedido a Directions siempre es el GPS, nunca una parada).
- * legs[1..] es el recorrido de la carga en sí (A → siguiente parada → ... → B) — es este
- * tramo, y SOLO este, el que se muestra hoy como "Distancia"/"Tiempo estimado" en la
- * tarjeta principal (ver panel-chofer/page.tsx): GPS→A se sigue calculando y sigue
- * decidiendo el radio, pero deliberadamente no se expone ahí como km del viaje.
+ * legs[1..] es el recorrido de la carga en sí (A → siguiente parada → ... → B). La
+ * tarjeta principal (panel-chofer/page.tsx) muestra el TOTAL de todos los legs
+ * (totalTexto / totalDuracionTexto: GPS→A→...→destino final); el desglose por tramo
+ * queda sólo en el mapa.
  *
  * La decisión de "dentro de radio" usa EXCLUSIVAMENTE hastaCargaKm (legs[0]) — nunca el
  * total ni B (regla de negocio explícita: la cercanía se decide por la distancia al punto
@@ -82,6 +86,11 @@ export function interpretarLegs(
     recorridoCargaDuracionTexto = segundosRecorrido > 0 ? formatearDuracion(segundosRecorrido) : null;
   }
 
+  const todosConSegundos = legs.every(l => typeof l.duracionSegundos === "number" && l.duracionSegundos > 0);
+  const totalDuracionTexto = todosConSegundos
+    ? formatearDuracion(legs.reduce((s, l) => s + (l.duracionSegundos as number), 0))
+    : null;
+
   return {
     dentroRadioInicial: hastaCargaKm <= radioInicialKm,
     dentroRadioMaximo:  hastaCargaKm <= radioMaximoKm,
@@ -92,6 +101,7 @@ export function interpretarLegs(
     recorridoCargaDuracionTexto,
     totalKm: totalMetros / 1000,
     totalTexto: formatearKm(totalMetros),
+    totalDuracionTexto,
     duracionHastaCargaTexto: hastaCarga.duracionTexto || null,
   };
 }

@@ -18,6 +18,7 @@ export interface DistanciaCarga {
   recorridoCargaDuracionTexto: string | null;
   totalKm: number | null;
   totalTexto: string | null;
+  totalDuracionTexto: string | null;
   duracionHastaCargaTexto: string | null;
   estado: "ok" | "fuera_de_rango" | "sin_datos_a" | "error_directions";
 }

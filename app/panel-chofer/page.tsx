@@ -28,8 +28,8 @@ export default function PanelChoferPage() {
   const [cargas, setCargas]                 = useState<any[]>([]);
   // true cuando cargarCargas() ya trajo la lista real de esta sesión online (se rearma en
   // false al activar ONLINE). Distingue "todavía no llegó" de "llegó y está vacía" — ver
-  // useCargasCercanas/derivarEstadoCercanas: sin esto el baseline de la alarma podía
-  // armarse con [] y las cargas que ya existían sonaban como nuevas.
+  // useCargasCercanas/derivarEstadoCercanas: no se da nada por resuelto (ni se evalúa la
+  // alarma) hasta tener la lista real.
   const [listaCargada, setListaCargada]     = useState(false);
   const [paradasPorCarga, setParadasPorCarga] = useState<Record<string, any[]>>({});
   const [indice, setIndice]                 = useState(0);
@@ -83,11 +83,8 @@ export default function PanelChoferPage() {
   const canalRef          = useRef<ReturnType<typeof supabase.channel> | null>(null);
   const intervaloRef      = useRef<ReturnType<typeof setInterval> | null>(null);
   // Alarma SOLO para cargas dentro del radio (cargasCercanas), nunca `cargas` crudas —
-  // ver el efecto que usa detectarNuevasCercanas más abajo. `primeraResolucionCercanasRef`
-  // marca el baseline (la primera vez que se resuelve cargasCercanas en la sesión online
-  // no suena — evita "sonar todo lo existente" al activar ONLINE); `cercanosSonadosRef`
-  // son los ids ya notificados desde ese baseline.
-  const primeraResolucionCercanasRef = useRef(false);
+  // ver el efecto que usa pasoAlarmaCercanas más abajo. `cercanosSonadosRef` son los ids
+  // ya notificados en esta sesión online (cada carga cercana suena una sola vez).
   const cercanosSonadosRef      = useRef<Set<string>>(new Set());
   const sonandoRef              = useRef(false);
   // Control de rechazos consecutivos y silencio temporal
@@ -460,9 +457,9 @@ export default function PanelChoferPage() {
 
     // La alarma NO se decide acá — cargarCargas() sólo actualiza `cargas` (crudas, sin
     // filtro geográfico). La decisión de sonar vive en el efecto que observa
-    // `cargasCercanas` (ver detectarNuevasCercanas más abajo): así una carga fuera del
+    // `cargasCercanas` (ver pasoAlarmaCercanas más abajo): así una carga fuera del
     // radio de 35km, o cualquier carga mientras no hay GPS confirmado, nunca hace sonar
-    // la alarma — sólo lo hace una carga que ENTRA a cargasCercanas después del baseline.
+    // la alarma — sólo suena, una vez, una carga que está en cargasCercanas.
 
     setCargas(prev => {
       const idsAnteriores = prev.map((c) => c.id);
@@ -574,10 +571,9 @@ export default function PanelChoferPage() {
   }, [cargasCercanas.length]);
 
   // ─── Alarma: SOLO por cargas que entran a cargasCercanas (nunca `cargas` crudas) ──
-  // La primera resolución de cargasCercanas en la sesión online establece el baseline
-  // (no suena por lo que ya estaba ahí) — después, sólo IDs genuinamente nuevos dentro
-  // del radio disparan la alarma. Mientras estadoCercanas no sea "listo" (sin GPS,
-  // calculando, error) no se evalúa nada: no puede sonar sin un cálculo real confirmado.
+  // Cada carga cercana suena UNA vez por sesión online — incluidas las que ya existían al
+  // ponerse ONLINE; el polling no las repite. Mientras estadoCercanas no sea "listo" (sin
+  // GPS, calculando, error) no se evalúa nada: no puede sonar sin un cálculo real confirmado.
   const idsCercanasClave = cargasCercanas.map(c => c.id).join(",");
   useEffect(() => {
     const paso = pasoAlarmaCercanas({
@@ -585,11 +581,9 @@ export default function PanelChoferPage() {
       estado: estadoCercanas,
       idsActuales: idsCercanasClave ? idsCercanasClave.split(",") : [],
       vistos: cercanosSonadosRef.current,
-      baselineHecho: primeraResolucionCercanasRef.current,
     });
     if (!paso) return;
     const { nuevas } = paso;
-    primeraResolucionCercanasRef.current = paso.baselineHecho;
     cercanosSonadosRef.current = paso.vistos;
     if (nuevas.length > 0 && !silenciadoRef.current) {
       rechazosConsecutivosRef.current = 0; // viaje cercano genuinamente nuevo → resetear contador
@@ -636,9 +630,9 @@ export default function PanelChoferPage() {
       setIndice(siguiente);
       setTimeout(() => iniciarAlarmaViaje("rechazar:siguiente-viaje", [String(cargasCercanas[siguiente]?.id)]), 300);
     } else {
-      // Sin más viajes en la lista local — recargar. Limpiar cercanosSonadosRef (no el
-      // baseline) para que, si algo vuelve a estar cercano tras el reload, pueda sonar
-      // de nuevo — mismo comportamiento que antes tenía viajesSonadosRef.clear().
+      // Sin más viajes en la lista local — recargar. Limpiar cercanosSonadosRef para que,
+      // si algo vuelve a estar cercano tras el reload, pueda sonar de nuevo — mismo
+      // comportamiento que antes tenía viajesSonadosRef.clear().
       console.log("[RECHAZAR] sin más viajes — limpiando y recargando");
       setIndice(0);
       cercanosSonadosRef.current = new Set();
@@ -797,19 +791,17 @@ export default function PanelChoferPage() {
     // Resetear estado de silencio y rechazos al activar online
     silenciadoRef.current = false;
     rechazosConsecutivosRef.current = 0;
-    // Rearmar el baseline de cercanía: la PRIMERA resolución de cargasCercanas tras
-    // activar ONLINE no debe sonar (aunque ya haya cargas dentro del radio en ese
-    // momento) — sólo las que entren DESPUÉS de esa resolución inicial alarman.
-    primeraResolucionCercanasRef.current = false;
+    // Nueva sesión online: ninguna carga notificada todavía — las cercanas que ya existan
+    // sonarán una vez cuando se resuelva el cálculo con la lista de ESTA activación.
     cercanosSonadosRef.current = new Set();
-    setListaCargada(false);             // el baseline se arma con la lista que traiga ESTA activación
+    setListaCargada(false);             // esperar la lista que traiga ESTA activación
     cargasHashRef.current = "";         // forzar re-evaluación completa en cargarCargas
     console.log(`DEBUG_ONLINE_CAMBIO origen=toggle:activar anterior=${onlineRef.current} nuevo=true`);
     onlineRef.current = true;           // sincronizar antes de cargarCargas (la ref se actualiza en useEffect)
     setOnline(true);
     console.log("DEBUG_SET_ONLINE_DESPUES", { onlineSolicitado: true, viajeActivoId: viajeActivo?.id ?? null });
-    // cargarCargas trae las cargas crudas; el efecto sobre cargasCercanas establecerá el
-    // baseline en su primera resolución y sólo alarmará por lo que entre después.
+    // cargarCargas trae las cargas crudas; el efecto sobre cargasCercanas hace sonar una
+    // vez cada carga cercana (existente o nueva) cuando el cálculo de radio está listo.
     setTimeout(() => { cargarCargasRef.current("online:activado"); }, 150);
   };
 
@@ -1116,18 +1108,15 @@ export default function PanelChoferPage() {
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-lg md:text-2xl mb-6 text-left">
                 <p>🚛 <strong>Vehículo:</strong> {cargaActual.vehiculo || "Sin dato"}</p>
-                {/* Distancia — el flete en sí (A→...→destino final), NUNCA el tramo
-                    GPS del chofer→A. GPS→A se sigue calculando en distanciaActual y sigue
-                    decidiendo el radio 35/50km (ver useCargasCercanas/interpretarLegs) —
-                    pero por regla de negocio explícita no se expone acá como "distancia
-                    del viaje": el chofer ve sólo lo que efectivamente recorre la carga.
-                    Tiempo estimado sale de los mismos legs ya obtenidos (sin llamada extra
-                    a Google). Fallback a km_estimados si todavía no hay GPS o si el
-                    cálculo para ESTA carga puntual falló (nunca se inventa un km). */}
+                {/* Distancia y Tiempo = TOTAL del recorrido GPS del chofer → A → ... →
+                    destino final (totalTexto / totalDuracionTexto, de los mismos legs ya
+                    obtenidos — sin llamada extra a Google). Sin desglose acá: el detalle
+                    por tramo queda sólo dentro del mapa. No hay fallback a km_estimados:
+                    es sólo A→B y mostrarlo como total sería un número equivocado. */}
                 <div>
-                  <p>📍 <strong>Distancia:</strong> {distanciaActual?.estado === "ok" && distanciaActual.recorridoCargaTexto ? distanciaActual.recorridoCargaTexto : (cargaActual.km_estimados ? `${cargaActual.km_estimados} km` : "Sin calcular")}</p>
-                  {distanciaActual?.estado === "ok" && distanciaActual.recorridoCargaTexto && distanciaActual.recorridoCargaDuracionTexto && (
-                    <p>⏱️ <strong>Tiempo estimado:</strong> {distanciaActual.recorridoCargaDuracionTexto}</p>
+                  <p>📍 <strong>Distancia:</strong> {distanciaActual?.estado === "ok" && distanciaActual.totalTexto ? distanciaActual.totalTexto : "Sin calcular"}</p>
+                  {distanciaActual?.estado === "ok" && distanciaActual.totalDuracionTexto && (
+                    <p>⏱️ <strong>Tiempo estimado:</strong> {distanciaActual.totalDuracionTexto}</p>
                   )}
                 </div>
                 <p>⚖️ <strong>Peso:</strong> {cargaActual.peso || "Sin dato"}</p>
