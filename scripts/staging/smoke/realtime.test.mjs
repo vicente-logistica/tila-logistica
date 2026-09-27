@@ -112,6 +112,9 @@ class Backend {
       const st = be.appStatus[ruta]; if (st) return { status: st, json: { error: "x" } };
       if (ruta === "/api/cargas/publicar") { const f = { id: be.sec++, detalles: cuerpo.detalles, estado: "pendiente", cliente_id: id }; be.tablas.cargas.push(f); be.emitir("cargas", "INSERT", f, {}); return { status: 200, json: { carga: { id: f.id } } }; }
       const carga = be.tablas.cargas.find((c) => String(c.id) === String(cuerpo.carga_id));
+      // Mismo contrato que la app real: sin lat/lng numéricos, /api/cargas/aceptar rechaza con 400 sin_gps.
+      if (ruta === "/api/cargas/aceptar") be.cuerpoAceptar = cuerpo;
+      if (ruta === "/api/cargas/aceptar" && !(Number.isFinite(cuerpo?.lat) && Number.isFinite(cuerpo?.lng))) return { status: 400, json: { error: "x", codigo: "sin_gps" } };
       if (ruta === "/api/cargas/aceptar") { Object.assign(carga, { chofer_id: id, estado: "Chofer asignado" }); be.emitir("cargas", "UPDATE", carga, { id: carga.id }); return { status: 200, json: { ok: true } }; }
       if (ruta === "/api/chat/mensaje") { const f = { id: `m${be.sec++}`, viaje_id: cuerpo.viaje_id, mensaje: cuerpo.mensaje }; be.tablas.mensajes_viaje.push(f); be.emitir("mensajes_viaje", "INSERT", f, {}); return { status: 200, json: { ok: true } }; }
       if (ruta === "/api/cargas/gps") { Object.assign(carga, { lat: cuerpo.lat, lng: cuerpo.lng }); be.emitir("cargas", "UPDATE", carga, { id: carga.id }); return { status: 200, json: { ok: true } }; }
@@ -675,4 +678,12 @@ test("las ventanas siguen igual (solo se agrega la pausa) y la pausa está en un
   assert.ok(iPausa > 0 && iPausa < iR1, "la pausa va antes de R1");
   assert.ok(iPausa < iDef || iPausa > iFinDef, "la pausa no está dentro de correr(): no se repite por acción");
   assert.match(R.textoPlan(), /Pausa post-SUBSCRIBED: 2000 ms, UNA sola vez/);
+});
+test("R2 aceptar manda carga_id + lat/lng del chofer (GPS_CHOFER_SMOKE), no un payload sin GPS", async () => {
+  const { GPS_CHOFER_SMOKE } = await import("./util.mjs");
+  const be = new Backend();
+  const x = await correr(ARGS, { be });
+  assert.equal(x.codigo, 0, x.texto);
+  assert.deepEqual(be.cuerpoAceptar, { carga_id: be.cuerpoAceptar?.carga_id, lat: GPS_CHOFER_SMOKE.lat, lng: GPS_CHOFER_SMOKE.lng });
+  assert.ok(be.cuerpoAceptar.carga_id != null);
 });

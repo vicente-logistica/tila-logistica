@@ -5,10 +5,14 @@ import { supabase } from "../lib/supabase";
 import { useProtegerRuta } from "../hooks/useProtegerRuta";
 import HistorialChofer from "../components/historial-chofer";
 import BotonCerrarSesion from "../components/BotonCerrarSesion";
-import MapaTILA, { ParadaMapa, ResumenRuta } from "../components/MapaTILA";
+import MapaTILA, { ParadaMapa } from "../components/MapaTILA";
 import GestionVehiculosChofer from "../components/GestionVehiculosChofer";
 import { labelVehiculo, VehiculoRow } from "../lib/vehiculos";
 import { evaluarChoferOnline } from "../lib/validacion-chofer";
+import { useCargasCercanas } from "../hooks/useCargasCercanas";
+import { pasoAlarmaCercanas } from "../lib/geo/detectarNuevasCercanas";
+import { clampearIndice } from "../lib/geo/clampearIndice";
+import { esCoordenadaValida } from "../lib/geo/haversine";
 
 const LABELS = ["A", "B", "C", "D", "E", "F"];
 const SOPORTE_WHATSAPP = "5491158689383";
@@ -22,6 +26,11 @@ export default function PanelChoferPage() {
   const { autorizado } = useProtegerRuta("chofer");
 
   const [cargas, setCargas]                 = useState<any[]>([]);
+  // true cuando cargarCargas() ya trajo la lista real de esta sesión online (se rearma en
+  // false al activar ONLINE). Distingue "todavía no llegó" de "llegó y está vacía" — ver
+  // useCargasCercanas/derivarEstadoCercanas: sin esto el baseline de la alarma podía
+  // armarse con [] y las cargas que ya existían sonaban como nuevas.
+  const [listaCargada, setListaCargada]     = useState(false);
   const [paradasPorCarga, setParadasPorCarga] = useState<Record<string, any[]>>({});
   const [indice, setIndice]                 = useState(0);
   const [cargando, setCargando]             = useState(true);
@@ -42,7 +51,6 @@ export default function PanelChoferPage() {
   // ─── Ubicación del chofer para la vista previa del mapa (antes de aceptar) ─
   const [posicionChofer, setPosicionChofer] = useState<{ lat: number; lng: number } | null>(null);
   const [posicionChoferEstado, setPosicionChoferEstado] = useState<"idle" | "buscando" | "ok" | "error">("idle");
-  const [resumenRuta, setResumenRuta] = useState<ResumenRuta | null>(null);
 
   const [viajeActivo, setViajeActivo]               = useState<any>(null);
   const [buscandoViajeActivo, setBuscandoViajeActivo] = useState(true);
@@ -57,6 +65,15 @@ export default function PanelChoferPage() {
   const [navegadorPreferido, setNavegadorPreferido] = useState<string | null>(null);
   const [guardandoNav, setGuardandoNav] = useState(false);
 
+  // ─── Cercanía al punto A (radio 35/50km) ───────────────────────────────────
+  // Capa DERIVADA sobre `cargas` — cargarCargas() (hash, polling, filtro por tipo de
+  // vehículo) sigue igual. cargasCercanas es FAIL-CLOSED (ver useCargasCercanas): sin GPS
+  // confirmado + un cálculo real, es SIEMPRE [] — nunca `cargas` sin filtrar. Es lo único
+  // que decide qué se muestra/suena/acepta/rechaza en el listado.
+  const { cargasVisibles: cargasCercanas, distancias: distanciasCercanas, estado: estadoCercanas, gps: gpsChoferActual } =
+    useCargasCercanas(cargas, online, choferId ?? undefined, listaCargada);
+  const gpsChoferValido = !!gpsChoferActual && esCoordenadaValida(gpsChoferActual.lat, gpsChoferActual.lng);
+
   // ─── Refs estables — no causan re-renders ─────────────────────────────────
   const audioRef          = useRef<HTMLAudioElement | null>(null);
   const onlineRef         = useRef(false);
@@ -65,8 +82,13 @@ export default function PanelChoferPage() {
   // Evitar re-suscripción al canal en cada render
   const canalRef          = useRef<ReturnType<typeof supabase.channel> | null>(null);
   const intervaloRef      = useRef<ReturnType<typeof setInterval> | null>(null);
-  // Ids de viajes ya sonados — para no repetir alarma para el mismo viaje
-  const viajesSonadosRef        = useRef<Set<string>>(new Set());
+  // Alarma SOLO para cargas dentro del radio (cargasCercanas), nunca `cargas` crudas —
+  // ver el efecto que usa detectarNuevasCercanas más abajo. `primeraResolucionCercanasRef`
+  // marca el baseline (la primera vez que se resuelve cargasCercanas en la sesión online
+  // no suena — evita "sonar todo lo existente" al activar ONLINE); `cercanosSonadosRef`
+  // son los ids ya notificados desde ese baseline.
+  const primeraResolucionCercanasRef = useRef(false);
+  const cercanosSonadosRef      = useRef<Set<string>>(new Set());
   const sonandoRef              = useRef(false);
   // Control de rechazos consecutivos y silencio temporal
   const rechazosConsecutivosRef = useRef(0);
@@ -430,26 +452,17 @@ export default function PanelChoferPage() {
         return cargasFiltradas;
       });
       setIndice(prev => (prev >= cargasFiltradas.length ? 0 : prev));
+      setListaCargada(true);
       setCargando(false);
       return;
     }
     cargasHashRef.current = nuevoHash;
 
-    // ── Alarmar SOLO en IDs genuinamente nuevos (no vistos antes) ─────────
-    // Evita re-disparar por renders, polling o reconexiones sin cambio real.
-    if (onlineRef.current && !silenciadoRef.current) {
-      const nuevos = cargasFiltradas.filter(c => !viajesSonadosRef.current.has(String(c.id)));
-      if (nuevos.length > 0) {
-        nuevos.forEach(c => viajesSonadosRef.current.add(String(c.id)));
-        rechazosConsecutivosRef.current = 0; // viaje real nuevo → resetear contador
-        console.log("[ALARMA] cargarCargas: nuevos viajes detectados", { n: nuevos.length });
-        iniciarAlarmaViaje(`cargarCargas:${motivo}`, nuevos.map((c) => String(c.id)));
-      }
-    } else if (onlineRef.current && silenciadoRef.current) {
-      // Silenciado tras 3 rechazos — registrar IDs sin alarmar
-      console.log("DEBUG_VIAJES_SONADOS_ADD_SILENCIADO", { motivo, ids: cargasFiltradas.map((c) => c.id) });
-      cargasFiltradas.forEach(c => viajesSonadosRef.current.add(String(c.id)));
-    }
+    // La alarma NO se decide acá — cargarCargas() sólo actualiza `cargas` (crudas, sin
+    // filtro geográfico). La decisión de sonar vive en el efecto que observa
+    // `cargasCercanas` (ver detectarNuevasCercanas más abajo): así una carga fuera del
+    // radio de 35km, o cualquier carga mientras no hay GPS confirmado, nunca hace sonar
+    // la alarma — sólo lo hace una carga que ENTRA a cargasCercanas después del baseline.
 
     setCargas(prev => {
       const idsAnteriores = prev.map((c) => c.id);
@@ -464,6 +477,7 @@ export default function PanelChoferPage() {
     });
     // Mantener índice válido sin resetear si ya estábamos viendo un viaje
     setIndice(prev => (prev >= cargasFiltradas.length ? 0 : prev));
+    setListaCargada(true);
 
     if (cargasFiltradas.length > 0) {
       const ids = cargasFiltradas.map(c => c.id);
@@ -481,7 +495,7 @@ export default function PanelChoferPage() {
     }
 
     setCargando(false);
-  }, [iniciarAlarmaViaje, vehiculoActivo, vehiculoActivoResuelto]);
+  }, [vehiculoActivo, vehiculoActivoResuelto]);
 
   // ─── Ref a cargarCargas — para usar en closures sin recrear suscripciones ─
   const cargarCargasRef = useRef(cargarCargas);
@@ -549,7 +563,40 @@ export default function PanelChoferPage() {
   }, [online, onlineCargado, detenerAlarmaViaje]);
 
   // ─── Cerrar mapa al cambiar de viaje ─────────────────────────────────────
-  useEffect(() => { setMostrarMapa(false); setResumenRuta(null); }, [indice]);
+  useEffect(() => { setMostrarMapa(false); }, [indice]);
+
+  // ─── Índice siempre válido contra cargasCercanas (NO contra `cargas` crudas) ──────
+  // Si el radio geográfico reduce la lista (ej.: había 5, sólo 2 quedan dentro de
+  // 35km) e `indice` quedó apuntando fuera de rango, corregirlo — evita el bug de
+  // mostrar "No hay viajes" de forma espuria habiendo cargas cercanas válidas.
+  useEffect(() => {
+    setIndice(prev => clampearIndice(prev, cargasCercanas.length));
+  }, [cargasCercanas.length]);
+
+  // ─── Alarma: SOLO por cargas que entran a cargasCercanas (nunca `cargas` crudas) ──
+  // La primera resolución de cargasCercanas en la sesión online establece el baseline
+  // (no suena por lo que ya estaba ahí) — después, sólo IDs genuinamente nuevos dentro
+  // del radio disparan la alarma. Mientras estadoCercanas no sea "listo" (sin GPS,
+  // calculando, error) no se evalúa nada: no puede sonar sin un cálculo real confirmado.
+  const idsCercanasClave = cargasCercanas.map(c => c.id).join(",");
+  useEffect(() => {
+    const paso = pasoAlarmaCercanas({
+      online,
+      estado: estadoCercanas,
+      idsActuales: idsCercanasClave ? idsCercanasClave.split(",") : [],
+      vistos: cercanosSonadosRef.current,
+      baselineHecho: primeraResolucionCercanasRef.current,
+    });
+    if (!paso) return;
+    const { nuevas } = paso;
+    primeraResolucionCercanasRef.current = paso.baselineHecho;
+    cercanosSonadosRef.current = paso.vistos;
+    if (nuevas.length > 0 && !silenciadoRef.current) {
+      rechazosConsecutivosRef.current = 0; // viaje cercano genuinamente nuevo → resetear contador
+      console.log("[ALARMA] nueva carga dentro del radio", { nuevas });
+      iniciarAlarmaViaje("cargasCercanas:nueva-cercana", nuevas);
+    }
+  }, [idsCercanasClave, estadoCercanas, online, iniciarAlarmaViaje]);
 
   // ─── Ubicación del chofer al abrir la vista previa del mapa (una sola vez) ─
   useEffect(() => {
@@ -568,32 +615,37 @@ export default function PanelChoferPage() {
 
   // ─── Rechazar ────────────────────────────────────────────────────────────
   const rechazarViaje = () => {
-    console.log("DEBUG_RECHAZAR_ENTRY", { online, viajeActivoId: viajeActivo?.id ?? null, cargaRechazadaId: cargas[indice]?.id ?? null, cargasLength: cargas.length, indice, idsActuales: cargas.map((c) => c.id) });
+    // A partir de acá, todo lo que decide "cuántos hay"/"cuál sigue" usa cargasCercanas
+    // (ya filtrada por radio), NO `cargas` cruda — así `indice` nunca queda apuntando a
+    // una carga distinta de la que el chofer realmente está viendo en pantalla.
+    console.log("DEBUG_RECHAZAR_ENTRY", { online, viajeActivoId: viajeActivo?.id ?? null, cargaRechazadaId: cargasCercanas[indice]?.id ?? null, cargasLength: cargasCercanas.length, indice, idsActuales: cargasCercanas.map((c) => c.id) });
     detenerAlarmaViaje("rechazarViaje:entrada");
     setMostrarMapa(false);
     rechazosConsecutivosRef.current += 1;
     const siguiente = indice + 1;
-    console.log("[RECHAZAR] viaje rechazado", { indice, total: cargas.length, rechazos: rechazosConsecutivosRef.current });
+    console.log("[RECHAZAR] viaje rechazado", { indice, total: cargasCercanas.length, rechazos: rechazosConsecutivosRef.current });
 
     if (rechazosConsecutivosRef.current >= 3) {
       // 3 rechazos consecutivos — silenciar hasta nueva novedad real (INSERT) o que el chofer vuelva a ONLINE
       console.log("[RECHAZAR] 3 rechazos consecutivos — silenciando alarma");
       silenciadoRef.current = true;
       setIndice(0); // volver al primero sin alarma (viajes siguen visibles)
-    } else if (siguiente < cargas.length) {
+    } else if (siguiente < cargasCercanas.length) {
       // Hay más viajes disponibles y no llegamos al límite — alarmar para el siguiente
       console.log("[RECHAZAR] siguiente viaje:", siguiente);
       setIndice(siguiente);
-      setTimeout(() => iniciarAlarmaViaje("rechazar:siguiente-viaje", [String(cargas[siguiente]?.id)]), 300);
+      setTimeout(() => iniciarAlarmaViaje("rechazar:siguiente-viaje", [String(cargasCercanas[siguiente]?.id)]), 300);
     } else {
-      // Sin más viajes en la lista local — recargar
+      // Sin más viajes en la lista local — recargar. Limpiar cercanosSonadosRef (no el
+      // baseline) para que, si algo vuelve a estar cercano tras el reload, pueda sonar
+      // de nuevo — mismo comportamiento que antes tenía viajesSonadosRef.clear().
       console.log("[RECHAZAR] sin más viajes — limpiando y recargando");
       setIndice(0);
-      viajesSonadosRef.current.clear();
+      cercanosSonadosRef.current = new Set();
       cargasHashRef.current = "";
       cargarCargasRef.current("rechazar:sin-mas-viajes");
     }
-    console.log("DEBUG_RECHAZAR_EXIT", { online, viajeActivoId: viajeActivo?.id ?? null, cargasLength: cargas.length, indice, idsActuales: cargas.map((c) => c.id) });
+    console.log("DEBUG_RECHAZAR_EXIT", { online, viajeActivoId: viajeActivo?.id ?? null, cargasLength: cargasCercanas.length, indice, idsActuales: cargasCercanas.map((c) => c.id) });
   };
 
   // ─── Aceptar ─────────────────────────────────────────────────────────────
@@ -605,8 +657,24 @@ export default function PanelChoferPage() {
       alert("Completá vehículo y documentación antes de aceptar viajes");
       return;
     }
-    const carga = cargas[indice];
+    const carga = cargasCercanas[indice]; // misma fuente que cargaActual/rechazarViaje — nunca acepta una carga distinta de la que se ve en pantalla
     if (!carga?.id) return;
+    // Bloqueo client-side por radio (además del botón deshabilitado — defensa en
+    // profundidad): sólo se puede aceptar una carga confirmada "ok" y dentro de 35km.
+    // Con cargasCercanas fail-closed esto ya está garantizado por construcción, pero se
+    // valida explícitamente acá también, y el backend (/api/cargas/aceptar) lo vuelve a
+    // validar de forma independiente — el radio NUNCA es sólo protección visual.
+    const distancia = distanciasCercanas[carga.id];
+    if (!(distancia?.estado === "ok" && distancia.dentroRadioInicial === true)) {
+      alert("Esta carga todavía no se pudo confirmar dentro del radio permitido.");
+      return;
+    }
+    // Usa el GPS que ya obtuvo useCargasCercanas — sin pedir otra vez geolocation. Sin una
+    // posición válida se corta ACÁ, antes del fetch (el backend igual lo rechazaría).
+    if (!gpsChoferValido || !gpsChoferActual) {
+      alert("Necesitamos tu ubicación (GPS) para poder aceptar un viaje.");
+      return;
+    }
     detenerAlarmaViaje("aceptarViaje:entrada");
     rechazosConsecutivosRef.current = 0;
     silenciadoRef.current = false;
@@ -616,9 +684,16 @@ export default function PanelChoferPage() {
     const res = await fetch("/api/cargas/aceptar", {
       method:  "POST",
       headers: { "Content-Type": "application/json", "x-user-id": usuario.id },
-      body:    JSON.stringify({ carga_id: carga.id }),
+      body:    JSON.stringify({ carga_id: carga.id, lat: gpsChoferActual.lat, lng: gpsChoferActual.lng }),
     });
-    if (!res.ok) { alert("Este viaje ya fue tomado por otro chofer"); cargarCargasRef.current("aceptar:fallo-ya-tomado"); return; }
+    if (!res.ok) {
+      // `codigo` distingue sin_gps / fuera_de_radio / error_distancia / ya_tomado (ver
+      // app/lib/aceptarCarga.ts); `error` ya trae el texto adecuado para cada caso.
+      const { error, codigo } = await res.json().catch(() => ({ error: null, codigo: null }));
+      alert(error || "Este viaje ya fue tomado por otro chofer");
+      cargarCargasRef.current(`aceptar:fallo-${codigo ?? "ya_tomado"}`);
+      return;
+    }
     const { viaje_id } = await res.json();
     localStorage.setItem("viajeActivoId", String(viaje_id));
     window.location.href = "/viaje-activo";
@@ -657,13 +732,16 @@ export default function PanelChoferPage() {
     return "📍 Parada intermedia";
   };
 
-  const cargaActual    = online ? cargas[indice] : null;
+  const cargaActual    = online ? cargasCercanas[indice] : null;
   const paradasActuales = cargaActual ? (paradasPorCarga[String(cargaActual.id)] || []) : [];
+  const distanciaActual = cargaActual ? distanciasCercanas[cargaActual.id] : undefined;
+  const puedeAceptar = online && gpsChoferValido &&
+    distanciaActual?.estado === "ok" && distanciaActual.dentroRadioInicial === true;
 
   console.log("DEBUG_RENDER", {
     online,
     viajeActivoId: viajeActivo?.id ?? null,
-    cargasLength: cargas.length,
+    cargasLength: cargasCercanas.length,
     indice,
     cargaActualId: cargaActual?.id ?? null,
     necesitaDesbloqueo,
@@ -719,13 +797,19 @@ export default function PanelChoferPage() {
     // Resetear estado de silencio y rechazos al activar online
     silenciadoRef.current = false;
     rechazosConsecutivosRef.current = 0;
-    viajesSonadosRef.current.clear();  // tratar todos los viajes existentes como nuevos
+    // Rearmar el baseline de cercanía: la PRIMERA resolución de cargasCercanas tras
+    // activar ONLINE no debe sonar (aunque ya haya cargas dentro del radio en ese
+    // momento) — sólo las que entren DESPUÉS de esa resolución inicial alarman.
+    primeraResolucionCercanasRef.current = false;
+    cercanosSonadosRef.current = new Set();
+    setListaCargada(false);             // el baseline se arma con la lista que traiga ESTA activación
     cargasHashRef.current = "";         // forzar re-evaluación completa en cargarCargas
     console.log(`DEBUG_ONLINE_CAMBIO origen=toggle:activar anterior=${onlineRef.current} nuevo=true`);
     onlineRef.current = true;           // sincronizar antes de cargarCargas (la ref se actualiza en useEffect)
     setOnline(true);
     console.log("DEBUG_SET_ONLINE_DESPUES", { onlineSolicitado: true, viajeActivoId: viajeActivo?.id ?? null });
-    // cargarCargas detectará los viajes como "nuevos" (IDs no en viajesSonados) y alarmará si hay alguno
+    // cargarCargas trae las cargas crudas; el efecto sobre cargasCercanas establecerá el
+    // baseline en su primera resolución y sólo alarmará por lo que entre después.
     setTimeout(() => { cargarCargasRef.current("online:activado"); }, 150);
   };
 
@@ -930,7 +1014,17 @@ export default function PanelChoferPage() {
               <h1 className="text-4xl md:text-6xl font-black text-yellow-400 mb-4">DESPACHO EN TIEMPO REAL</h1>
               <p className="text-green-400 font-black text-lg md:text-xl mb-4">Operando con: {vehiculoChofer || "Sin vehículo"}</p>
               <p className="text-zinc-400 text-lg md:text-2xl mb-8">
-                {online ? "No hay viajes compatibles pendientes por ahora." : "Estás offline. Activá ONLINE para recibir viajes."}
+                {!online
+                  ? "Estás offline. Activá ONLINE para recibir viajes."
+                  : estadoCercanas === "sin_gps"
+                  ? "📍 Buscando tu ubicación…"
+                  : estadoCercanas === "gps_error"
+                  ? "📍 Necesitamos tu ubicación para mostrar viajes cercanos. Activá el permiso de ubicación."
+                  : estadoCercanas === "error_calculo"
+                  ? "📍 No pudimos calcular los viajes cercanos. Reintentando…"
+                  : estadoCercanas === "calculando"
+                  ? "📍 Calculando distancias a los viajes disponibles…"
+                  : "No hay viajes compatibles pendientes por ahora."}
               </p>
               <button type="button" onClick={() => { window.location.href = "/billetera-chofer"; }}
                 className="w-full max-w-md bg-zinc-800 border-2 border-yellow-400 hover:bg-zinc-700 text-yellow-400 font-black text-xl py-5 rounded-3xl">
@@ -1022,7 +1116,20 @@ export default function PanelChoferPage() {
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-lg md:text-2xl mb-6 text-left">
                 <p>🚛 <strong>Vehículo:</strong> {cargaActual.vehiculo || "Sin dato"}</p>
-                <p>📍 <strong>Distancia:</strong> {cargaActual.km_estimados ? `${cargaActual.km_estimados} km` : "Sin calcular"}</p>
+                {/* Distancia — el flete en sí (A→...→destino final), NUNCA el tramo
+                    GPS del chofer→A. GPS→A se sigue calculando en distanciaActual y sigue
+                    decidiendo el radio 35/50km (ver useCargasCercanas/interpretarLegs) —
+                    pero por regla de negocio explícita no se expone acá como "distancia
+                    del viaje": el chofer ve sólo lo que efectivamente recorre la carga.
+                    Tiempo estimado sale de los mismos legs ya obtenidos (sin llamada extra
+                    a Google). Fallback a km_estimados si todavía no hay GPS o si el
+                    cálculo para ESTA carga puntual falló (nunca se inventa un km). */}
+                <div>
+                  <p>📍 <strong>Distancia:</strong> {distanciaActual?.estado === "ok" && distanciaActual.recorridoCargaTexto ? distanciaActual.recorridoCargaTexto : (cargaActual.km_estimados ? `${cargaActual.km_estimados} km` : "Sin calcular")}</p>
+                  {distanciaActual?.estado === "ok" && distanciaActual.recorridoCargaTexto && distanciaActual.recorridoCargaDuracionTexto && (
+                    <p>⏱️ <strong>Tiempo estimado:</strong> {distanciaActual.recorridoCargaDuracionTexto}</p>
+                  )}
+                </div>
                 <p>⚖️ <strong>Peso:</strong> {cargaActual.peso || "Sin dato"}</p>
                 <p>💰 <strong>Ganancia chofer:</strong> ${Number(cargaActual.pago_chofer || 0).toLocaleString()}</p>
                 <p>📦 <strong>Tipo:</strong> {cargaActual.tipo_carga || "Sin dato"}</p>
@@ -1049,26 +1156,35 @@ export default function PanelChoferPage() {
                       altura="360px"
                       paradas={paradasParaMapa.length >= 2 ? paradasParaMapa : undefined}
                       mostrarRutaDesdeChofer={paradasParaMapa.length < 2}
-                      onResumenRuta={setResumenRuta}
                     />
                     {posicionChoferEstado === "error" && (
                       <p className="text-xs text-zinc-500 px-3 py-2 bg-zinc-900">
                         📍 No se pudo obtener tu ubicación — se muestra sólo el tramo retiro → entrega.
                       </p>
                     )}
+                    {/* Mismos números que la tarjeta principal — leídos de distanciaActual
+                        (fuente canónica única). MapaTILA sigue calculando su propia ruta con
+                        su propio Directions Service para DIBUJAR el trazado (eso no cambia,
+                        no se tocó MapaTILA.tsx); `onResumenRuta` (prop opcional) ya no se
+                        pasa desde acá — dejó de usarse como fuente visual de kilómetros, así
+                        tarjeta y mapa nunca muestran cifras distintas para la misma carga. */}
                     {paradasParaMapa.length < 2 && posicionChoferEstado === "ok" && (
                       <div className="grid grid-cols-2 gap-px bg-zinc-800 text-xs font-black">
                         <div className="bg-zinc-900 px-3 py-2">
                           <p className="text-zinc-500">Hasta el retiro</p>
-                          <p className="text-yellow-400">{resumenRuta ? `${resumenRuta.hastaRetiro.distanciaTexto} · ${resumenRuta.hastaRetiro.duracionTexto}` : "Calculando..."}</p>
+                          <p className="text-yellow-400">
+                            {distanciaActual?.estado === "ok"
+                              ? `${distanciaActual.hastaCargaTexto}${distanciaActual.duracionHastaCargaTexto ? ` · ${distanciaActual.duracionHastaCargaTexto}` : ""}`
+                              : "Calculando..."}
+                          </p>
                         </div>
                         <div className="bg-zinc-900 px-3 py-2">
                           <p className="text-zinc-500">Retiro → Entrega</p>
-                          <p className="text-yellow-400">{resumenRuta ? `${resumenRuta.retiroAEntrega.distanciaTexto} · ${resumenRuta.retiroAEntrega.duracionTexto}` : "Calculando..."}</p>
+                          <p className="text-yellow-400">{distanciaActual?.estado === "ok" ? distanciaActual.recorridoCargaTexto : "Calculando..."}</p>
                         </div>
                         <div className="bg-zinc-900 px-3 py-2 col-span-2">
                           <p className="text-zinc-500">Total del recorrido</p>
-                          <p className="text-yellow-400">{resumenRuta ? `${resumenRuta.total.distanciaTexto} · ${resumenRuta.total.duracionTexto}` : "Calculando..."}</p>
+                          <p className="text-yellow-400">{distanciaActual?.estado === "ok" ? distanciaActual.totalTexto : "Calculando..."}</p>
                         </div>
                       </div>
                     )}
@@ -1077,8 +1193,14 @@ export default function PanelChoferPage() {
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-                <button type="button" onClick={aceptarViaje} disabled={!online}
-                  className={`font-black text-2xl md:text-3xl py-6 rounded-3xl ${online ? "bg-green-600 hover:bg-green-500 text-black" : "bg-zinc-800 text-zinc-500 cursor-not-allowed"}`}>
+                {/* Sólo aceptable cuando el radio de 35km ya se confirmó "ok" para ESTA
+                    carga — con cargasCercanas fail-closed esto ya está garantizado por
+                    construcción (nunca debería llegar acá una carga fuera de rango), pero
+                    se repite la condición explícitamente en el botón (y de nuevo dentro de
+                    aceptarViaje) como defensa en profundidad. */}
+                <button type="button" onClick={aceptarViaje}
+                  disabled={!puedeAceptar}
+                  className={`font-black text-2xl md:text-3xl py-6 rounded-3xl ${puedeAceptar ? "bg-green-600 hover:bg-green-500 text-black" : "bg-zinc-800 text-zinc-500 cursor-not-allowed"}`}>
                   ACEPTAR
                 </button>
                 <button type="button" onClick={rechazarViaje}
@@ -1093,7 +1215,7 @@ export default function PanelChoferPage() {
               </button>
               {bloquesSoporte}
               <div className="mt-5 flex justify-center"><BotonCerrarSesion /></div>
-              <p className="text-zinc-500 text-center mt-6">Viaje {indice + 1} de {cargas.length}</p>
+              <p className="text-zinc-500 text-center mt-6">Viaje {indice + 1} de {cargasCercanas.length}</p>
             </section>
           )}
         </div>
