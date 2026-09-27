@@ -5,6 +5,7 @@ import {
   aplicarRespuestaCercanas, derivarEstadoCercanas,
   type EstadoCargasCercanas, type RespuestaCercanas,
 } from "../lib/geo/estadoCalculoCercanas";
+import { crearCoordinadorCalculo } from "../lib/geo/coordinadorCalculo";
 
 export interface DistanciaCarga {
   id: number;
@@ -49,7 +50,13 @@ const REINTENTO_ERROR_MS = 15 * 1000;
  * puntual que falle (Directions cayó, o no se pudo geocodificar el punto A) también queda
  * excluida — nunca se inventa un kilómetro ni se asume que está dentro del radio.
  */
-export function useCargasCercanas<T extends { id: number }>(cargas: T[], activo: boolean, usuarioId: string | undefined) {
+export function useCargasCercanas<T extends { id: number }>(
+  cargas: T[],
+  activo: boolean,
+  usuarioId: string | undefined,
+  /** cargarCargas() ya trajo la lista real de esta sesión online — ver derivarEstadoCercanas. */
+  listaCargada: boolean,
+) {
   const [gpsEstado, setGpsEstado] = useState<GpsEstado>("inactivo");
   const gpsRef = useRef<{ lat: number; lng: number } | null>(null);
   const [gps, setGps] = useState<{ lat: number; lng: number } | null>(null);
@@ -63,7 +70,45 @@ export function useCargasCercanas<T extends { id: number }>(cargas: T[], activo:
   const [errorCalculo, setErrorCalculo] = useState(false);
   const [reintento, setReintento] = useState(0);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const enVueloRef = useRef(false);
+  // Última lista/usuario — el cálculo los lee al CORRER, no al pedirse, así un recálculo
+  // pendiente usa siempre el conjunto más reciente.
+  const cargasRef = useRef(cargas);
+  const usuarioIdRef = useRef(usuarioId);
+  useEffect(() => { cargasRef.current = cargas; usuarioIdRef.current = usuarioId; });
+
+  // Un solo request a la vez; lo que se pida durante el vuelo queda pendiente y corre al
+  // terminar (ver coordinadorCalculo.ts) — nunca se pierde un cambio de la lista.
+  const coordinadorRef = useRef<ReturnType<typeof crearCoordinadorCalculo> | null>(null);
+  if (!coordinadorRef.current) {
+    coordinadorRef.current = crearCoordinadorCalculo(async () => {
+      const gpsActual = gpsRef.current;
+      const uid = usuarioIdRef.current;
+      const ids = cargasRef.current.map(c => c.id);
+      if (!gpsActual || !uid || ids.length === 0) return;
+      setCalculando(true);
+      let respuesta: RespuestaCercanas<DistanciaCarga> = { ok: false };
+      try {
+        const res = await fetch("/api/chofer/distancias-cercanas", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-user-id": uid },
+          body: JSON.stringify({ lat: gpsActual.lat, lng: gpsActual.lng, cargaIds: ids }),
+        });
+        if (res.ok) {
+          const { resultados } = await res.json() as { resultados: Record<number, DistanciaCarga> };
+          respuesta = { ok: true, resultados };
+        }
+      } catch {
+        // error de red / JSON inválido — respuesta queda { ok: false }
+      }
+      // FAIL-CLOSED real: un fallo LIMPIA las distancias anteriores (nunca se usa una
+      // validación vieja como fallback) y marca errorCalculo; un éxito las reemplaza.
+      const siguiente = aplicarRespuestaCercanas(respuesta);
+      setDistancias(siguiente.distancias);
+      setErrorCalculo(siguiente.errorCalculo);
+      setCalculando(false);
+      setPrimeraRespuestaLlegada(true);
+    });
+  }
 
   // ── Adquisición de GPS: una vez al activarse, y refresco periódico mientras siga activo ──
   useEffect(() => {
@@ -100,38 +145,14 @@ export function useCargasCercanas<T extends { id: number }>(cargas: T[], activo:
 
   useEffect(() => {
     if (!activo || gpsEstado !== "ok" || !gpsRef.current || !usuarioId) return;
-    if (cargas.length === 0) { setErrorCalculo(false); setPrimeraRespuestaLlegada(true); return; } // nada que calcular
+    // Sin la lista real de esta sesión todavía, no se calcula ni se da nada por resuelto:
+    // una lista vacía acá es "no llegó", no "no hay cargas".
+    if (!listaCargada) { setPrimeraRespuestaLlegada(false); return; }
+    if (cargas.length === 0) { setErrorCalculo(false); setPrimeraRespuestaLlegada(true); return; } // lista real vacía
     if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(async () => {
-      if (enVueloRef.current) return; // evita solapar si el debounce dispara mientras otra sigue en vuelo
-      enVueloRef.current = true;
-      setCalculando(true);
-      let respuesta: RespuestaCercanas<DistanciaCarga> = { ok: false };
-      try {
-        const gpsActual = gpsRef.current!;
-        const res = await fetch("/api/chofer/distancias-cercanas", {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "x-user-id": usuarioId },
-          body: JSON.stringify({ lat: gpsActual.lat, lng: gpsActual.lng, cargaIds: cargas.map(c => c.id) }),
-        });
-        if (res.ok) {
-          const { resultados } = await res.json() as { resultados: Record<number, DistanciaCarga> };
-          respuesta = { ok: true, resultados };
-        }
-      } catch {
-        // error de red / JSON inválido — respuesta queda { ok: false }
-      }
-      // FAIL-CLOSED real: un fallo LIMPIA las distancias anteriores (nunca se usa una
-      // validación vieja como fallback) y marca errorCalculo; un éxito las reemplaza.
-      const siguiente = aplicarRespuestaCercanas(respuesta);
-      setDistancias(siguiente.distancias);
-      setErrorCalculo(siguiente.errorCalculo);
-      enVueloRef.current = false;
-      setCalculando(false);
-      setPrimeraRespuestaLlegada(true);
-    }, DEBOUNCE_MS);
+    debounceRef.current = setTimeout(() => { void coordinadorRef.current!.solicitar(); }, DEBOUNCE_MS);
     return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
-  }, [activo, gpsEstado, idsClave, usuarioId, reintento]);
+  }, [activo, gpsEstado, idsClave, usuarioId, reintento, listaCargada]);
 
   // ── Reintento automático mientras la última consulta haya fallado ──
   useEffect(() => {
@@ -144,7 +165,7 @@ export function useCargasCercanas<T extends { id: number }>(cargas: T[], activo:
   // SIEMPRE [] (ver filtrarCercanas.ts y aplicarRespuestaCercanas).
   const cargasVisibles = errorCalculo ? [] : filtrarCercanas(cargas, gpsEstado === "ok", distancias);
 
-  const estado = derivarEstadoCercanas(gpsEstado, errorCalculo, calculando, primeraRespuestaLlegada);
+  const estado = derivarEstadoCercanas(gpsEstado, errorCalculo, calculando, primeraRespuestaLlegada, listaCargada);
 
   return { cargasVisibles, distancias, gpsEstado, estado, gps };
 }

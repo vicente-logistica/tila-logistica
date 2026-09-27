@@ -10,7 +10,7 @@ import GestionVehiculosChofer from "../components/GestionVehiculosChofer";
 import { labelVehiculo, VehiculoRow } from "../lib/vehiculos";
 import { evaluarChoferOnline } from "../lib/validacion-chofer";
 import { useCargasCercanas } from "../hooks/useCargasCercanas";
-import { detectarNuevasCercanas } from "../lib/geo/detectarNuevasCercanas";
+import { pasoAlarmaCercanas } from "../lib/geo/detectarNuevasCercanas";
 import { clampearIndice } from "../lib/geo/clampearIndice";
 import { esCoordenadaValida } from "../lib/geo/haversine";
 
@@ -26,6 +26,11 @@ export default function PanelChoferPage() {
   const { autorizado } = useProtegerRuta("chofer");
 
   const [cargas, setCargas]                 = useState<any[]>([]);
+  // true cuando cargarCargas() ya trajo la lista real de esta sesión online (se rearma en
+  // false al activar ONLINE). Distingue "todavía no llegó" de "llegó y está vacía" — ver
+  // useCargasCercanas/derivarEstadoCercanas: sin esto el baseline de la alarma podía
+  // armarse con [] y las cargas que ya existían sonaban como nuevas.
+  const [listaCargada, setListaCargada]     = useState(false);
   const [paradasPorCarga, setParadasPorCarga] = useState<Record<string, any[]>>({});
   const [indice, setIndice]                 = useState(0);
   const [cargando, setCargando]             = useState(true);
@@ -66,7 +71,7 @@ export default function PanelChoferPage() {
   // confirmado + un cálculo real, es SIEMPRE [] — nunca `cargas` sin filtrar. Es lo único
   // que decide qué se muestra/suena/acepta/rechaza en el listado.
   const { cargasVisibles: cargasCercanas, distancias: distanciasCercanas, estado: estadoCercanas, gps: gpsChoferActual } =
-    useCargasCercanas(cargas, online, choferId ?? undefined);
+    useCargasCercanas(cargas, online, choferId ?? undefined, listaCargada);
   const gpsChoferValido = !!gpsChoferActual && esCoordenadaValida(gpsChoferActual.lat, gpsChoferActual.lng);
 
   // ─── Refs estables — no causan re-renders ─────────────────────────────────
@@ -447,6 +452,7 @@ export default function PanelChoferPage() {
         return cargasFiltradas;
       });
       setIndice(prev => (prev >= cargasFiltradas.length ? 0 : prev));
+      setListaCargada(true);
       setCargando(false);
       return;
     }
@@ -471,6 +477,7 @@ export default function PanelChoferPage() {
     });
     // Mantener índice válido sin resetear si ya estábamos viendo un viaje
     setIndice(prev => (prev >= cargasFiltradas.length ? 0 : prev));
+    setListaCargada(true);
 
     if (cargasFiltradas.length > 0) {
       const ids = cargasFiltradas.map(c => c.id);
@@ -573,15 +580,17 @@ export default function PanelChoferPage() {
   // calculando, error) no se evalúa nada: no puede sonar sin un cálculo real confirmado.
   const idsCercanasClave = cargasCercanas.map(c => c.id).join(",");
   useEffect(() => {
-    if (!online || estadoCercanas !== "listo") return;
-    const idsActuales = idsCercanasClave ? idsCercanasClave.split(",") : [];
-    const { nuevas, siguienteVistos } = detectarNuevasCercanas(
-      idsActuales,
-      cercanosSonadosRef.current,
-      !primeraResolucionCercanasRef.current,
-    );
-    primeraResolucionCercanasRef.current = true;
-    cercanosSonadosRef.current = siguienteVistos;
+    const paso = pasoAlarmaCercanas({
+      online,
+      estado: estadoCercanas,
+      idsActuales: idsCercanasClave ? idsCercanasClave.split(",") : [],
+      vistos: cercanosSonadosRef.current,
+      baselineHecho: primeraResolucionCercanasRef.current,
+    });
+    if (!paso) return;
+    const { nuevas } = paso;
+    primeraResolucionCercanasRef.current = paso.baselineHecho;
+    cercanosSonadosRef.current = paso.vistos;
     if (nuevas.length > 0 && !silenciadoRef.current) {
       rechazosConsecutivosRef.current = 0; // viaje cercano genuinamente nuevo → resetear contador
       console.log("[ALARMA] nueva carga dentro del radio", { nuevas });
@@ -793,6 +802,7 @@ export default function PanelChoferPage() {
     // momento) — sólo las que entren DESPUÉS de esa resolución inicial alarman.
     primeraResolucionCercanasRef.current = false;
     cercanosSonadosRef.current = new Set();
+    setListaCargada(false);             // el baseline se arma con la lista que traiga ESTA activación
     cargasHashRef.current = "";         // forzar re-evaluación completa en cargarCargas
     console.log(`DEBUG_ONLINE_CAMBIO origen=toggle:activar anterior=${onlineRef.current} nuevo=true`);
     onlineRef.current = true;           // sincronizar antes de cargarCargas (la ref se actualiza en useEffect)

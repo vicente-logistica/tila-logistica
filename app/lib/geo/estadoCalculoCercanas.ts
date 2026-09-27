@@ -33,15 +33,22 @@ export function aplicarRespuestaCercanas<D>(respuesta: RespuestaCercanas<D>): Es
   return { distancias: respuesta.resultados, errorCalculo: false };
 }
 
+/**
+ * `listaCargada` = cargarCargas() ya trajo la lista real de esta sesión online. Sin eso,
+ * una lista vacía significa "todavía no la trajimos", NO "no hay cargas": nunca se pasa
+ * a "listo" antes — si no, el baseline de la alarma se armaría con [] y las cargas que
+ * ya existían sonarían como nuevas al llegar.
+ */
 export function derivarEstadoCercanas(
   gpsEstado: "inactivo" | "buscando" | "ok" | "error",
   errorCalculo: boolean,
   calculando: boolean,
   primeraRespuestaLlegada: boolean,
+  listaCargada: boolean,
 ): EstadoCargasCercanas {
   if (gpsEstado === "error") return "gps_error";
   if (gpsEstado !== "ok") return "sin_gps";
   if (errorCalculo) return "error_calculo";
-  if (calculando || !primeraRespuestaLlegada) return "calculando";
+  if (!listaCargada || calculando || !primeraRespuestaLlegada) return "calculando";
   return "listo";
 }

@@ -23,3 +23,21 @@ export function detectarNuevasCercanas(
   const nuevas = idsActuales.filter(id => !idsYaVistos.has(id));
   return { nuevas, siguienteVistos: actualesSet };
 }
+
+/**
+ * Un paso del efecto de alarma de panel-chofer, sin React: mientras no esté online y
+ * `estado === "listo"` (GPS ok + lista inicial cargada + cálculo real recibido) no se
+ * evalúa nada — ni siquiera se arma el baseline. La primera evaluación arma el baseline
+ * (no suena); las siguientes devuelven sólo los ids nuevos.
+ */
+export function pasoAlarmaCercanas(p: {
+  online: boolean;
+  estado: string;
+  idsActuales: string[];
+  vistos: Set<string>;
+  baselineHecho: boolean;
+}): { nuevas: string[]; vistos: Set<string>; baselineHecho: true } | null {
+  if (!p.online || p.estado !== "listo") return null;
+  const { nuevas, siguienteVistos } = detectarNuevasCercanas(p.idsActuales, p.vistos, !p.baselineHecho);
+  return { nuevas, vistos: siguienteVistos, baselineHecho: true };
+}
