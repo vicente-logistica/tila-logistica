@@ -24,3 +24,16 @@ export function distanciaHaversineKm(a: PuntoGeo, b: PuntoGeo): number {
     Math.cos((a.lat * Math.PI) / 180) * Math.cos((b.lat * Math.PI) / 180) * Math.sin(dLng / 2) ** 2;
   return 2 * R * Math.asin(Math.min(1, Math.sqrt(s)));
 }
+
+/**
+ * Validación de formato/rango de una coordenada GPS recibida en un request — usada antes
+ * de aceptar un lat/lng como "posición real del chofer" (por ej. en /api/cargas/aceptar,
+ * donde un lat/lng inválido debe rechazar la aceptación en vez de intentar geocodificar o
+ * calcular una distancia con basura).
+ */
+export function esCoordenadaValida(lat: unknown, lng: unknown): boolean {
+  return (
+    typeof lat === "number" && Number.isFinite(lat) && lat >= -90 && lat <= 90 &&
+    typeof lng === "number" && Number.isFinite(lng) && lng >= -180 && lng <= 180
+  );
+}

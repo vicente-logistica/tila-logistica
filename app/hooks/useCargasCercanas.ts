@@ -1,5 +1,10 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
+import { filtrarCercanas } from "../lib/geo/filtrarCercanas";
+import {
+  aplicarRespuestaCercanas, derivarEstadoCercanas,
+  type EstadoCargasCercanas, type RespuestaCercanas,
+} from "../lib/geo/estadoCalculoCercanas";
 
 export interface DistanciaCarga {
   id: number;
@@ -18,6 +23,8 @@ export interface DistanciaCarga {
 
 type GpsEstado = "inactivo" | "buscando" | "ok" | "error";
 
+export type { EstadoCargasCercanas };
+
 // Cada cuánto se vuelve a pedir GPS mientras el chofer sigue "online" navegando el
 // listado — NO es un watchPosition continuo (gasta batería/CPU de más para este caso de
 // uso, que no necesita precisión de navegación en curso, sólo saber en qué zona está).
@@ -25,31 +32,49 @@ const REFRESCO_GPS_MS = 2 * 60 * 1000;
 // Agrupa cambios de `cargas`/GPS que lleguen pegados (un poll de cargarCargas() y un
 // refresco de GPS casi al mismo tiempo) en una sola consulta al endpoint.
 const DEBOUNCE_MS = 500;
+// Tras una consulta fallida, cada cuánto se reintenta sola (sin esperar a que cambien las
+// cargas o el GPS) — mientras tanto el estado es "error_calculo" y no se muestra nada.
+const REINTENTO_ERROR_MS = 15 * 1000;
 
 /**
- * Filtra y enriquece una lista de cargas (ya filtrada por tipo de vehículo, tal cual la
- * entrega cargarCargas() en panel-chofer, SIN modificarla) según la cercanía del chofer
- * al punto A de cada una. Es una capa DERIVADA, aplicada después — no toca el estado, el
- * polling, el hash ni la alarma de sonido de cargarCargas().
+ * Filtra una lista de cargas (ya filtrada por tipo de vehículo, tal cual la entrega
+ * cargarCargas() en panel-chofer, SIN modificarla) según la cercanía real del chofer al
+ * punto A de cada una. Es una capa DERIVADA, aplicada después — no toca el estado, el
+ * polling, el hash ni el fetch de cargarCargas().
  *
- * Fallback deliberado (ver PASO 10 — casos especiales, "no romper la pantalla"): si no
- * hay GPS todavía, o el endpoint falla por completo (sin red, etc.), `cargasVisibles`
- * devuelve `cargas` SIN filtrar — el comportamiento idéntico al de antes de que existiera
- * esta función. Nunca deja al chofer sin nada que ver por un problema de permisos o de
- * red transitorio. Una carga puntual que falle (Directions cayó para ESA dirección, o no
- * se pudo geocodificar el punto A) sí queda excluida de "cercanas" — por diseño, nunca se
- * inventa un kilómetro ni se asume que está dentro del radio sin poder confirmarlo.
+ * FAIL-CLOSED (regla de negocio explícita — corrige un fallback anterior que mostraba
+ * TODAS las cargas sin filtrar mientras no había GPS/cálculo): mientras no haya una
+ * posición GPS confirmada ("ok") Y una respuesta real del endpoint para el conjunto
+ * actual de cargas, `cargasVisibles` es SIEMPRE `[]` — nunca `cargas` crudas. Una carga
+ * puntual que falle (Directions cayó, o no se pudo geocodificar el punto A) también queda
+ * excluida — nunca se inventa un kilómetro ni se asume que está dentro del radio.
  */
 export function useCargasCercanas<T extends { id: number }>(cargas: T[], activo: boolean, usuarioId: string | undefined) {
   const [gpsEstado, setGpsEstado] = useState<GpsEstado>("inactivo");
   const gpsRef = useRef<{ lat: number; lng: number } | null>(null);
+  const [gps, setGps] = useState<{ lat: number; lng: number } | null>(null);
   const [distancias, setDistancias] = useState<Record<number, DistanciaCarga>>({});
+  const [calculando, setCalculando] = useState(false);
+  // true una vez que llegó al menos una respuesta real (o no había nada que calcular) para
+  // el conjunto/posición actual — distingue "todavía no sabemos" de "ya sabemos y es 0".
+  const [primeraRespuestaLlegada, setPrimeraRespuestaLlegada] = useState(false);
+  // true si la ÚLTIMA consulta al endpoint falló — las distancias ya se limpiaron (ver
+  // aplicarRespuestaCercanas) y `reintento` programa una nueva consulta.
+  const [errorCalculo, setErrorCalculo] = useState(false);
+  const [reintento, setReintento] = useState(0);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const enVueloRef = useRef(false);
 
   // ── Adquisición de GPS: una vez al activarse, y refresco periódico mientras siga activo ──
   useEffect(() => {
-    if (!activo) { setGpsEstado("inactivo"); return; }
+    if (!activo) {
+      setGpsEstado("inactivo");
+      setGps(null);
+      setDistancias({});
+      setPrimeraRespuestaLlegada(false);
+      setErrorCalculo(false);
+      return;
+    }
     if (typeof navigator === "undefined" || !navigator.geolocation) { setGpsEstado("error"); return; }
     let cancelado = false;
     const pedir = () => {
@@ -57,7 +82,9 @@ export function useCargasCercanas<T extends { id: number }>(cargas: T[], activo:
       navigator.geolocation.getCurrentPosition(
         (pos) => {
           if (cancelado) return;
-          gpsRef.current = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+          const p = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+          gpsRef.current = p;
+          setGps(p);
           setGpsEstado("ok");
         },
         () => { if (!cancelado) setGpsEstado("error"); },
@@ -72,36 +99,52 @@ export function useCargasCercanas<T extends { id: number }>(cargas: T[], activo:
   const idsClave = cargas.map(c => c.id).join(",");
 
   useEffect(() => {
-    if (!activo || gpsEstado !== "ok" || !gpsRef.current || !usuarioId || cargas.length === 0) return;
+    if (!activo || gpsEstado !== "ok" || !gpsRef.current || !usuarioId) return;
+    if (cargas.length === 0) { setErrorCalculo(false); setPrimeraRespuestaLlegada(true); return; } // nada que calcular
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(async () => {
       if (enVueloRef.current) return; // evita solapar si el debounce dispara mientras otra sigue en vuelo
       enVueloRef.current = true;
+      setCalculando(true);
+      let respuesta: RespuestaCercanas<DistanciaCarga> = { ok: false };
       try {
-        const gps = gpsRef.current!;
+        const gpsActual = gpsRef.current!;
         const res = await fetch("/api/chofer/distancias-cercanas", {
           method: "POST",
           headers: { "Content-Type": "application/json", "x-user-id": usuarioId },
-          body: JSON.stringify({ lat: gps.lat, lng: gps.lng, cargaIds: cargas.map(c => c.id) }),
+          body: JSON.stringify({ lat: gpsActual.lat, lng: gpsActual.lng, cargaIds: cargas.map(c => c.id) }),
         });
-        if (!res.ok) return; // fallback: cargasVisibles sigue devolviendo lo que tenía hasta ahora
-        const { resultados } = await res.json() as { resultados: Record<number, DistanciaCarga> };
-        setDistancias(resultados ?? {});
+        if (res.ok) {
+          const { resultados } = await res.json() as { resultados: Record<number, DistanciaCarga> };
+          respuesta = { ok: true, resultados };
+        }
       } catch {
-        // silencioso — mismo fallback: no romper la pantalla por un error de red puntual
-      } finally {
-        enVueloRef.current = false;
+        // error de red / JSON inválido — respuesta queda { ok: false }
       }
+      // FAIL-CLOSED real: un fallo LIMPIA las distancias anteriores (nunca se usa una
+      // validación vieja como fallback) y marca errorCalculo; un éxito las reemplaza.
+      const siguiente = aplicarRespuestaCercanas(respuesta);
+      setDistancias(siguiente.distancias);
+      setErrorCalculo(siguiente.errorCalculo);
+      enVueloRef.current = false;
+      setCalculando(false);
+      setPrimeraRespuestaLlegada(true);
     }, DEBOUNCE_MS);
     return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
-  }, [activo, gpsEstado, idsClave, usuarioId]);
+  }, [activo, gpsEstado, idsClave, usuarioId, reintento]);
 
-  // Sin GPS, o todavía sin ninguna respuesta del endpoint (primer render/en vuelo, o
-  // falló por completo) → no filtrar nada, mismo comportamiento que antes de esta función.
-  const sinDatosTodavia = gpsEstado !== "ok" || Object.keys(distancias).length === 0;
-  const cargasVisibles = sinDatosTodavia
-    ? cargas
-    : cargas.filter(c => distancias[c.id]?.dentroRadioInicial === true);
+  // ── Reintento automático mientras la última consulta haya fallado ──
+  useEffect(() => {
+    if (!activo || !errorCalculo) return;
+    const t = setTimeout(() => setReintento(n => n + 1), REINTENTO_ERROR_MS);
+    return () => clearTimeout(t);
+  }, [activo, errorCalculo, reintento]);
 
-  return { cargasVisibles, distancias, gpsEstado };
+  // FAIL-CLOSED: sin GPS confirmado, o con la última consulta fallida, cargasVisibles es
+  // SIEMPRE [] (ver filtrarCercanas.ts y aplicarRespuestaCercanas).
+  const cargasVisibles = errorCalculo ? [] : filtrarCercanas(cargas, gpsEstado === "ok", distancias);
+
+  const estado = derivarEstadoCercanas(gpsEstado, errorCalculo, calculando, primeraRespuestaLlegada);
+
+  return { cargasVisibles, distancias, gpsEstado, estado, gps };
 }

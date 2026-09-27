@@ -1,12 +1,12 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
-import { distanciaHaversineKm, type PuntoGeo } from "../../../lib/geo/haversine";
-import { interpretarLegs, type ResultadoDistanciaLegs } from "../../../lib/geo/interpretarLegs";
+import type { PuntoGeo } from "../../../lib/geo/haversine";
+import { distanciaHaversineKm } from "../../../lib/geo/haversine";
+import { interpretarLegs } from "../../../lib/geo/interpretarLegs";
 import {
-  RADIO_INICIAL_KM, RADIO_MAXIMO_KM,
-  TTL_GEOCODE_MS, TTL_DISTANCIA_MS,
-  DECIMALES_CACHE_GPS, CONCURRENCIA_MAXIMA_DIRECTIONS,
-} from "../../../lib/geo/config";
+  geocodificarParaPrefiltro, calcularLegsReales, claveCacheGps, conConcurrenciaLimitada,
+} from "../../../lib/geo/calculoDistanciaCarga";
+import { RADIO_INICIAL_KM, RADIO_MAXIMO_KM, CONCURRENCIA_MAXIMA_DIRECTIONS } from "../../../lib/geo/config";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -19,14 +19,10 @@ if (!_roleKey) throw new Error("Falta SUPABASE_SERVICE_ROLE_KEY en variables de 
 
 const supabaseAdmin = createClient(_url, _roleKey);
 
-// ═══════════════════════════════════════════════════════════════════════════════════
-// Cachés EN MEMORIA del proceso — se pierden en un cold start de la función serverless,
-// pero mientras la instancia sigue caliente evitan volver a pedirle a Google lo mismo una
-// y otra vez (ver TTL_GEOCODE_MS/TTL_DISTANCIA_MS en app/lib/geo/config.ts para el porqué
-// de cada duración). No hay ningún estado persistente ni tabla nueva involucrada.
-// ═══════════════════════════════════════════════════════════════════════════════════
-const cacheGeocode    = new Map<string, { coords: PuntoGeo | null; ts: number }>();
-const cacheDistancia  = new Map<string, { resultado: ResultadoDistanciaCarga; ts: number }>();
+// Geocode/Directions y sus cachés viven en app/lib/geo/calculoDistanciaCarga.ts — mismo
+// módulo que usa /api/cargas/aceptar para la validación server-side del radio, así ambos
+// endpoints comparten caché (una carga ya vista en el listado no vuelve a pedirse a
+// Google al tocar ACEPTAR) y la regla de negocio existe en un solo lugar.
 
 interface ResultadoDistanciaCarga {
   id: number;
@@ -48,80 +44,6 @@ interface ResultadoDistanciaCarga {
    *  una "duración total" (ver PASO 9 del pedido: no agregar complejidad sólo por ETA). */
   duracionHastaCargaTexto: string | null;
   estado: "ok" | "fuera_de_rango" | "sin_datos_a" | "error_directions";
-}
-
-const normalizarDireccion = (direccion: string) => direccion.trim().toLowerCase().replace(/\s+/g, " ");
-const redondearGps = (n: number) => Number(n.toFixed(DECIMALES_CACHE_GPS));
-
-/** Geocodifica UNA dirección (sólo para el prefiltro de cercanía) — cacheada por texto
- *  normalizado, TTL largo (una dirección publicada no se mueve nunca). Nunca se muestra
- *  este resultado al chofer: sólo alimenta distanciaHaversineKm más abajo. */
-async function geocodificarParaPrefiltro(direccion: string, apiKey: string): Promise<PuntoGeo | null> {
-  const clave = normalizarDireccion(direccion);
-  const cacheada = cacheGeocode.get(clave);
-  if (cacheada && Date.now() - cacheada.ts < TTL_GEOCODE_MS) return cacheada.coords;
-  let coords: PuntoGeo | null = null;
-  try {
-    const url = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(`${direccion}, Argentina`)}&region=ar&key=${apiKey}`;
-    const r = await fetch(url, { cache: "no-store" });
-    const data = await r.json();
-    if (data.status === "OK" && data.results?.[0]) {
-      const loc = data.results[0].geometry.location;
-      coords = { lat: loc.lat, lng: loc.lng };
-    }
-  } catch { /* coords queda null — se trata igual que "no se pudo determinar" */ }
-  cacheGeocode.set(clave, { coords, ts: Date.now() });
-  return coords;
-}
-
-/** Distancia vial REAL vía Directions: origin = GPS del chofer (lat,lng), waypoints =
- *  todos los puntos de la carga salvo el último (A + paradas intermedias, en orden),
- *  destination = el último punto (B o la entrega final). Devuelve TODOS los legs, sin
- *  procesar — quien llama decide cómo sumarlos (hastaCarga = legs[0], resto = recorrido
- *  de la carga en sí). Nunca usa línea recta como resultado: si Directions falla, se
- *  devuelve null explícito, nunca un número inventado. */
-async function calcularLegsReales(
-  gps: PuntoGeo, puntosCarga: string[], apiKey: string
-): Promise<Array<{ distanciaMetros: number; distanciaTexto: string; duracionTexto: string; duracionSegundos: number }> | null> {
-  if (puntosCarga.length === 0) return null;
-  const destinoFinal   = puntosCarga[puntosCarga.length - 1];
-  const puntosPrevios  = puntosCarga.slice(0, -1); // A + intermedias — nunca vacío (A siempre está)
-  const origin         = `${gps.lat},${gps.lng}`;
-  const waypointsParam  = puntosPrevios.length
-    ? `&waypoints=${puntosPrevios.map(p => encodeURIComponent(`${p}, Argentina`)).join("|")}`
-    : "";
-  try {
-    const url =
-      `https://maps.googleapis.com/maps/api/directions/json?origin=${encodeURIComponent(origin)}` +
-      `&destination=${encodeURIComponent(`${destinoFinal}, Argentina`)}${waypointsParam}` +
-      `&mode=driving&language=es&region=ar&key=${apiKey}`;
-    const r = await fetch(url, { cache: "no-store" });
-    const data = await r.json();
-    if (data.status !== "OK" || !data.routes?.[0]?.legs?.length) return null;
-    return data.routes[0].legs.map((leg: any) => ({
-      distanciaMetros:  leg.distance?.value ?? 0,
-      distanciaTexto:   leg.distance?.text  ?? "",
-      duracionTexto:    leg.duration?.text  ?? "",
-      duracionSegundos: leg.duration?.value ?? 0, // mismos legs ya obtenidos, sin request extra
-    }));
-  } catch {
-    return null;
-  }
-}
-
-/** Ejecuta `fn` sobre `items` con un máximo de `limite` en simultáneo — evita disparar
- *  todas las llamadas a Directions de los candidatos post-prefiltro a la vez. */
-async function conConcurrenciaLimitada<T, R>(items: T[], limite: number, fn: (item: T) => Promise<R>): Promise<R[]> {
-  const resultados: R[] = new Array(items.length);
-  let siguiente = 0;
-  async function trabajador() {
-    while (siguiente < items.length) {
-      const idx = siguiente++;
-      resultados[idx] = await fn(items[idx]);
-    }
-  }
-  await Promise.all(Array.from({ length: Math.max(1, Math.min(limite, items.length)) }, trabajador));
-  return resultados;
 }
 
 export async function POST(req: Request) {
@@ -150,7 +72,6 @@ export async function POST(req: Request) {
   if (!apiKey) return NextResponse.json({ error: "Falta GOOGLE_SERVER_API_KEY en variables de entorno" }, { status: 500 });
 
   const gpsChofer: PuntoGeo = { lat, lng };
-  const gpsCacheKey = `${redondearGps(lat)},${redondearGps(lng)}`;
 
   // ── 3. Traer origen/destino de las cargas pedidas — SOLO LECTURA, sólo pendientes ──
   const { data: cargas, error: errCargas } = await supabaseAdmin
@@ -207,22 +128,16 @@ export async function POST(req: Request) {
   });
 
   // ── 7. ETAPA 2 — distancia vial real (Directions) SOLO para los candidatos ────────
+  // calcularLegsReales cachea los legs crudos por (id, posición) — comparte caché con la
+  // validación server-side de /api/cargas/aceptar sobre la MISMA carga/posición.
   await conConcurrenciaLimitada(candidatos, CONCURRENCIA_MAXIMA_DIRECTIONS, async ({ id, puntos }) => {
-    const claveCache = `${id}:${gpsCacheKey}`;
-    const cacheada = cacheDistancia.get(claveCache);
-    if (cacheada && Date.now() - cacheada.ts < TTL_DISTANCIA_MS) {
-      resultados[id] = cacheada.resultado;
-      return;
-    }
-    const legs = await calcularLegsReales(gpsChofer, puntos, apiKey);
+    const legs = await calcularLegsReales(gpsChofer, puntos, apiKey, `${id}:${claveCacheGps(gpsChofer)}`);
     const interpretado = legs ? interpretarLegs(legs, RADIO_INICIAL_KM, RADIO_MAXIMO_KM) : null;
     if (!interpretado) {
       resultados[id] = base(id, "error_directions");
       return;
     }
-    const resultado: ResultadoDistanciaCarga = { id, estado: "ok", ...interpretado };
-    cacheDistancia.set(claveCache, { resultado, ts: Date.now() });
-    resultados[id] = resultado;
+    resultados[id] = { id, estado: "ok", ...interpretado };
   });
 
   return NextResponse.json({ resultados });

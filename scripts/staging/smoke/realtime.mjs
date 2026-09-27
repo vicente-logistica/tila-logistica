@@ -34,7 +34,7 @@ import { resolve } from "node:path";
 import { createClient } from "@supabase/supabase-js";
 import { asegurarAppNoProduccion } from "../guardas.mjs";
 import { validarConfig, redactar } from "./v3-anon.mjs";
-import { iniciarSesion } from "./util.mjs";
+import { iniciarSesion, ORIGEN_SMOKE, GPS_CHOFER_SMOKE } from "./util.mjs";
 
 // ── Tiempos: TODOS centralizados acá (no hay números mágicos en el resto del archivo) ─────────────────────────────────────
 export const TIMEOUTS = Object.freeze({
@@ -398,14 +398,14 @@ export async function ejecutar(deps, cfg, opts = {}) {
       const ok2xx = (r) => r?.status >= 200 && r?.status < 300;
       const [R1, R2, R3, R4, R5, R6] = ACCIONES;
       await correr(R1, async () => {
-        const r = await llamada(cli.api("POST", "/api/cargas/publicar", { origen: "Rosario, Santa Fe", destino: "Córdoba, Córdoba", tipo_vehiculo: "Utilitario", tipo_carroceria: "Furgón", categoria_legal: "N1", peso: "1 t", tipo_carga: "Carga común", detalles: marcador, km_estimados: 400, paradas_intermedias: [] }), "R1 publicar");
+        const r = await llamada(cli.api("POST", "/api/cargas/publicar", { origen: ORIGEN_SMOKE, destino: "Córdoba, Córdoba", tipo_vehiculo: "Utilitario", tipo_carroceria: "Furgón", categoria_legal: "N1", peso: "1 t", tipo_carga: "Carga común", detalles: marcador, km_estimados: 400, paradas_intermedias: [] }), "R1 publicar");
         ctx.cargaId = r.json?.carga?.id ?? null;
         return ok2xx(r) && ctx.cargaId != null ? { ok: true } : { ok: false, motivo: `la app respondió HTTP ${r.status ?? "?"} sin crear la carga` };
       }, () => (e) => mismoId(e.fila.id, ctx.cargaId) || e.fila.detalles === marcador);
       if (ctx.cargaId == null) {
         for (const a of [R2, R3, R4]) registrar(a, false, "depende de R1 (no se creó la carga marcada)", null);
       } else {
-        await correr(R2, async () => { const r = await llamada(cho.api("POST", "/api/cargas/aceptar", { carga_id: ctx.cargaId }), "R2 aceptar"); return ok2xx(r) ? { ok: true } : { ok: false, motivo: `la app respondió HTTP ${r.status ?? "?"}` }; },
+        await correr(R2, async () => { const r = await llamada(cho.api("POST", "/api/cargas/aceptar", { carga_id: ctx.cargaId, ...GPS_CHOFER_SMOKE }), "R2 aceptar"); return ok2xx(r) ? { ok: true } : { ok: false, motivo: `la app respondió HTTP ${r.status ?? "?"}` }; },
           () => (e) => mismoId(e.fila.id, ctx.cargaId) && mismoId(e.fila.chofer_id, ctx.choferId));
         await correr(R3, async () => { const r = await llamada(cli.api("POST", "/api/chat/mensaje", { viaje_id: ctx.cargaId, tipo_chat: "viaje", mensaje: marcador }), "R3 mensaje"); return ok2xx(r) ? { ok: true } : { ok: false, motivo: `la app respondió HTTP ${r.status ?? "?"}` }; },
           () => (e) => e.fila.mensaje === marcador);

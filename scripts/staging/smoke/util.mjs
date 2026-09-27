@@ -7,6 +7,14 @@ import { EMAIL, CLAVES, ID } from "../seed/datos.mjs";
 
 export { EMAIL, CLAVES, ID };
 
+/** Punto A de las cargas que publican los smoke y después aceptan (flujos: ciclo del chofer; realtime: R1→R2). */
+export const ORIGEN_SMOKE = "Rosario, Santa Fe";
+/** GPS del chofer al aceptar: centro de Rosario (Monumento a la Bandera, ~2 km viales del
+ *  punto que Google devuelve para ORIGEN_SMOKE) — muy dentro del radio de 35 km que
+ *  /api/cargas/aceptar valida con Directions. NO es el GPS en viaje de R4 (-32.5,-60.9,
+ *  ~50 km al norte), que quedaría fuera de radio. */
+export const GPS_CHOFER_SMOKE = Object.freeze({ lat: -32.9478, lng: -60.6306 });
+
 /** Resuelve las URLs de la app por modo: --modos legacy=URL,dual=URL,strict=URL, o el estado.json del entorno local aislado. */
 export function resolverModos(argv = process.argv.slice(2), env = process.env) {
   const arg = argv.find((a) => a.startsWith("--modos="))?.slice(8);

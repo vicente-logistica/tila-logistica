@@ -7,7 +7,7 @@
 // Uso: TILA_ENTORNO=local|staging node scripts/staging/smoke/flujos.mjs [--modos=legacy=URL,dual=URL,strict=URL] [--supabase=URL --anon=KEY]
 // Requiere el seed aplicado (scripts/staging/seed/aplicar.mjs). Escribe datos (publica y avanza viajes): SOLO staging/local.
 import { calcularTarifaTILA, estimarDuracion } from "../../../app/lib/tarifas.ts";
-import { resolverModos, reporte, iniciarSesion, ID } from "./util.mjs";
+import { resolverModos, reporte, iniciarSesion, ID, ORIGEN_SMOKE, GPS_CHOFER_SMOKE } from "./util.mjs";
 
 const R = reporte();
 const modos = resolverModos();
@@ -23,7 +23,7 @@ for (const [modo, base] of Object.entries(modos)) {
   // ══ CLIENTE ═══════════════════════════════════════════════════════════════
   const cli = await iniciarSesion(base, "cliente1");
   ok("cliente", "login (rol cliente)", "cliente", cli.rol);
-  const pub = await cli.api("POST", "/api/cargas/publicar", { origen: "Rosario, Santa Fe", destino: "Córdoba, Córdoba", tipo_vehiculo: "Camión rígido", tipo_carroceria: "Baranda volcable", categoria_legal: "N2", peso: "3 t", tipo_carga: "Carga común", detalles: `smoke ${modo}`, km_estimados: 400, paradas_intermedias: [] });
+  const pub = await cli.api("POST", "/api/cargas/publicar", { origen: ORIGEN_SMOKE, destino: "Córdoba, Córdoba", tipo_vehiculo: "Camión rígido", tipo_carroceria: "Baranda volcable", categoria_legal: "N2", peso: "3 t", tipo_carga: "Carga común", detalles: `smoke ${modo}`, km_estimados: 400, paradas_intermedias: [] });
   ok("cliente", "publicar → 200 y estado pendiente", [200, "pendiente"], [pub.status, pub.json?.carga?.estado]);
   const esperado = tarifa(400, "Camión rígido");
   ok("cliente", "publicar: precio calculado en SERVIDOR (= tarifa v2)", [esperado.precioCliente, esperado.choferCobra], [pub.json?.carga?.precio_cliente, pub.json?.carga?.pago_chofer]);
@@ -45,7 +45,7 @@ for (const [modo, base] of Object.entries(modos)) {
   const disp = await cho.api("GET", "/api/cargas/disponibles");
   ok("chofer", "disponibles incluye la oferta nueva", true, !!disp.json?.cargas?.some((c) => c.id === nuevaId));
   const cho1 = await iniciarSesion(base, "chofer1");
-  const [a1, a2] = await Promise.all([cho.api("POST", "/api/cargas/aceptar", { carga_id: nuevaId }), cho1.api("POST", "/api/cargas/aceptar", { carga_id: nuevaId })]);
+  const [a1, a2] = await Promise.all([cho.api("POST", "/api/cargas/aceptar", { carga_id: nuevaId, ...GPS_CHOFER_SMOKE }), cho1.api("POST", "/api/cargas/aceptar", { carga_id: nuevaId, ...GPS_CHOFER_SMOKE })]);
   ok("chofer", "aceptar con CARRERA de 2 choferes: exactamente uno gana (200) y otro 409", [200, 409], [a1.status, a2.status].sort());
   const ganador = a1.status === 200 ? cho : cho1;
   const act = await ganador.api("GET", `/api/cargas/activa?carga_id=${nuevaId}`);

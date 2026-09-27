@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { distanciaHaversineKm } from "./haversine.ts";
+import { distanciaHaversineKm, esCoordenadaValida } from "./haversine.ts";
 
 test("mismo punto -> distancia 0", () => {
   const p = { lat: -34.6037, lng: -58.3816 };
@@ -32,4 +32,19 @@ test("Buenos Aires a Jujuy: claramente fuera de cualquier radio de cercanía (>1
   const jujuy = { lat: -24.1858, lng: -65.2995 };
   const d = distanciaHaversineKm(ba, jujuy);
   assert.ok(d > 1000, `esperado >1000km, obtuvo ${d}`);
+});
+
+test("H. esCoordenadaValida: sin GPS (undefined/undefined) → inválida, el backend debe rechazar la aceptación", () => {
+  assert.equal(esCoordenadaValida(undefined, undefined), false);
+  assert.equal(esCoordenadaValida(null, null), false);
+});
+
+test("esCoordenadaValida: fuera de rango físico (lat/lng imposibles) → inválida", () => {
+  assert.equal(esCoordenadaValida(200, -58), false);
+  assert.equal(esCoordenadaValida(-34, -300), false);
+  assert.equal(esCoordenadaValida(NaN, -58), false);
+});
+
+test("esCoordenadaValida: coordenada real válida → válida", () => {
+  assert.equal(esCoordenadaValida(-34.6037, -58.3816), true);
 });
