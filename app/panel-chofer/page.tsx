@@ -43,6 +43,10 @@ export default function PanelChoferPage() {
   // ─── Ubicación del chofer para la vista previa del mapa (antes de aceptar) ─
   const [posicionChofer, setPosicionChofer] = useState<{ lat: number; lng: number } | null>(null);
   const [posicionChoferEstado, setPosicionChoferEstado] = useState<"idle" | "buscando" | "ok" | "error">("idle");
+  // Sigue recibiendo el callback de MapaTILA (onResumenRuta) tal cual, sin tocar
+  // MapaTILA.tsx — pero ya NO se usa como fuente visual de km (ver distanciaActual más
+  // abajo, que es ahora la única fuente de kilómetros mostrados al chofer, tanto en la
+  // tarjeta como en el resumen del mapa abierto).
   const [resumenRuta, setResumenRuta] = useState<ResumenRuta | null>(null);
 
   const [viajeActivo, setViajeActivo]               = useState<any>(null);
@@ -1035,23 +1039,19 @@ export default function PanelChoferPage() {
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-lg md:text-2xl mb-6 text-left">
                 <p>🚛 <strong>Vehículo:</strong> {cargaActual.vehiculo || "Sin dato"}</p>
-                {/* Distancia personalizada (GPS del chofer → A → B, vía Directions) — ver
-                    useCargasCercanas/api/chofer/distancias-cercanas. Fallback al valor
-                    estático de siempre (km_estimados) si todavía no hay GPS, o si el
-                    cálculo para ESTA carga puntual falló (nunca se inventa un km). */}
-                <div className="md:col-span-2 text-base md:text-lg">
-                  {distanciaActual?.estado === "ok" ? (
-                    <>
-                      <p>📍 <strong>Hasta la carga:</strong> {distanciaActual.hastaCargaTexto}
-                        {distanciaActual.duracionHastaCargaTexto ? ` · ⏱️ ${distanciaActual.duracionHastaCargaTexto}` : ""}
-                      </p>
-                      {distanciaActual.recorridoCargaTexto && (
-                        <p>🚚 <strong>Carga → entrega:</strong> {distanciaActual.recorridoCargaTexto}</p>
-                      )}
-                      <p className="text-yellow-400 font-black">🛣️ Total: {distanciaActual.totalTexto}</p>
-                    </>
-                  ) : (
-                    <p>📍 <strong>Distancia:</strong> {cargaActual.km_estimados ? `${cargaActual.km_estimados} km` : "Sin calcular"}</p>
+                {/* Distancia — FUENTE CANÓNICA ÚNICA de kilómetros visibles al chofer:
+                    distanciaActual (useCargasCercanas → api/chofer/distancias-cercanas →
+                    interpretarLegs). El mapa más abajo lee este MISMO objeto para sus 3
+                    líneas (hasta retiro / retiro→entrega / total) — nunca un cálculo
+                    paralelo — así la tarjeta y el mapa nunca muestran números distintos
+                    para la misma carga. Fallback a km_estimados si todavía no hay GPS o
+                    si el cálculo para ESTA carga puntual falló (nunca se inventa un km). */}
+                <div>
+                  <p>📍 <strong>Distancia:</strong> {distanciaActual?.estado === "ok" ? distanciaActual.totalTexto : (cargaActual.km_estimados ? `${cargaActual.km_estimados} km` : "Sin calcular")}</p>
+                  {distanciaActual?.estado === "ok" && distanciaActual.recorridoCargaTexto && (
+                    <p className="text-xs md:text-sm text-zinc-500 font-normal mt-0.5">
+                      {distanciaActual.hastaCargaTexto} hasta retiro + {distanciaActual.recorridoCargaTexto} retiro→entrega
+                    </p>
                   )}
                 </div>
                 <p>⚖️ <strong>Peso:</strong> {cargaActual.peso || "Sin dato"}</p>
@@ -1087,19 +1087,29 @@ export default function PanelChoferPage() {
                         📍 No se pudo obtener tu ubicación — se muestra sólo el tramo retiro → entrega.
                       </p>
                     )}
+                    {/* Mismos números que la tarjeta principal — leídos de distanciaActual
+                        (fuente canónica única), NO de resumenRuta/ResumenRuta de MapaTILA.
+                        MapaTILA sigue calculando su propia ruta con su propio Directions
+                        Service para DIBUJAR el trazado (onResumenRuta arriba queda igual,
+                        sin tocar MapaTILA.tsx) — sólo dejó de usarse como fuente visual de
+                        kilómetros, para que tarjeta y mapa nunca muestren cifras distintas. */}
                     {paradasParaMapa.length < 2 && posicionChoferEstado === "ok" && (
                       <div className="grid grid-cols-2 gap-px bg-zinc-800 text-xs font-black">
                         <div className="bg-zinc-900 px-3 py-2">
                           <p className="text-zinc-500">Hasta el retiro</p>
-                          <p className="text-yellow-400">{resumenRuta ? `${resumenRuta.hastaRetiro.distanciaTexto} · ${resumenRuta.hastaRetiro.duracionTexto}` : "Calculando..."}</p>
+                          <p className="text-yellow-400">
+                            {distanciaActual?.estado === "ok"
+                              ? `${distanciaActual.hastaCargaTexto}${distanciaActual.duracionHastaCargaTexto ? ` · ${distanciaActual.duracionHastaCargaTexto}` : ""}`
+                              : "Calculando..."}
+                          </p>
                         </div>
                         <div className="bg-zinc-900 px-3 py-2">
                           <p className="text-zinc-500">Retiro → Entrega</p>
-                          <p className="text-yellow-400">{resumenRuta ? `${resumenRuta.retiroAEntrega.distanciaTexto} · ${resumenRuta.retiroAEntrega.duracionTexto}` : "Calculando..."}</p>
+                          <p className="text-yellow-400">{distanciaActual?.estado === "ok" ? distanciaActual.recorridoCargaTexto : "Calculando..."}</p>
                         </div>
                         <div className="bg-zinc-900 px-3 py-2 col-span-2">
                           <p className="text-zinc-500">Total del recorrido</p>
-                          <p className="text-yellow-400">{resumenRuta ? `${resumenRuta.total.distanciaTexto} · ${resumenRuta.total.duracionTexto}` : "Calculando..."}</p>
+                          <p className="text-yellow-400">{distanciaActual?.estado === "ok" ? distanciaActual.totalTexto : "Calculando..."}</p>
                         </div>
                       </div>
                     )}
