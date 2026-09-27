@@ -39,9 +39,11 @@ interface ResultadoDistanciaCarga {
   recorridoCargaDuracionTexto: string | null;
   totalKm: number | null;
   totalTexto: string | null;
+  /** Duración de todo GPS→A→...→destino final (suma de los mismos legs). */
+  totalDuracionTexto: string | null;
   /** Sólo la duración del tramo GPS→A (ETA hasta el retiro) — Google ya la trae en la
-   *  misma respuesta de Directions, sin request adicional. Deliberadamente NO se suma
-   *  una "duración total" (ver PASO 9 del pedido: no agregar complejidad sólo por ETA). */
+   *  misma respuesta de Directions, sin request adicional. La duración total del
+   *  recorrido está en totalDuracionTexto. */
   duracionHastaCargaTexto: string | null;
   estado: "ok" | "fuera_de_rango" | "sin_datos_a" | "error_directions";
 }
@@ -148,7 +150,7 @@ function base(id: number, estado: ResultadoDistanciaCarga["estado"]): ResultadoD
     id, dentroRadioInicial: false, dentroRadioMaximo: false,
     hastaCargaKm: null, hastaCargaTexto: null,
     recorridoCargaKm: null, recorridoCargaTexto: null, recorridoCargaDuracionTexto: null,
-    totalKm: null, totalTexto: null, duracionHastaCargaTexto: null,
+    totalKm: null, totalTexto: null, totalDuracionTexto: null, duracionHastaCargaTexto: null,
     estado,
   };
 }

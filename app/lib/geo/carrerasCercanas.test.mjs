@@ -5,79 +5,78 @@ import { pasoAlarmaCercanas } from "./detectarNuevasCercanas.ts";
 import { crearCoordinadorCalculo } from "./coordinadorCalculo.ts";
 import { filtrarCercanas } from "./filtrarCercanas.ts";
 
-// ═══════════════ CARRERA 1 — baseline con la lista inicial real ═══════════════
+// ═══════════════ ALARMA — cada carga cercana suena UNA vez por sesión online ═══════════════
 
 /** Simula el efecto de alarma de panel-chofer a lo largo de varios renders. */
 function simuladorAlarma() {
   let vistos = new Set();
-  let baselineHecho = false;
   const sonadas = [];
   return {
     render({ estado, idsCercanas }) {
-      const paso = pasoAlarmaCercanas({ online: true, estado, idsActuales: idsCercanas, vistos, baselineHecho });
+      const paso = pasoAlarmaCercanas({ online: true, estado, idsActuales: idsCercanas, vistos });
       if (!paso) return;
       vistos = paso.vistos;
-      baselineHecho = paso.baselineHecho;
       sonadas.push(...paso.nuevas);
     },
     get sonadas() { return sonadas; },
-    get baselineHecho() { return baselineHecho; },
   };
 }
 
-test("CARRERA 1: GPS llega primero, después la lista inicial con cargas cercanas → NO suena", () => {
+const resolver = (mapa) => aplicarRespuestaCercanas({ ok: true, resultados: Object.fromEntries(
+  Object.entries(mapa).map(([id, dentro]) => [id, { estado: "ok", dentroRadioInicial: dentro }])) });
+const cercanas = (ids, distancias) => filtrarCercanas(ids.map(id => ({ id })), true, distancias).map(c => String(c.id));
+
+test("ALARMA: carga cercana que ya existía al ponerse ONLINE → suena UNA vez, recién con el cálculo listo", () => {
   const alarma = simuladorAlarma();
 
-  // t1: GPS ok, cargarCargas() todavía no respondió (cargas = [], listaCargada = false).
-  // Antes del fix el hook marcaba primeraRespuestaLlegada=true → "listo" con [] → baseline vacío.
+  // t1: GPS ok, cargarCargas() todavía no respondió (listaCargada = false) → no se evalúa.
   const e1 = derivarEstadoCercanas("ok", false, false, /*primeraRespuesta*/ true, /*listaCargada*/ false);
-  assert.equal(e1, "calculando", "sin lista inicial nunca se llega a 'listo', aunque haya respuesta previa");
+  assert.equal(e1, "calculando", "sin lista inicial nunca se llega a 'listo'");
   alarma.render({ estado: e1, idsCercanas: [] });
-  assert.equal(alarma.baselineHecho, false, "no se arma el baseline con una lista que todavía no llegó");
 
-  // t2: llega la lista inicial [1, 2] — cálculo de distancias en curso.
+  // t2: llega la lista inicial [1, 2] — cálculo de distancias en curso → todavía no suena.
   const e2 = derivarEstadoCercanas("ok", false, true, false, true);
   assert.equal(e2, "calculando");
   alarma.render({ estado: e2, idsCercanas: [] });
+  assert.deepEqual(alarma.sonadas, []);
 
-  // t3: llega el cálculo: 1 y 2 están dentro de 35 km → primera resolución real = baseline.
-  const s = aplicarRespuestaCercanas({ ok: true, resultados: { 1: { estado: "ok", dentroRadioInicial: true }, 2: { estado: "ok", dentroRadioInicial: true } } });
+  // t3: llega el cálculo: 1 está dentro de 35 km, 2 está lejos.
+  const s = resolver({ 1: true, 2: false });
   const e3 = derivarEstadoCercanas("ok", s.errorCalculo, false, true, true);
   assert.equal(e3, "listo");
-  alarma.render({ estado: e3, idsCercanas: filtrarCercanas([{ id: 1 }, { id: 2 }], true, s.distancias).map(c => String(c.id)) });
-
-  assert.deepEqual(alarma.sonadas, [], "las cargas que ya existían NO suenan");
-  assert.equal(alarma.baselineHecho, true);
+  alarma.render({ estado: e3, idsCercanas: cercanas([1, 2], s.distancias) });
+  assert.deepEqual(alarma.sonadas, ["1"], "la cercana existente suena; la lejana no");
 });
 
-test("CARRERA 1: después del baseline, una carga NUEVA cercana SÍ suena (y una lejana no)", () => {
+test("ALARMA: el polling con las mismas cargas NO repite la alarma", () => {
   const alarma = simuladorAlarma();
-  alarma.render({ estado: "listo", idsCercanas: ["1", "2"] }); // baseline
-  // Llega la 3 (lejana → filtrarCercanas la excluye) y la 4 (cercana).
-  const s = aplicarRespuestaCercanas({ ok: true, resultados: {
-    1: { estado: "ok", dentroRadioInicial: true }, 2: { estado: "ok", dentroRadioInicial: true },
-    3: { estado: "ok", dentroRadioInicial: false }, 4: { estado: "ok", dentroRadioInicial: true },
-  } });
-  const ids = filtrarCercanas([{ id: 1 }, { id: 2 }, { id: 3 }, { id: 4 }], true, s.distancias).map(c => String(c.id));
-  alarma.render({ estado: "listo", idsCercanas: ids });
-  assert.deepEqual(alarma.sonadas, ["4"]);
+  alarma.render({ estado: "listo", idsCercanas: ["1"] });
+  for (let i = 0; i < 5; i++) alarma.render({ estado: "listo", idsCercanas: ["1"] });
+  assert.deepEqual(alarma.sonadas, ["1"]);
 });
 
-test("CARRERA 1: la lista inicial cargada y realmente vacía sí resuelve (baseline vacío), y la primera carga nueva suena", () => {
+test("ALARMA: una carga NUEVA cercana suena una vez; una nueva lejana nunca", () => {
   const alarma = simuladorAlarma();
-  const e = derivarEstadoCercanas("ok", false, false, true, true);
-  assert.equal(e, "listo");
-  alarma.render({ estado: e, idsCercanas: [] });
-  assert.equal(alarma.baselineHecho, true);
-  alarma.render({ estado: "listo", idsCercanas: ["9"] });
-  assert.deepEqual(alarma.sonadas, ["9"]);
+  alarma.render({ estado: "listo", idsCercanas: ["1"] });
+  const s = resolver({ 1: true, 3: false, 4: true });
+  alarma.render({ estado: "listo", idsCercanas: cercanas([1, 3, 4], s.distancias) });
+  alarma.render({ estado: "listo", idsCercanas: cercanas([1, 3, 4], s.distancias) }); // siguiente poll
+  assert.deepEqual(alarma.sonadas, ["1", "4"]);
+});
+
+test("ALARMA: un error de cálculo intermedio no hace repetir la alarma al recuperarse", () => {
+  const alarma = simuladorAlarma();
+  alarma.render({ estado: "listo", idsCercanas: ["1"] });
+  alarma.render({ estado: "error_calculo", idsCercanas: [] });
+  alarma.render({ estado: "listo", idsCercanas: ["1"] });
+  assert.deepEqual(alarma.sonadas, ["1"]);
 });
 
 test("pasoAlarmaCercanas: offline o estado distinto de 'listo' → no evalúa nada", () => {
   for (const estado of ["sin_gps", "gps_error", "error_calculo", "calculando"]) {
-    assert.equal(pasoAlarmaCercanas({ online: true, estado, idsActuales: ["1"], vistos: new Set(), baselineHecho: true }), null);
+    assert.equal(pasoAlarmaCercanas({ online: true, estado, idsActuales: ["1"], vistos: new Set() }), null);
   }
-  assert.equal(pasoAlarmaCercanas({ online: false, estado: "listo", idsActuales: ["1"], vistos: new Set(), baselineHecho: true }), null);
+  assert.equal(pasoAlarmaCercanas({ online: false, estado: "listo", idsActuales: ["1"], vistos: new Set() }), null);
 });
 
 // ═══════════════ CARRERA 2 — recálculo pendiente, sin requests paralelos ═══════════════

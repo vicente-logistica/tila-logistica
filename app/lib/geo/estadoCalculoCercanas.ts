@@ -36,8 +36,7 @@ export function aplicarRespuestaCercanas<D>(respuesta: RespuestaCercanas<D>): Es
 /**
  * `listaCargada` = cargarCargas() ya trajo la lista real de esta sesión online. Sin eso,
  * una lista vacía significa "todavía no la trajimos", NO "no hay cargas": nunca se pasa
- * a "listo" antes — si no, el baseline de la alarma se armaría con [] y las cargas que
- * ya existían sonarían como nuevas al llegar.
+ * a "listo" antes (la alarma sólo se evalúa en "listo").
  */
 export function derivarEstadoCercanas(
   gpsEstado: "inactivo" | "buscando" | "ok" | "error",

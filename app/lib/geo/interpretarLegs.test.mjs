@@ -94,3 +94,21 @@ test("formatearDuracion: minutos simples y con horas", () => {
   assert.equal(formatearDuracion(90 * 60), "1 h 30 min");
   assert.equal(formatearDuracion(120 * 60), "2 h");
 });
+
+test("tarjeta: totalTexto y totalDuracionTexto = GPS→A→destino (24,2 + 41,7 = 65,9 km; 26 + 39 = 65 min)", () => {
+  const legs = [leg(24.2, "24,2 km", "26 min", 26 * 60), leg(41.7, "41,7 km", "39 min", 39 * 60)];
+  const r = interpretarLegs(legs, RADIO_INICIAL, RADIO_MAXIMO);
+  assert.equal(r.totalTexto, "65,9 km");
+  assert.equal(r.totalDuracionTexto, "1 h 5 min");
+  assert.equal(r.recorridoCargaTexto, "41,7 km"); // el desglose sigue existiendo para el mapa
+});
+
+test("totalDuracionTexto multietapa: suma los segundos de TODOS los legs, incluido GPS→A", () => {
+  const legs = [leg(15, "15 km", "20 min", 20 * 60), leg(10, "10 km", "12 min", 12 * 60), leg(8, "8 km", "9 min", 9 * 60)];
+  assert.equal(interpretarLegs(legs, RADIO_INICIAL, RADIO_MAXIMO).totalDuracionTexto, "41 min");
+});
+
+test("totalDuracionTexto: null si algún leg no trae segundos — nunca un total parcial", () => {
+  const legs = [leg(20, "20 km", "25 min"), leg(37, "37 km", "40 min", 40 * 60)];
+  assert.equal(interpretarLegs(legs, RADIO_INICIAL, RADIO_MAXIMO).totalDuracionTexto, null);
+});
