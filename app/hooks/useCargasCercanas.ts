@@ -9,6 +9,7 @@ export interface DistanciaCarga {
   hastaCargaTexto: string | null;
   recorridoCargaKm: number | null;
   recorridoCargaTexto: string | null;
+  recorridoCargaDuracionTexto: string | null;
   totalKm: number | null;
   totalTexto: string | null;
   duracionHastaCargaTexto: string | null;

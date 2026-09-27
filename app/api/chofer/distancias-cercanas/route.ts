@@ -36,6 +36,11 @@ interface ResultadoDistanciaCarga {
   hastaCargaTexto: string | null;
   recorridoCargaKm: number | null;
   recorridoCargaTexto: string | null;
+  /** Duración estimada del recorrido propio de la carga (A→...→destino final),
+   *  EXCLUYENDO GPS→A — es lo que hoy se muestra como "⏱️ Tiempo estimado" en la tarjeta
+   *  principal. Sale de los mismos legs ya obtenidos de Directions, nunca de una llamada
+   *  adicional. */
+  recorridoCargaDuracionTexto: string | null;
   totalKm: number | null;
   totalTexto: string | null;
   /** Sólo la duración del tramo GPS→A (ETA hasta el retiro) — Google ya la trae en la
@@ -77,7 +82,7 @@ async function geocodificarParaPrefiltro(direccion: string, apiKey: string): Pro
  *  devuelve null explícito, nunca un número inventado. */
 async function calcularLegsReales(
   gps: PuntoGeo, puntosCarga: string[], apiKey: string
-): Promise<Array<{ distanciaMetros: number; distanciaTexto: string; duracionTexto: string }> | null> {
+): Promise<Array<{ distanciaMetros: number; distanciaTexto: string; duracionTexto: string; duracionSegundos: number }> | null> {
   if (puntosCarga.length === 0) return null;
   const destinoFinal   = puntosCarga[puntosCarga.length - 1];
   const puntosPrevios  = puntosCarga.slice(0, -1); // A + intermedias — nunca vacío (A siempre está)
@@ -94,9 +99,10 @@ async function calcularLegsReales(
     const data = await r.json();
     if (data.status !== "OK" || !data.routes?.[0]?.legs?.length) return null;
     return data.routes[0].legs.map((leg: any) => ({
-      distanciaMetros: leg.distance?.value ?? 0,
-      distanciaTexto:  leg.distance?.text  ?? "",
-      duracionTexto:   leg.duration?.text  ?? "",
+      distanciaMetros:  leg.distance?.value ?? 0,
+      distanciaTexto:   leg.distance?.text  ?? "",
+      duracionTexto:    leg.duration?.text  ?? "",
+      duracionSegundos: leg.duration?.value ?? 0, // mismos legs ya obtenidos, sin request extra
     }));
   } catch {
     return null;
@@ -226,7 +232,7 @@ function base(id: number, estado: ResultadoDistanciaCarga["estado"]): ResultadoD
   return {
     id, dentroRadioInicial: false, dentroRadioMaximo: false,
     hastaCargaKm: null, hastaCargaTexto: null,
-    recorridoCargaKm: null, recorridoCargaTexto: null,
+    recorridoCargaKm: null, recorridoCargaTexto: null, recorridoCargaDuracionTexto: null,
     totalKm: null, totalTexto: null, duracionHastaCargaTexto: null,
     estado,
   };

@@ -1,10 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { interpretarLegs, formatearKm } from "./interpretarLegs.ts";
+import { interpretarLegs, formatearKm, formatearDuracion } from "./interpretarLegs.ts";
 
 const RADIO_INICIAL = 35;
 const RADIO_MAXIMO  = 50;
-const leg = (km, texto, duracion = "20 min") => ({ distanciaMetros: km * 1000, distanciaTexto: texto, duracionTexto: duracion });
+const leg = (km, texto, duracion = "20 min", duracionSegundos) =>
+  ({ distanciaMetros: km * 1000, distanciaTexto: texto, duracionTexto: duracion, duracionSegundos });
 
 test("viaje simple (2 legs): suma GPS→A + A→B, hastaCarga = leg[0], recorrido = leg[1]", () => {
   const legs = [leg(20, "20 km", "25 min"), leg(37, "37 km", "40 min")];
@@ -14,6 +15,30 @@ test("viaje simple (2 legs): suma GPS→A + A→B, hastaCarga = leg[0], recorrid
   assert.equal(r.totalKm, 57);
   assert.equal(r.totalTexto, "57,0 km");
   assert.equal(r.duracionHastaCargaTexto, "25 min");
+});
+
+test("carga simple: recorridoCargaDuracionTexto reusa el texto del único leg A→B tal cual (sin recalcular)", () => {
+  const legs = [leg(24.2, "24,2 km", "26 min"), leg(41.7, "41,7 km", "39 min")];
+  const r = interpretarLegs(legs, RADIO_INICIAL, RADIO_MAXIMO);
+  assert.equal(r.recorridoCargaTexto, "41,7 km");
+  assert.equal(r.recorridoCargaDuracionTexto, "39 min"); // NO "26 min" (GPS→A) ni una suma
+});
+
+test("multietapa: recorridoCargaDuracionTexto suma los SEGUNDOS de A→B→C (excluye GPS→A)", () => {
+  const legs = [
+    leg(15, "15 km", "20 min", 20 * 60),   // GPS→A — excluido de la duración de recorrido
+    leg(10, "10 km", "12 min", 12 * 60),   // A→B
+    leg(8,  "8 km",  "9 min",  9  * 60),   // B→C
+  ];
+  const r = interpretarLegs(legs, RADIO_INICIAL, RADIO_MAXIMO);
+  assert.equal(r.recorridoCargaDuracionTexto, formatearDuracion(12 * 60 + 9 * 60)); // "21 min"
+  assert.equal(r.recorridoCargaDuracionTexto, "21 min");
+});
+
+test("recorridoCargaDuracionTexto: null si el único leg de recorrido no trae duración", () => {
+  const legs = [leg(20, "20 km", "25 min"), { distanciaMetros: 37000, distanciaTexto: "37 km", duracionTexto: "" }];
+  const r = interpretarLegs(legs, RADIO_INICIAL, RADIO_MAXIMO);
+  assert.equal(r.recorridoCargaDuracionTexto, null);
 });
 
 test("chofer dentro de 35km → dentroRadioInicial true", () => {
@@ -62,4 +87,10 @@ test("sin legs (Directions no devolvió nada útil) → null, nunca un número i
 test("formatearKm: menos de 1km se muestra en metros, no '0,x km'", () => {
   assert.equal(formatearKm(800), "800 m");
   assert.equal(formatearKm(1500), "1,5 km");
+});
+
+test("formatearDuracion: minutos simples y con horas", () => {
+  assert.equal(formatearDuracion(39 * 60), "39 min");
+  assert.equal(formatearDuracion(90 * 60), "1 h 30 min");
+  assert.equal(formatearDuracion(120 * 60), "2 h");
 });

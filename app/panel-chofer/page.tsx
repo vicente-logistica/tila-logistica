@@ -1039,19 +1039,18 @@ export default function PanelChoferPage() {
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-lg md:text-2xl mb-6 text-left">
                 <p>🚛 <strong>Vehículo:</strong> {cargaActual.vehiculo || "Sin dato"}</p>
-                {/* Distancia — FUENTE CANÓNICA ÚNICA de kilómetros visibles al chofer:
-                    distanciaActual (useCargasCercanas → api/chofer/distancias-cercanas →
-                    interpretarLegs). El mapa más abajo lee este MISMO objeto para sus 3
-                    líneas (hasta retiro / retiro→entrega / total) — nunca un cálculo
-                    paralelo — así la tarjeta y el mapa nunca muestran números distintos
-                    para la misma carga. Fallback a km_estimados si todavía no hay GPS o
-                    si el cálculo para ESTA carga puntual falló (nunca se inventa un km). */}
+                {/* Distancia — el flete en sí (A→...→destino final), NUNCA el tramo
+                    GPS del chofer→A. GPS→A se sigue calculando en distanciaActual y sigue
+                    decidiendo el radio 35/50km (ver useCargasCercanas/interpretarLegs) —
+                    pero por regla de negocio explícita no se expone acá como "distancia
+                    del viaje": el chofer ve sólo lo que efectivamente recorre la carga.
+                    Tiempo estimado sale de los mismos legs ya obtenidos (sin llamada extra
+                    a Google). Fallback a km_estimados si todavía no hay GPS o si el
+                    cálculo para ESTA carga puntual falló (nunca se inventa un km). */}
                 <div>
-                  <p>📍 <strong>Distancia:</strong> {distanciaActual?.estado === "ok" ? distanciaActual.totalTexto : (cargaActual.km_estimados ? `${cargaActual.km_estimados} km` : "Sin calcular")}</p>
-                  {distanciaActual?.estado === "ok" && distanciaActual.recorridoCargaTexto && (
-                    <p className="text-xs md:text-sm text-zinc-500 font-normal mt-0.5">
-                      {distanciaActual.hastaCargaTexto} hasta retiro + {distanciaActual.recorridoCargaTexto} retiro→entrega
-                    </p>
+                  <p>📍 <strong>Distancia:</strong> {distanciaActual?.estado === "ok" && distanciaActual.recorridoCargaTexto ? distanciaActual.recorridoCargaTexto : (cargaActual.km_estimados ? `${cargaActual.km_estimados} km` : "Sin calcular")}</p>
+                  {distanciaActual?.estado === "ok" && distanciaActual.recorridoCargaTexto && distanciaActual.recorridoCargaDuracionTexto && (
+                    <p>⏱️ <strong>Tiempo estimado:</strong> {distanciaActual.recorridoCargaDuracionTexto}</p>
                   )}
                 </div>
                 <p>⚖️ <strong>Peso:</strong> {cargaActual.peso || "Sin dato"}</p>
