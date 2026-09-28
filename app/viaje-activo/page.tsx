@@ -10,6 +10,7 @@ import ChatAsistencia from "../components/ChatAsistencia";
 import ChatToast from "../components/ChatToast";
 import { registrarEvidenciaApi, estadoAEvento } from "../lib/evidencias";
 import { playChatSound } from "../utils/chatSound";
+import type { TramoRecorrido } from "../lib/geo/desgloseRecorrido";
 import { hablar, detenerVoz } from "../utils/vozNavegacion";
 import { diagLog } from "../utils/diagLoggerNav";
 
@@ -41,6 +42,12 @@ const ESTADOS_ORDEN = [
 ];
 
 const LABELS = ["A", "B", "C", "D", "E", "F"];
+
+// ─── Recorrido restante (planilla 📋) ─────────────────────────────────────────
+const REFRESCO_RECORRIDO_MS = 150 * 1000; // 2,5 min — la caché del servidor dura 3 min
+type EstadoRecorrido =
+  | { estado: "calculando" | "sin_gps" | "error" }
+  | { estado: "ok"; datos: { tramos: TramoRecorrido[]; totalTexto: string | null; totalDuracionTexto: string | null; sinPendientes: boolean } };
 
 // ─── Instrucción operativa ────────────────────────────────────────────────────
 interface Instruccion { emoji: string; titulo: string; subtitulo: string; colorBorde: string; }
@@ -392,6 +399,48 @@ export default function ViajeActivoPage() {
   }, [viaje?.estado]);
 
   const bloqueadoPorParadas = botonActivo?.nombre === "Viaje finalizado" && paradas.length > 0 && !todasParadasCompletadas;
+
+  // ─── Recorrido restante (planilla 📋) ─────────────────────────────────────
+  // Se calcula SÓLO mientras la planilla está abierta: al abrirla y cada 2,5 min. El
+  // endpoint arma GPS actual → paradas pendientes → destino final y reutiliza la caché de
+  // Directions del servidor. Sin GPS fresco o si falla el cálculo NO se muestra ningún
+  // número (nunca km_estimados como si fuera el recorrido real). No toca MapaTILA.
+  const [recorrido, setRecorrido] = useState<EstadoRecorrido>({ estado: "calculando" });
+  const ultimoGpsFrescoRef = useRef(ultimoGpsFresco);
+  useEffect(() => { ultimoGpsFrescoRef.current = ultimoGpsFresco; }, [ultimoGpsFresco]);
+  // Id del último pedido: descarta respuestas viejas (planilla cerrada o pedido superado).
+  const recorridoReqRef = useRef(0);
+  // Cambia cuando se completa una parada o cambia el estado → recálculo con las pendientes.
+  const recorridoClaveParadas = `${paradas.map(p => `${p.id}:${p.estado}`).join(",")}|${viaje?.estado ?? ""}`;
+
+  const calcularRecorrido = useCallback(async () => {
+    const miReq = ++recorridoReqRef.current;
+    const gps = ultimoGpsFrescoRef.current;
+    const uid = usuarioRef.current?.id;
+    if (!viaje?.id) return;
+    if (!gps || !uid) { setRecorrido({ estado: "sin_gps" }); return; }
+    setRecorrido(prev => (prev.estado === "ok" ? prev : { estado: "calculando" }));
+    try {
+      const res = await fetch("/api/chofer/recorrido-viaje", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json", "x-user-id": String(uid) },
+        body:    JSON.stringify({ carga_id: viaje.id, lat: gps.lat, lng: gps.lng }),
+      });
+      const json = await res.json().catch(() => null);
+      if (miReq !== recorridoReqRef.current) return;
+      if (!res.ok || !json?.ok) { setRecorrido({ estado: json?.codigo === "sin_gps" ? "sin_gps" : "error" }); return; }
+      setRecorrido({ estado: "ok", datos: json });
+    } catch {
+      if (miReq === recorridoReqRef.current) setRecorrido({ estado: "error" });
+    }
+  }, [viaje?.id]);
+
+  useEffect(() => {
+    if (!mostrarDetalles) { recorridoReqRef.current++; return; } // cerrada: sin requests, y se ignora lo que esté en vuelo
+    void calcularRecorrido();
+    const t = setInterval(() => { void calcularRecorrido(); }, REFRESCO_RECORRIDO_MS);
+    return () => clearInterval(t);
+  }, [mostrarDetalles, calcularRecorrido, recorridoClaveParadas, gpsFrescoDisponible]);
 
   const instruccion = useMemo(() => getInstruccion(viaje?.estado || "", paradas, paradaActivaIndex), [viaje?.estado, paradas, paradaActivaIndex]);
 
@@ -1426,13 +1475,52 @@ export default function ViajeActivoPage() {
               <div className="bg-zinc-800 rounded-xl p-3"><p className="text-zinc-500 font-black mb-1">ORIGEN</p><p className="text-white font-black">{viaje.origen}</p></div>
               <div className="bg-zinc-800 rounded-xl p-3"><p className="text-zinc-500 font-black mb-1">DESTINO</p><p className="text-white font-black">{viaje.destino}</p></div>
               <div className="bg-zinc-800 rounded-xl p-3"><p className="text-zinc-500 font-black mb-1">CARGA</p><p className="text-white">{viaje.tipo_carga || "—"}</p></div>
-              <div className="bg-zinc-800 rounded-xl p-3"><p className="text-zinc-500 font-black mb-1">DISTANCIA</p><p className="text-white">{viaje.km_estimados ? `${viaje.km_estimados} km` : "—"}</p></div>
               <div className="bg-zinc-800 rounded-xl p-3"><p className="text-zinc-500 font-black mb-1">GPS</p><p className={gpsEstado === "🟢" ? "text-green-400 font-black" : "text-yellow-400"}>{gpsEstado} · {velocidadGps} km/h</p></div>
               <div className="bg-zinc-800 rounded-xl p-3"><p className="text-zinc-500 font-black mb-1">BATERÍA</p>
                 <p className={!bateriaDisponible ? "text-zinc-500" : bateriaNivel !== null && bateriaNivel < 20 ? "text-red-400 font-black" : "text-green-400 font-black"}>
                   {!bateriaDisponible ? "—" : bateriaNivel !== null ? `${bateriaNivel}%${bateriaCargando ? " ⚡" : ""}` : "..."}
                 </p>
               </div>
+            </div>
+
+            {/* Recorrido restante: GPS actual → paradas pendientes → destino final */}
+            <div>
+              <p className="text-zinc-500 font-black mb-2">RECORRIDO</p>
+              {recorrido.estado === "ok" && recorrido.datos.sinPendientes ? (
+                <p className="text-zinc-400 bg-zinc-800 rounded-xl p-3">No quedan paradas pendientes.</p>
+              ) : recorrido.estado === "ok" ? (
+                <div className="space-y-2">
+                  {recorrido.datos.tramos.map((t, i) => (
+                    <div key={`${t.desde}-${t.hasta}-${i}`} className="bg-zinc-800 rounded-xl p-3">
+                      <p className="text-zinc-400 font-black">{t.desde} → {t.hasta}</p>
+                      <p className="text-zinc-500 truncate">{t.hastaDireccion}</p>
+                      <p className="text-white font-black">{t.distanciaTexto}{t.duracionTexto ? ` · ${t.duracionTexto}` : ""}</p>
+                    </div>
+                  ))}
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="bg-zinc-800 rounded-xl p-3 border border-yellow-400/40">
+                      <p className="text-zinc-500 font-black mb-1">KM TOTALES</p>
+                      <p className="text-yellow-400 font-black text-sm">{recorrido.datos.totalTexto ?? "—"}</p>
+                    </div>
+                    <div className="bg-zinc-800 rounded-xl p-3 border border-yellow-400/40">
+                      <p className="text-zinc-500 font-black mb-1">TIEMPO TOTAL ESTIMADO</p>
+                      <p className="text-yellow-400 font-black text-sm">{recorrido.datos.totalDuracionTexto ?? "—"}</p>
+                    </div>
+                  </div>
+                </div>
+              ) : recorrido.estado === "error" ? (
+                <div className="bg-zinc-800 rounded-xl p-3 flex items-center justify-between gap-2">
+                  <p className="text-red-400">No se pudo calcular el recorrido.</p>
+                  <button type="button" onClick={() => { void calcularRecorrido(); }}
+                    className="px-3 py-1.5 rounded-lg bg-zinc-700 hover:bg-zinc-600 text-white font-black">
+                    Reintentar
+                  </button>
+                </div>
+              ) : (
+                <p className="text-zinc-400 bg-zinc-800 rounded-xl p-3 animate-pulse">
+                  {recorrido.estado === "sin_gps" ? "Esperando tu ubicación GPS…" : "Calculando recorrido…"}
+                </p>
+              )}
             </div>
 
             {/* Paradas */}
