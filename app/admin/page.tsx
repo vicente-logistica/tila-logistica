@@ -6,6 +6,7 @@ import BotonCerrarSesion from "../components/BotonCerrarSesion";
 import { useProtegerRuta } from "../hooks/useProtegerRuta";
 import ChatAsistencia from "../components/ChatAsistencia";
 import ChatToast from "../components/ChatToast";
+import ConfiguracionComisiones from "../components/ConfiguracionComisiones";
 import { markChatMessagesAsKnown, notifyChatMessage } from "../utils/chatSound";
 
 const ESTADOS_VIAJE = [
@@ -1177,7 +1178,8 @@ type ModuloAdmin =
   | "mapa"
   | "reportes"
   | "historial"
-  | "chats";
+  | "chats"
+  | "comisiones";
 
 export default function AdminPage() {
   const { autorizado } = useProtegerRuta("admin");
@@ -1592,7 +1594,7 @@ export default function AdminPage() {
       </section>
 
       {/* Fila secundaria */}
-      <section className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-8">
+      <section className="grid grid-cols-2 md:grid-cols-6 gap-3 mb-8">
         <button type="button" onClick={() => setModuloActivo("clientes")}
           className={`px-3 py-3 rounded-2xl font-black text-sm transition ${moduloActivo === "clientes" ? "bg-purple-900/40 border border-purple-400 text-white" : "bg-zinc-900 border border-zinc-700 text-zinc-400 hover:text-white"}`}>
           Clientes
@@ -1613,7 +1615,21 @@ export default function AdminPage() {
           className={`px-3 py-3 rounded-2xl font-black text-sm transition ${moduloActivo === "chats" ? "bg-blue-900/40 border border-blue-400 text-white" : "bg-zinc-900 border border-zinc-700 text-zinc-400 hover:text-white"}`}>
           Chats / Soporte
         </button>
+        <button type="button" onClick={() => setModuloActivo("comisiones")}
+          className={`px-3 py-3 rounded-2xl font-black text-sm transition ${moduloActivo === "comisiones" ? "bg-green-900/40 border border-green-400 text-white" : "bg-zinc-900 border border-zinc-700 text-zinc-400 hover:text-white"}`}>
+          Comisiones
+        </button>
       </section>
+
+      {/* Configuración de comisiones — el servidor verifica rol admin en GET y PUT */}
+      {moduloActivo === "comisiones" && (
+      <section className="bg-zinc-900 border border-green-400 rounded-3xl p-6 mb-8">
+        <BotonVolverInicio />
+        <h2 className="text-3xl font-black text-green-400 mb-2">Configuración de comisiones</h2>
+        <p className="text-zinc-500 text-sm mb-5">Porcentaje que TILA suma al cliente y descuenta al chofer sobre el precio base del viaje.</p>
+        <ConfiguracionComisiones adminId={usuarioActual?.id} />
+      </section>
+      )}
 
       {/* Gestión de usuarios */}
       {moduloActivo === "usuarios" && (

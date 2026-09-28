@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
-import { calcularTarifaTILA, estimarDuracion } from "../../../lib/tarifas";
+import { leerConfiguracionComisiones } from "../../../lib/configuracionComisiones";
+import {
+  cotizarCarga, camposEconomicosCarga, TIPOS_VEHICULO_VALIDOS,
+} from "../../../lib/cotizacion";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -12,20 +15,6 @@ if (!_url)     throw new Error("Falta SUPABASE_URL en variables de entorno (carg
 if (!_roleKey) throw new Error("Falta SUPABASE_SERVICE_ROLE_KEY en variables de entorno (cargas/publicar)");
 
 const supabaseAdmin = createClient(_url, _roleKey);
-
-// Mapeo tipo_carga nombre → tipo interno (para tarifas)
-const TIPO_CARGA_MAP: Record<string, string> = {
-  "Carga común":       "general",
-  "Carga frágil":      "fragil",
-  "Carga cara":        "fragil",
-  "Carga peligrosa":   "peligrosa",
-  "Carga refrigerada": "refrigerada",
-};
-
-const TIPOS_VEHICULO_VALIDOS = [
-  "Moto", "Utilitario", "Furgón", "Pick-up",
-  "Camión rígido", "Camión tractor", "Bitrén",
-];
 
 export async function POST(req: Request) {
   // ── 1. Leer x-user-id ────────────────────────────────────────────────────
@@ -104,23 +93,16 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "km_estimados debe ser un número positivo" }, { status: 400 });
   }
 
-  // ── 6. Calcular tarifa server-side ────────────────────────────────────────
-  const tipoCargaInterno = TIPO_CARGA_MAP[tipo_carga] ?? "general";
-  const cantidadParadas  = Array.isArray(paradas_intermedias)
-    ? paradas_intermedias.filter((p: string) => typeof p === "string" && p.trim()).length + 1
-    : 1;
-  const duracion = estimarDuracion(kmNum, tipo_vehiculo);
-
-  const tarifa = calcularTarifaTILA({
-    distanciaKm:            kmNum,
-    tipoVehiculo:           tipo_vehiculo,
-    tipoCarga:              tipoCargaInterno,
-    duracionHoras:          duracion,
-    cantidadParadas,
-    peajes:                 0,
-    horasEspera:            0,
-    porcentajeComisionTila: 14,
-  });
+  // ── 6. Calcular tarifa server-side con las comisiones VIGENTES ──────────────
+  // Misma función y misma configuración que /api/tarifas/cotizar (vista previa). Los
+  // montos quedan fijos en la carga: un cambio posterior de comisiones sólo afecta cargas
+  // nuevas.
+  const comisiones = await leerConfiguracionComisiones(supabaseAdmin);
+  const tarifa = cotizarCarga(
+    { kmEstimados: kmNum, tipoVehiculo: tipo_vehiculo, tipoCarga: tipo_carga, paradasIntermedias: paradas_intermedias },
+    comisiones,
+  );
+  const economicos = camposEconomicosCarga(tarifa);
 
   // ── 7. Componer texto de vehículo ─────────────────────────────────────────
   const vehiculoTexto = [tipo_vehiculo, tipo_carroceria, categoria_legal]
@@ -152,10 +134,10 @@ export async function POST(req: Request) {
       detalles:            detalles ?? null,
       km_estimados:        kmNum,
       // ── Tarifas (calculadas server-side) ─────────────────────────────────
-      precio_base:         tarifa.subtotalAntesComision,
-      precio_cliente:      tarifa.precioCliente,
-      pago_chofer:         tarifa.choferCobra,
-      comision_plataforma: tarifa.comisionTila,
+      precio_base:         economicos.precio_base,
+      precio_cliente:      economicos.precio_cliente,
+      pago_chofer:         economicos.pago_chofer,
+      comision_plataforma: economicos.comision_plataforma,
     }])
     .select()
     .single();

@@ -6,11 +6,35 @@
  *   Tractor semi playo 1.200 km = USD 2.600 × $1.435 = $3.731.000
  *   valorKm: 2900 $/km | valorHora: 50000 $/h | mínimo: 300.000
  *
- * Comisión TILA: 14%
- *   precioCliente = subtotal × 1.14
- *   choferCobra   = subtotal
- *   comisionTila  = subtotal × 0.14
+ * Comisiones TILA, en PUNTOS BÁSICOS (bp; 750 = 7,50%), por separado:
+ *   precioCliente = subtotal × (1 + comisionClienteBp / 10000)   → lo que paga el cliente
+ *   choferCobra   = subtotal × (1 − comisionChoferBp  / 10000)   → lo que cobra el chofer
+ *   comisionTila  = precioCliente − choferCobra
+ * Redondeo a pesos enteros con aritmética ENTERA (sin floats en el porcentaje). Con
+ * 750/750 da exactamente los mismos montos que la fórmula anterior (7.5 / 100), verificado
+ * para todo subtotal entero de 0 a 100.000.000.
  */
+
+// ─── Comisiones ───────────────────────────────────────────────────────────────
+
+/** Comisiones vigentes por defecto (7,50% / 7,50%) — mismas que producción. */
+export const COMISION_CLIENTE_BP_DEFECTO = 750;
+export const COMISION_CHOFER_BP_DEFECTO  = 750;
+
+/** Un porcentaje en bp válido: entero, 0 ≤ bp < 10000 (< 100%, para que el chofer
+ *  nunca quede en negativo). Sin tope comercial. */
+export function esComisionBpValida(bp: unknown): bp is number {
+  return typeof bp === "number" && Number.isInteger(bp) && bp >= 0 && bp < 10000;
+}
+
+/** monto × (10000 ± bp) / 10000, redondeado a pesos enteros (mitad hacia arriba), todo
+ *  en enteros. `monto` debe ser un entero ≥ 0. */
+function aplicarBp(monto: number, factorBp: number): number {
+  const numerador = monto * factorBp;
+  const cociente  = Math.floor(numerador / 10000);
+  const resto     = numerador - cociente * 10000;
+  return resto * 2 >= 10000 ? cociente + 1 : cociente;
+}
 
 // ─── Tabla de vehículos ───────────────────────────────────────────────────────
 
@@ -69,7 +93,9 @@ export interface ConfigVehiculo {
     cantidadParadas?: number;
     peajes?: number;
     horasEspera?: number;
-    porcentajeComisionTila?: number;
+    /** Puntos básicos (750 = 7,50%). Por defecto, las comisiones vigentes. */
+    comisionClienteBp?: number;
+    comisionChoferBp?: number;
   }
   
   export interface DetalleTarifa {
@@ -104,9 +130,15 @@ export interface ConfigVehiculo {
     cantidadParadas = 1,
     peajes = 0,
     horasEspera = 0,
-    porcentajeComisionTila = 14,
+    comisionClienteBp = COMISION_CLIENTE_BP_DEFECTO,
+    comisionChoferBp = COMISION_CHOFER_BP_DEFECTO,
   }: InputTarifa): ResultadoTarifa {
-  
+
+    // Nunca calcular un precio con una comisión inválida (NaN, negativa, decimal, ≥ 100%).
+    if (!esComisionBpValida(comisionClienteBp) || !esComisionBpValida(comisionChoferBp)) {
+      throw new Error(`Comisión inválida (cliente=${comisionClienteBp} bp, chofer=${comisionChoferBp} bp)`);
+    }
+
     const vehiculo: ConfigVehiculo =
       VEHICULOS[tipoVehiculo] ?? VEHICULOS["camion_mediano"];
   
@@ -124,11 +156,9 @@ export interface ConfigVehiculo {
     const minimoAplicado   = subtotalConCarga < vehiculo.minimo;
     const subtotal         = Math.round(Math.max(subtotalConCarga, vehiculo.minimo));
   
-    const comisionCliente = 7.5 / 100;
-    const comisionChofer = 7.5 / 100;
-    const precioCliente = Math.round(subtotal * (1 + comisionCliente));
-    const choferCobra = Math.round(subtotal * (1 - comisionChofer));
-    const comisionTila = precioCliente - choferCobra;
+    const precioCliente = aplicarBp(subtotal, 10000 + comisionClienteBp);
+    const choferCobra   = aplicarBp(subtotal, 10000 - comisionChoferBp);
+    const comisionTila  = precioCliente - choferCobra;
 
     console.log("[tarifas v2]", {
       distanciaKm, tipoVehiculo, tipoCarga, horas,
@@ -136,9 +166,10 @@ export interface ConfigVehiculo {
       costoTiempo:    Math.round(costoTiempo),
       subtotalBase:   Math.round(subtotalBase),
       factorCarga, minimoAplicado, subtotal,
+      comisionClienteBp, comisionChoferBp,
       precioCliente, choferCobra, comisionTila,
     });
-  
+
     return {
       precioCliente,
       choferCobra,
