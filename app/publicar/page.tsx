@@ -5,11 +5,6 @@ import { useRouter } from "next/navigation";
 import { supabase } from "../lib/supabase";
 import { useProtegerRuta } from "../hooks/useProtegerRuta";
 import BotonCerrarSesion from "../components/BotonCerrarSesion";
-import {
-  calcularTarifaTILA,
-  estimarDuracion,
-  ResultadoTarifa,
-} from "../lib/tarifas";
 
 const SOPORTE_WHATSAPP = "5491158689383";
 const SOPORTE_EMAIL = "contacto@tilalogistica.com";
@@ -76,8 +71,6 @@ export default function PublicarPage() {
   const [comisionPlataforma, setComisionPlataforma] = useState(0);
   const [publicando, setPublicando] = useState(false);
 
-  const tipoCargaObj = TIPOS_CARGA.find(c => c.nombre === tipoCargaNombre);
-
   const tiposFiltrados = categoriaLegal
     ? TIPOS_VEHICULO.filter(t => t.categoria === categoriaLegal)
     : TIPOS_VEHICULO;
@@ -125,7 +118,9 @@ export default function PublicarPage() {
     calcularDistancia();
   }, [origen, destino, paradasIntermedias]);
 
-  // ─── Calcular tarifa ─────────────────────────────────────────────────────
+  // ─── Calcular tarifa (cotización del SERVIDOR) ─────────────────────────────
+  // /api/tarifas/cotizar usa la misma configuración de comisiones y la misma función que
+  // /api/cargas/publicar: el precio que se ve acá es exactamente el que se guarda.
   useEffect(() => {
     const kilometros = Number(km);
     if (!tipoVehiculo || !tipoCargaNombre || !kilometros || kilometros <= 0) {
@@ -135,25 +130,39 @@ export default function PublicarPage() {
       return;
     }
 
-    const cantidadParadas = paradasIntermedias.filter(p => p.trim() !== "").length + 1;
-    const duracion = estimarDuracion(kilometros, tipoVehiculo);
+    let usuarioId: string | undefined;
+    try { usuarioId = JSON.parse(localStorage.getItem("usuario") || "null")?.id; } catch { usuarioId = undefined; }
+    if (!usuarioId) return;
 
-    const resultado: ResultadoTarifa = calcularTarifaTILA({
-      distanciaKm: kilometros,
-      tipoVehiculo,
-      tipoCarga: tipoCargaObj?.tipo ?? "general",
-      duracionHoras: duracion,
-      cantidadParadas,
-      peajes: 0,
-      horasEspera: 0,
-      porcentajeComisionTila: 14,
-    });
-
-    console.log("[publicar] tarifa →", resultado);
-
-    setPrecioCliente(resultado.precioCliente);
-    setPagoChofer(resultado.choferCobra);
-    setComisionPlataforma(resultado.comisionTila);
+    const control = new AbortController();
+    const t = setTimeout(async () => {
+      try {
+        const res = await fetch("/api/tarifas/cotizar", {
+          method:  "POST",
+          headers: { "Content-Type": "application/json", "x-user-id": usuarioId },
+          body:    JSON.stringify({
+            km_estimados:        kilometros,
+            tipo_vehiculo:       tipoVehiculo,
+            tipo_carga:          tipoCargaNombre,
+            paradas_intermedias: paradasIntermedias.map(p => p.trim()).filter(Boolean),
+          }),
+          signal: control.signal,
+        });
+        const json = await res.json().catch(() => null);
+        if (!res.ok || !json?.cotizacion) {
+          // Sin cotización del servidor no se muestra un precio calculado en el navegador.
+          setPrecioCliente(0); setPagoChofer(0); setComisionPlataforma(0);
+          return;
+        }
+        console.log("[publicar] cotización →", json.cotizacion);
+        setPrecioCliente(json.cotizacion.precio_cliente);
+        setPagoChofer(json.cotizacion.pago_chofer);
+        setComisionPlataforma(json.cotizacion.comision_plataforma);
+      } catch {
+        if (!control.signal.aborted) { setPrecioCliente(0); setPagoChofer(0); setComisionPlataforma(0); }
+      }
+    }, 300);
+    return () => { clearTimeout(t); control.abort(); };
   }, [tipoVehiculo, tipoCargaNombre, categoriaLegal, tipoCarroceria, km, paradasIntermedias]);
 
   const agregarParada = () => {
@@ -194,20 +203,8 @@ export default function PublicarPage() {
 
     setPublicando(true);
 
-    const cantidadParadas = paradasIntermedias.filter(p => p.trim() !== "").length + 1;
-    const duracion = estimarDuracion(kilometros, tipoVehiculo);
-
-    const tarifaFinal: ResultadoTarifa = calcularTarifaTILA({
-      distanciaKm: kilometros,
-      tipoVehiculo,
-      tipoCarga: tipoCargaObj?.tipo ?? "general",
-      duracionHoras: duracion,
-      cantidadParadas,
-      peajes: 0,
-      horasEspera: 0,
-      porcentajeComisionTila: 14,
-    });
-
+    // La tarifa la calcula y la congela el servidor al publicar (misma función que la
+    // cotización de la vista previa) — acá no se calcula nada.
     const paradasValidas = paradasIntermedias.map(p => p.trim()).filter(Boolean);
 
     const pubRes = await fetch("/api/cargas/publicar", {
