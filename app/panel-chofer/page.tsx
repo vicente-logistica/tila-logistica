@@ -13,6 +13,7 @@ import { useCargasCercanas } from "../hooks/useCargasCercanas";
 import { pasoAlarmaCercanas } from "../lib/geo/detectarNuevasCercanas";
 import { clampearIndice } from "../lib/geo/clampearIndice";
 import { esCoordenadaValida } from "../lib/geo/haversine";
+import { actualizarEstadoChofer } from "../lib/estadoChoferCliente";
 
 const LABELS = ["A", "B", "C", "D", "E", "F"];
 const SOPORTE_WHATSAPP = "5491158689383";
@@ -347,7 +348,7 @@ export default function PanelChoferPage() {
           if (quiereOnline && !validacion.puedeOnline) {
             console.log(`DEBUG_ONLINE_CAMBIO origen=estado-inicial:validacion-fallida anterior=${onlineRef.current} nuevo=false`);
             setOnline(false);
-            await supabase.from("usuarios").update({ online: false }).eq("id", usuario.id);
+            await actualizarEstadoChofer(usuario.id, { online: false });
             setMostrarGestion(true);
           } else {
             console.log(`DEBUG_ONLINE_CAMBIO origen=estado-inicial:normal anterior=${onlineRef.current} nuevo=${quiereOnline}`);
@@ -555,7 +556,7 @@ export default function PanelChoferPage() {
     const u = localStorage.getItem("usuario");
     if (!u) return;
     const usuario = JSON.parse(u);
-    supabase.from("usuarios").update({ online }).eq("id", usuario.id).then(() => {});
+    void actualizarEstadoChofer(usuario.id, { online });
     if (!online) detenerAlarmaViaje("online:desactivado");
   }, [online, onlineCargado, detenerAlarmaViaje]);
 
@@ -705,11 +706,8 @@ export default function PanelChoferPage() {
       const u = localStorage.getItem("usuario");
       if (!u) return;
       const usuario = JSON.parse(u);
-      const { error } = await supabase
-        .from("usuarios")
-        .update({ navegador_preferido: navId })
-        .eq("id", usuario.id);
-      if (!error) setNavegadorPreferido(navId);
+      const ok = await actualizarEstadoChofer(usuario.id, { navegador_preferido: navId });
+      if (ok) setNavegadorPreferido(navId);
     } finally {
       setGuardandoNav(false);
     }
