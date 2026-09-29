@@ -7,6 +7,7 @@ import { useProtegerRuta } from "../hooks/useProtegerRuta";
 import ChatAsistencia from "../components/ChatAsistencia";
 import ChatToast from "../components/ChatToast";
 import ConfiguracionComisiones from "../components/ConfiguracionComisiones";
+import ConfiguracionRadio from "../components/ConfiguracionRadio";
 import { markChatMessagesAsKnown, notifyChatMessage } from "../utils/chatSound";
 
 const ESTADOS_VIAJE = [
@@ -1617,7 +1618,7 @@ export default function AdminPage() {
         </button>
         <button type="button" onClick={() => setModuloActivo("comisiones")}
           className={`px-3 py-3 rounded-2xl font-black text-sm transition ${moduloActivo === "comisiones" ? "bg-green-900/40 border border-green-400 text-white" : "bg-zinc-900 border border-zinc-700 text-zinc-400 hover:text-white"}`}>
-          Comisiones
+          Configuración
         </button>
       </section>
 
@@ -1628,6 +1629,15 @@ export default function AdminPage() {
         <h2 className="text-3xl font-black text-green-400 mb-2">Configuración de comisiones</h2>
         <p className="text-zinc-500 text-sm mb-5">Porcentaje que TILA suma al cliente y descuenta al chofer sobre el precio base del viaje.</p>
         <ConfiguracionComisiones adminId={usuarioActual?.id} />
+      </section>
+      )}
+
+      {/* Radio de matching — bloque independiente; el servidor verifica rol admin en GET y PUT */}
+      {moduloActivo === "comisiones" && (
+      <section className="bg-zinc-900 border border-blue-400 rounded-3xl p-6 mb-8">
+        <h2 className="text-3xl font-black text-blue-400 mb-2">Radio de matching</h2>
+        <p className="text-zinc-500 text-sm mb-5">Hasta qué distancia del punto de retiro se le ofrecen cargas a un chofer.</p>
+        <ConfiguracionRadio adminId={usuarioActual?.id} />
       </section>
       )}
 

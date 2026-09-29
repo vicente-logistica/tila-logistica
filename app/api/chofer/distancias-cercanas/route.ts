@@ -1,12 +1,12 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import type { PuntoGeo } from "../../../lib/geo/haversine";
-import { distanciaHaversineKm } from "../../../lib/geo/haversine";
 import { interpretarLegs } from "../../../lib/geo/interpretarLegs";
 import {
-  geocodificarParaPrefiltro, calcularLegsReales, claveCacheGps, conConcurrenciaLimitada,
+  geocodificarParaPrefiltro, calcularLegsReales, claveCacheGps, conConcurrenciaLimitada, pasaPrefiltroRadio,
 } from "../../../lib/geo/calculoDistanciaCarga";
-import { RADIO_INICIAL_KM, RADIO_MAXIMO_KM, CONCURRENCIA_MAXIMA_DIRECTIONS } from "../../../lib/geo/config";
+import { CONCURRENCIA_MAXIMA_DIRECTIONS } from "../../../lib/geo/config";
+import { leerRadioMatching } from "../../../lib/configuracionRadio";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -74,6 +74,10 @@ export async function POST(req: Request) {
   if (!apiKey) return NextResponse.json({ error: "Falta GOOGLE_SERVER_API_KEY en variables de entorno" }, { status: 500 });
 
   const gpsChofer: PuntoGeo = { lat, lng };
+  // Radio de matching vigente (Panel Admin → Configuración; 35 km si no hay configuración).
+  // El MISMO valor usa /api/cargas/aceptar para revalidar — se usa tanto para el prefiltro
+  // Haversine como para la decisión final por distancia de ruta.
+  const { radioKm } = await leerRadioMatching(supabaseAdmin);
 
   // ── 3. Traer origen/destino de las cargas pedidas — SOLO LECTURA, sólo pendientes ──
   const { data: cargas, error: errCargas } = await supabaseAdmin
@@ -121,8 +125,7 @@ export async function POST(req: Request) {
       resultados[id] = base(id, "sin_datos_a");
       return;
     }
-    const distanciaLineaRecta = distanciaHaversineKm(gpsChofer, coordsA);
-    if (distanciaLineaRecta > RADIO_MAXIMO_KM) {
+    if (!pasaPrefiltroRadio(gpsChofer, coordsA, radioKm)) {
       resultados[id] = base(id, "fuera_de_rango");
       return;
     }
@@ -134,7 +137,7 @@ export async function POST(req: Request) {
   // validación server-side de /api/cargas/aceptar sobre la MISMA carga/posición.
   await conConcurrenciaLimitada(candidatos, CONCURRENCIA_MAXIMA_DIRECTIONS, async ({ id, puntos }) => {
     const legs = await calcularLegsReales(gpsChofer, puntos, apiKey, `${id}:${claveCacheGps(gpsChofer)}`);
-    const interpretado = legs ? interpretarLegs(legs, RADIO_INICIAL_KM, RADIO_MAXIMO_KM) : null;
+    const interpretado = legs ? interpretarLegs(legs, radioKm, radioKm) : null;
     if (!interpretado) {
       resultados[id] = base(id, "error_directions");
       return;

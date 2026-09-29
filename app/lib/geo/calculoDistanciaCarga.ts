@@ -1,7 +1,7 @@
 import { distanciaHaversineKm, type PuntoGeo } from "./haversine.ts";
 import { interpretarLegs, type LegSimple } from "./interpretarLegs.ts";
 import {
-  RADIO_INICIAL_KM, RADIO_MAXIMO_KM,
+  RADIO_INICIAL_KM,
   TTL_GEOCODE_MS, TTL_DISTANCIA_MS,
   DECIMALES_CACHE_GPS,
 } from "./config.ts";
@@ -97,8 +97,8 @@ export interface ResultadoValidacionRadio {
 }
 
 /**
- * Regla de negocio ÚNICA de "¿esta carga está dentro del radio inicial (35km) desde esta
- * posición GPS?" — usada tanto para el listado (visual) como para la validación
+ * Regla de negocio ÚNICA de "¿esta carga está dentro del radio de matching vigente desde
+ * esta posición GPS?" — usada tanto para el listado (visual) como para la validación
  * server-side al aceptar (obligatoria, no sólo protección visual).
  *
  * `puntosCarga` = [A, ...intermedias, B] (mismo armado que ya usa distancias-cercanas:
@@ -106,11 +106,15 @@ export interface ResultadoValidacionRadio {
  * (por ej. su id) para poder cachear los legs por (carga, posición).
  *
  * Nunca usa SOLO Haversine como validación final — Haversine es prefiltro barato para
- * descartar casos obviamente lejanos (>50km) sin gastar una llamada a Directions; la
- * regla final siempre es la distancia VIAL de legs[0] vía interpretarLegs.
+ * descartar casos obviamente lejanos sin gastar una llamada a Directions; la regla final
+ * siempre es la distancia VIAL de legs[0] vía interpretarLegs.
+ *
+ * `radioKm` = radio de matching vigente (configuracion_plataforma.radio_matching_km, ver
+ * app/lib/configuracionRadio.ts). El mismo valor se usa para el prefiltro y para la
+ * decisión final — no hay otro tope.
  */
 export async function validarRadioInicial(
-  gps: PuntoGeo, puntosCarga: string[], apiKey: string, claveCacheBase: string
+  gps: PuntoGeo, puntosCarga: string[], apiKey: string, claveCacheBase: string, radioKm: number = RADIO_INICIAL_KM,
 ): Promise<ResultadoValidacionRadio> {
   const puntoA = puntosCarga?.[0];
   if (!puntoA) return { ok: false, motivo: "sin_datos_a" };
@@ -118,20 +122,30 @@ export async function validarRadioInicial(
   const coordsA = await geocodificarParaPrefiltro(puntoA, apiKey);
   if (!coordsA) return { ok: false, motivo: "sin_datos_a" };
 
-  if (distanciaHaversineKm(gps, coordsA) > RADIO_MAXIMO_KM) {
+  if (!pasaPrefiltroRadio(gps, coordsA, radioKm)) {
     return { ok: false, motivo: "fuera_de_rango" };
   }
 
   const legs = await calcularLegsReales(gps, puntosCarga, apiKey, `${claveCacheBase}:${claveCacheGps(gps)}`);
   if (!legs) return { ok: false, motivo: "error_directions" };
 
-  const interpretado = interpretarLegs(legs, RADIO_INICIAL_KM, RADIO_MAXIMO_KM);
+  const interpretado = interpretarLegs(legs, radioKm, radioKm);
   if (!interpretado) return { ok: false, motivo: "error_directions" };
 
   if (!interpretado.dentroRadioInicial) {
     return { ok: false, motivo: "fuera_de_rango", hastaCargaKm: interpretado.hastaCargaKm };
   }
   return { ok: true, hastaCargaKm: interpretado.hastaCargaKm };
+}
+
+/**
+ * Prefiltro Haversine con el radio de matching vigente. Es exacto como descarte: la
+ * distancia en línea recta nunca supera la distancia por ruta, así que si la recta ya
+ * excede el radio, la ruta también — nunca descarta una carga que la ruta aceptaría.
+ * Usado por /api/chofer/distancias-cercanas y por validarRadioInicial (aceptar).
+ */
+export function pasaPrefiltroRadio(gps: PuntoGeo, coordsA: PuntoGeo, radioKm: number): boolean {
+  return distanciaHaversineKm(gps, coordsA) <= radioKm;
 }
 
 /** Ejecuta `fn` sobre `items` con un máximo de `limite` en simultáneo. */
