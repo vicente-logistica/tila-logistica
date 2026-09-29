@@ -4,6 +4,7 @@ import {
   RECHAZOS, validarGpsAceptacion, validarRadioAceptacion, asignarChoferAtomico,
   type RechazoAceptacion,
 } from "../../../lib/aceptarCarga";
+import { leerRadioMatching } from "../../../lib/configuracionRadio";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -109,11 +110,15 @@ export async function POST(req: Request) {
   // fuera_de_rango → fuera_de_radio (403); sin API key / sin geocode de A / Directions
   // falló → error_distancia (503). SIEMPRE se rechaza: nunca se acepta "por las dudas"
   // cuando no se pudo confirmar la distancia vial real.
+  // Radio de matching vigente — el MISMO que usa /api/chofer/distancias-cercanas para
+  // mostrar la carga (35 km si no hay configuración).
+  const { radioKm } = await leerRadioMatching(supabaseAdmin);
   const validacion = await validarRadioAceptacion(
     gpsValidado.gps,
     puntosCarga,
     process.env.GOOGLE_SERVER_API_KEY,
     String(carga.id),
+    radioKm,
   );
   if (!validacion.ok) return rechazar(validacion);
 
