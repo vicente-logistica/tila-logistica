@@ -11,6 +11,7 @@ import ChatToast from "../components/ChatToast";
 import { registrarEvidenciaApi, estadoAEvento } from "../lib/evidencias";
 import { playChatSound } from "../utils/chatSound";
 import type { TramoRecorrido } from "../lib/geo/desgloseRecorrido";
+import { actualizarEstadoChofer } from "../lib/estadoChoferCliente";
 import { hablar, detenerVoz } from "../utils/vozNavegacion";
 import { diagLog } from "../utils/diagLoggerNav";
 
@@ -329,8 +330,7 @@ export default function ViajeActivoPage() {
 
   useEffect(() => {
     if (!bateriaDisponible || bateriaNivel === null || !usuarioRef.current?.id) return;
-    supabase.from("usuarios").update({ bateria_nivel: bateriaNivel, bateria_cargando: bateriaCargando, ultima_senal_at: new Date().toISOString() })
-      .eq("id", usuarioRef.current.id).then(() => {});
+    void actualizarEstadoChofer(usuarioRef.current.id, { bateria_nivel: bateriaNivel, bateria_cargando: bateriaCargando, senal: true });
   }, [bateriaNivel, bateriaCargando, bateriaDisponible]);
 
   // ─── Parada activa ────────────────────────────────────────────────────────
@@ -736,11 +736,11 @@ export default function ViajeActivoPage() {
             }).catch((err) => console.error("[gps] error:", err));
           }
           if (usuarioRef.current?.id) {
-            await supabase.from("usuarios").update({
-              ultima_senal_at: now,
+            await actualizarEstadoChofer(usuarioRef.current.id, {
+              senal: true,
               bateria_nivel: bateriaNivelRef.current,
               bateria_cargando: bateriaCargandoRef.current,
-            }).eq("id", usuarioRef.current.id);
+            });
           }
         },
         (err) => {

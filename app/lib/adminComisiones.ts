@@ -1,6 +1,31 @@
 import {
   leerConfiguracionComisiones, guardarConfiguracionComisiones,
 } from "./configuracionComisiones.ts";
+import { resolverUsuario, type ResultadoAuth } from "./auth/sesion.ts";
+
+/**
+ * Identidad para /api/admin/configuracion/comisiones: SIEMPRE el camino `strict` de
+ * resolverUsuario, sin importar TILA_AUTH_MODE global — sólo una sesión firmada (cookie
+ * HttpOnly que emite /api/auth/login, o Bearer) con control de origen. El header
+ * `x-user-id` se ignora: inventar el id de un admin no alcanza. Si TILA_SESSION_SECRET no
+ * está configurado, rechaza (config_incompleta) — nunca cae al header.
+ */
+export function identidadAdminComisiones(req: Request, env: Record<string, string | undefined> = process.env): ResultadoAuth {
+  return resolverUsuario(req, { env: { ...env, TILA_AUTH_MODE: "strict" } });
+}
+
+/** Mensaje claro para el panel cuando no hay sesión firmada válida. */
+export function rechazoSinSesion(motivo: string | null): { status: number; body: Record<string, unknown> } {
+  return {
+    status: 401,
+    body: {
+      error: motivo === "config_incompleta"
+        ? "Sesión segura no configurada en el servidor (falta TILA_SESSION_SECRET)."
+        : "Se requiere una sesión segura: cerrá sesión y volvé a iniciarla.",
+      motivo,
+    },
+  };
+}
 
 /**
  * Lógica de /api/admin/configuracion/comisiones separada del handler (Next + Supabase
