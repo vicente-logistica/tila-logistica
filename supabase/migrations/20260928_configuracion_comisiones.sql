@@ -31,9 +31,10 @@ CREATE TABLE IF NOT EXISTS public.configuracion_plataforma (
   updated_by           uuid        NULL REFERENCES public.usuarios(id) ON DELETE SET NULL,
   -- Una única configuración: sólo puede existir la fila id = 1.
   CONSTRAINT configuracion_plataforma_fila_unica CHECK (id = 1),
-  -- 0 ≤ bp < 10000 (menos de 100%: el chofer nunca queda en negativo). Sin tope comercial.
-  CONSTRAINT configuracion_plataforma_comision_cliente_bp_rango CHECK (comision_cliente_bp >= 0 AND comision_cliente_bp < 10000),
-  CONSTRAINT configuracion_plataforma_comision_chofer_bp_rango  CHECK (comision_chofer_bp  >= 0 AND comision_chofer_bp  < 10000)
+  -- Cliente: ≥ 0, sin tope comercial (el único límite es el del tipo integer).
+  CONSTRAINT configuracion_plataforma_comision_cliente_bp_rango CHECK (comision_cliente_bp >= 0),
+  -- Chofer: 0..10000 (100 %). Con 100 % el chofer cobra $0; con más, su pago sería negativo.
+  CONSTRAINT configuracion_plataforma_comision_chofer_bp_rango  CHECK (comision_chofer_bp  >= 0 AND comision_chofer_bp <= 10000)
 );
 
 -- Valores actuales de producción (7,50% / 7,50%). Idempotente: no pisa una fila existente.

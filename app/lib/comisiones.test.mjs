@@ -3,11 +3,13 @@ import assert from "node:assert/strict";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { calcularTarifaTILA, estimarDuracion, esComisionBpValida } from "./tarifas.ts";
+import {
+  calcularTarifaTILA, estimarDuracion, esComisionClienteBpValida, esComisionChoferBpValida, COMISION_BP_MAXIMO_TECNICO,
+} from "./tarifas.ts";
 import { leerConfiguracionComisiones, interpretarFilaConfiguracion, guardarConfiguracionComisiones } from "./configuracionComisiones.ts";
 import { cotizarCarga, camposEconomicosCarga, TIPO_CARGA_MAP } from "./cotizacion.ts";
 import { procesarGetComisiones, procesarPutComisiones } from "./adminComisiones.ts";
-import { porcentajeTextoABp, bpAPorcentajeTexto } from "./comisionesFormato.ts";
+import { porcentajeTextoABp, bpAPorcentajeTexto, esCambioDelAdmin } from "./comisionesFormato.ts";
 
 const AQUI = dirname(fileURLToPath(import.meta.url));
 const RAIZ_APP = resolve(AQUI, "..");
@@ -84,32 +86,77 @@ test("redondeo: empate exacto (x,5) se resuelve hacia arriba, sin error de punto
 
 // ═══════════════ VALIDACIÓN ═══════════════
 
-test("validación: esComisionBpValida rechaza negativos, NaN, no enteros, >= 10000 y no-números", () => {
-  for (const malo of [-1, -750, NaN, Infinity, 7.5, 750.5, 10000, 12000, "750", null, undefined, {}]) {
-    assert.equal(esComisionBpValida(malo), false, `debería rechazar ${String(malo)}`);
+test("validación cliente: cualquier porcentaje ≥ 0 (sin tope comercial); rechaza negativos, NaN, no enteros, no-números", () => {
+  for (const bueno of [0, 5, 100, 475, 750, 1000, 2500, 5000, 10000, 50000, COMISION_BP_MAXIMO_TECNICO]) assert.equal(esComisionClienteBpValida(bueno), true, String(bueno));
+  for (const malo of [-1, -750, NaN, Infinity, 7.5, 750.5, COMISION_BP_MAXIMO_TECNICO + 1, "750", null, undefined, {}]) {
+    assert.equal(esComisionClienteBpValida(malo), false, `debería rechazar ${String(malo)}`);
   }
-  for (const bueno of [0, 1, 325, 475, 500, 750, 9999]) assert.equal(esComisionBpValida(bueno), true);
+});
+
+test("validación chofer: 0 % a 100 % inclusive (con más, el pago sería negativo)", () => {
+  for (const bueno of [0, 5, 100, 750, 1000, 5000, 9999, 10000]) assert.equal(esComisionChoferBpValida(bueno), true, String(bueno));
+  for (const malo of [-1, 10001, 12000, NaN, 7.5, "750", null]) assert.equal(esComisionChoferBpValida(malo), false, `debería rechazar ${String(malo)}`);
 });
 
 test("validación: calcularTarifaTILA se niega a calcular con una comisión inválida", () => {
-  for (const malo of [-1, NaN, 7.5, 10000]) {
+  for (const malo of [-1, NaN, 7.5]) {
     assert.throws(() => tarifa({ ...BASE, comisionClienteBp: malo }), /Comisión inválida/);
     assert.throws(() => tarifa({ ...BASE, comisionChoferBp: malo }), /Comisión inválida/);
+  }
+  assert.throws(() => tarifa({ ...BASE, comisionChoferBp: 10001 }), /Comisión inválida/, "chofer > 100 %");
+});
+
+test("100 % y más: chofer 100 % cobra $0 (nunca negativo); cliente 100 % paga el doble; cliente 250 % se acepta", () => {
+  const cho100 = tarifa({ ...BASE, comisionClienteBp: 750, comisionChoferBp: 10000 });
+  assert.equal(cho100.choferCobra, 0);
+  assert.equal(cho100.comisionTila, cho100.precioCliente);
+  const cli100 = tarifa({ ...BASE, comisionClienteBp: 10000, comisionChoferBp: 750 });
+  assert.equal(cli100.precioCliente, 2 * SUBTOTAL);
+  const cli250 = tarifa({ ...BASE, comisionClienteBp: 25000, comisionChoferBp: 0 });
+  assert.equal(cli250.precioCliente, Math.round(SUBTOTAL * 3.5));
+  assert.equal(cli250.choferCobra, SUBTOTAL);
+  for (const r of [cho100, cli100, cli250]) for (const v of [r.precioCliente, r.choferCobra, r.comisionTila]) assert.ok(Number.isInteger(v) && v >= 0);
+});
+
+test("valores extremos de cliente: hasta el máximo técnico el cálculo sigue siendo exacto (verificado con BigInt)", () => {
+  for (const bpCli of [10000, 25000, 1_000_000, COMISION_BP_MAXIMO_TECNICO]) {
+    const r = tarifa({ ...BASE, comisionClienteBp: bpCli, comisionChoferBp: 750 });
+    const num = BigInt(SUBTOTAL) * BigInt(10000 + bpCli);
+    const esperado = num / 10000n + (num % 10000n * 2n >= 10000n ? 1n : 0n);
+    assert.equal(BigInt(r.precioCliente), esperado, `cliente ${bpCli} bp`);
   }
 });
 
 // ═══════════════ FORMATO DEL PANEL (% ↔ bp) ═══════════════
 
-test("formato: porcentaje escrito por el admin → puntos básicos exactos", () => {
-  for (const [texto, bp] of [["7,50", 750], ["7,5", 750], ["7.5", 750], ["5", 500], ["5,00", 500], ["4,75", 475], ["3.25", 325], ["0", 0], ["99,99", 9999], [" 7,50 % ", 750]]) {
+test("formato: porcentaje libre escrito por el admin (coma o punto) → puntos básicos exactos", () => {
+  for (const [texto, bp] of [
+    ["0", 0], ["0,05", 5], ["0.05", 5], ["1", 100], ["4,75", 475], ["5", 500], ["7,5", 750], ["7.5", 750], ["7,50", 750],
+    ["10", 1000], ["25", 2500], ["50", 5000], ["100", 10000], ["100,00", 10000], ["250", 25000], ["3.25", 325], [" 7,50 % ", 750],
+  ]) {
     assert.equal(porcentajeTextoABp(texto), bp, texto);
   }
-  for (const malo of ["", "-1", "7,505", "100", "abc", "7,5,0", "1e2", "7 5"]) assert.equal(porcentajeTextoABp(malo), null, malo);
+  for (const malo of ["", "-1", "7,505", "0,005", "abc", "7,5,0", "1e2", "7 5", ",5", "5,"]) assert.equal(porcentajeTextoABp(malo), null, malo);
 });
 
-test("formato: puntos básicos → texto del panel", () => {
-  assert.deepEqual([750, 500, 475, 325, 0, 9999, 5].map(bpAPorcentajeTexto), ["7,50", "5,00", "4,75", "3,25", "0,00", "99,99", "0,05"]);
-  for (let bp = 0; bp < 10000; bp++) assert.equal(porcentajeTextoABp(bpAPorcentajeTexto(bp)), bp);
+test("formato: puntos básicos → texto del panel, ida y vuelta exacta", () => {
+  assert.deepEqual([750, 500, 475, 325, 0, 9999, 5, 10000, 25000].map(bpAPorcentajeTexto), ["7,50", "5,00", "4,75", "3,25", "0,00", "99,99", "0,05", "100,00", "250,00"]);
+  for (let bp = 0; bp <= 30000; bp++) assert.equal(porcentajeTextoABp(bpAPorcentajeTexto(bp)), bp);
+});
+
+test("panel: GET 750/750 → los inputs muestran 7,50 y 7,50", () => {
+  const json = { ok: true, comision_cliente_bp: 750, comision_chofer_bp: 750, fuente: "fallback" };
+  assert.deepEqual([bpAPorcentajeTexto(json.comision_cliente_bp), bpAPorcentajeTexto(json.comision_chofer_bp)], ["7,50", "7,50"]);
+});
+
+test("panel: sólo se aceptan cambios del admin; autocompletado o cambios sin interacción se ignoran", () => {
+  assert.equal(esCambioDelAdmin({ huboInteraccion: true, inputType: "insertText" }), true, "tecleo");
+  assert.equal(esCambioDelAdmin({ huboInteraccion: true, inputType: "insertFromPaste" }), true, "pegar");
+  assert.equal(esCambioDelAdmin({ huboInteraccion: true, inputType: "deleteContentBackward" }), true, "borrar");
+  assert.equal(esCambioDelAdmin({ huboInteraccion: false, inputType: "insertText" }), false, "sin interacción previa (script/extensión)");
+  assert.equal(esCambioDelAdmin({ huboInteraccion: false, inputType: undefined }), false, "cambio sin evento de teclado");
+  assert.equal(esCambioDelAdmin({ huboInteraccion: true, inputType: "insertReplacementText" }), false, "sugerencia/autocompletado");
+  assert.equal(esCambioDelAdmin({ huboInteraccion: true, inputType: "insertText", autofill: true }), false, ":-webkit-autofill");
 });
 
 // ═══════════════ COTIZAR = PUBLICAR ═══════════════
@@ -224,7 +271,7 @@ test("guardarConfiguracionComisiones: upsert en id=1 con updated_by; nunca escri
   assert.equal(r.ok, true);
   assert.equal(estado.upserts.length, 1);
   assert.deepEqual([estado.upserts[0].id, estado.upserts[0].comision_cliente_bp, estado.upserts[0].comision_chofer_bp, estado.upserts[0].updated_by], [1, 500, 475, "a-1"]);
-  for (const malo of [-1, 7.5, 10000, "500", null]) {
+  for (const malo of [-1, 7.5, "500", null]) {
     const m = await guardarConfiguracionComisiones(db, { comisionClienteBp: malo, comisionChoferBp: 500 }, "a-1");
     assert.equal(m.ok, false);
   }
@@ -252,10 +299,20 @@ test("admin GET/PUT: cliente, chofer o admin dado de baja → 403 y no se modifi
 
 test("admin PUT: valores inválidos → 400 y no se modifica nada", async () => {
   const { db, estado } = baseFalsa({ usuarios: USUARIOS });
-  for (const body of [{}, { comision_cliente_bp: 7.5, comision_chofer_bp: 750 }, { comision_cliente_bp: 750, comision_chofer_bp: -1 }, { comision_cliente_bp: 10000, comision_chofer_bp: 750 }]) {
+  for (const body of [{}, { comision_cliente_bp: 7.5, comision_chofer_bp: 750 }, { comision_cliente_bp: 750, comision_chofer_bp: -1 }, { comision_cliente_bp: 750, comision_chofer_bp: 10001 }, { comision_cliente_bp: -5, comision_chofer_bp: 750 }]) {
     assert.equal((await procesarPutComisiones(db, "a-1", body)).status, 400, JSON.stringify(body));
   }
   assert.equal(estado.upserts.length, 0);
+});
+
+test("admin PUT: acepta valores libres — 0,05 %, 10 %, 100 % y cliente > 100 %", async () => {
+  for (const [cli, cho] of [[5, 5], [1000, 1000], [10000, 10000], [25000, 0]]) {
+    const { db, estado } = baseFalsa({ usuarios: USUARIOS });
+    const r = await procesarPutComisiones(db, "a-1", { comision_cliente_bp: cli, comision_chofer_bp: cho });
+    assert.equal(r.status, 200, `${cli}/${cho}`);
+    assert.deepEqual([r.body.comision_cliente_bp, r.body.comision_chofer_bp], [cli, cho]);
+    assert.equal(estado.upserts.length, 1);
+  }
 });
 
 test("admin PUT: error de la base (tabla sin migrar) → 500, sin romper nada", async () => {

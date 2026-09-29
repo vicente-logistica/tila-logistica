@@ -21,16 +21,29 @@
 export const COMISION_CLIENTE_BP_DEFECTO = 750;
 export const COMISION_CHOFER_BP_DEFECTO  = 750;
 
-/** Un porcentaje en bp válido: entero, 0 ≤ bp < 10000 (< 100%, para que el chofer
- *  nunca quede en negativo). Sin tope comercial. */
-export function esComisionBpValida(bp: unknown): bp is number {
-  return typeof bp === "number" && Number.isInteger(bp) && bp >= 0 && bp < 10000;
+/** Límite TÉCNICO (no comercial): máximo de la columna `integer` de Postgres donde se
+ *  guardan los bp = 21.474.836,47 %. */
+export const COMISION_BP_MAXIMO_TECNICO = 2147483647;
+/** 100 % — límite MATEMÁTICO de la comisión del chofer: con 100 % el chofer cobra $0; con
+ *  más, su pago sería negativo. */
+export const COMISION_CHOFER_BP_MAXIMO = 10000;
+
+/** Comisión del cliente: entero de bp ≥ 0, sin tope comercial (sólo el técnico). */
+export function esComisionClienteBpValida(bp: unknown): bp is number {
+  return typeof bp === "number" && Number.isInteger(bp) && bp >= 0 && bp <= COMISION_BP_MAXIMO_TECNICO;
+}
+
+/** Comisión del chofer: entero de bp entre 0 y 10000 (100 %) — nunca un pago negativo. */
+export function esComisionChoferBpValida(bp: unknown): bp is number {
+  return typeof bp === "number" && Number.isInteger(bp) && bp >= 0 && bp <= COMISION_CHOFER_BP_MAXIMO;
 }
 
 /** monto × (10000 ± bp) / 10000, redondeado a pesos enteros (mitad hacia arriba), todo
  *  en enteros. `monto` debe ser un entero ≥ 0. */
 function aplicarBp(monto: number, factorBp: number): number {
   const numerador = monto * factorBp;
+  // Aritmética entera exacta sólo mientras el producto sea un entero seguro de JS.
+  if (!Number.isSafeInteger(numerador)) throw new Error(`Cálculo fuera de rango (monto=${monto}, factor=${factorBp})`);
   const cociente  = Math.floor(numerador / 10000);
   const resto     = numerador - cociente * 10000;
   return resto * 2 >= 10000 ? cociente + 1 : cociente;
@@ -134,8 +147,9 @@ export interface ConfigVehiculo {
     comisionChoferBp = COMISION_CHOFER_BP_DEFECTO,
   }: InputTarifa): ResultadoTarifa {
 
-    // Nunca calcular un precio con una comisión inválida (NaN, negativa, decimal, ≥ 100%).
-    if (!esComisionBpValida(comisionClienteBp) || !esComisionBpValida(comisionChoferBp)) {
+    // Nunca calcular un precio con una comisión inválida (NaN, negativa, decimal, o chofer
+    // > 100% — su pago quedaría negativo).
+    if (!esComisionClienteBpValida(comisionClienteBp) || !esComisionChoferBpValida(comisionChoferBp)) {
       throw new Error(`Comisión inválida (cliente=${comisionClienteBp} bp, chofer=${comisionChoferBp} bp)`);
     }
 
