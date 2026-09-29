@@ -1,5 +1,6 @@
 import {
-  COMISION_CLIENTE_BP_DEFECTO, COMISION_CHOFER_BP_DEFECTO, esComisionBpValida,
+  COMISION_CLIENTE_BP_DEFECTO, COMISION_CHOFER_BP_DEFECTO,
+  esComisionClienteBpValida, esComisionChoferBpValida,
 } from "./tarifas.ts";
 
 /**
@@ -30,7 +31,7 @@ export const CONFIGURACION_COMISIONES_DEFECTO: ConfiguracionComisiones = Object.
 export function interpretarFilaConfiguracion(fila: unknown): ConfiguracionComisiones | { error: string } {
   if (!fila || typeof fila !== "object") return { error: "sin_fila" };
   const { comision_cliente_bp, comision_chofer_bp } = fila as Record<string, unknown>;
-  if (!esComisionBpValida(comision_cliente_bp) || !esComisionBpValida(comision_chofer_bp)) {
+  if (!esComisionClienteBpValida(comision_cliente_bp) || !esComisionChoferBpValida(comision_chofer_bp)) {
     return { error: `valores_invalidos(cliente=${String(comision_cliente_bp)}, chofer=${String(comision_chofer_bp)})` };
   }
   return { comisionClienteBp: comision_cliente_bp, comisionChoferBp: comision_chofer_bp, fuente: "db" };
@@ -69,8 +70,11 @@ export async function guardarConfiguracionComisiones(
   valores: { comisionClienteBp: unknown; comisionChoferBp: unknown },
   adminId: string,
 ): Promise<{ ok: true; config: ConfiguracionComisiones } | { ok: false; error: string }> {
-  if (!esComisionBpValida(valores.comisionClienteBp) || !esComisionBpValida(valores.comisionChoferBp)) {
-    return { ok: false, error: "Comisiones inválidas: deben ser enteros en puntos básicos entre 0 y 9999" };
+  if (!esComisionClienteBpValida(valores.comisionClienteBp)) {
+    return { ok: false, error: "Comisiones inválidas: la comisión del cliente debe ser un porcentaje ≥ 0 con hasta 2 decimales" };
+  }
+  if (!esComisionChoferBpValida(valores.comisionChoferBp)) {
+    return { ok: false, error: "Comisiones inválidas: la comisión del chofer debe estar entre 0 % y 100 % (con más, el pago al chofer sería negativo)" };
   }
   const { data, error } = await db
     .from("configuracion_plataforma")
