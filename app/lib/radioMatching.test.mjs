@@ -241,7 +241,10 @@ test("el radio sólo se usa para ofrecer y aceptar — ningún viaje ya aceptado
   const usan = archivosTs(RAIZ_APP)
     .filter((f) => /leerRadioMatching\(/.test(readFileSync(f, "utf8")))
     .map((f) => f.slice(RAIZ_APP.length + 1).replace(/\\/g, "/")).sort();
-  assert.deepEqual(usan, ["api/cargas/aceptar/route.ts", "api/chofer/distancias-cercanas/route.ts", "lib/adminRadio.ts", "lib/configuracionRadio.ts"]);
+  // configuracionOperativa.ts lo lee para el panel admin y como ancho del corredor de
+  // "Vuelta a Casa" (sólo lectura: nunca asigna ni recalcula viajes).
+  assert.deepEqual(usan, ["api/cargas/aceptar/route.ts", "api/chofer/distancias-cercanas/route.ts", "lib/adminRadio.ts", "lib/configuracionOperativa.ts", "lib/configuracionRadio.ts"]);
+  assert.doesNotMatch(readFileSync(join(RAIZ_APP, "lib/configuracionOperativa.ts"), "utf8"), /from\("cargas"\)/, "no toca cargas");
   // distancias-cercanas sólo lee cargas pendientes sin chofer; aceptar asigna con el UPDATE
   // atómico (estado=pendiente AND chofer_id IS NULL) — un viaje ya aceptado nunca entra.
   const cercanas = readFileSync(join(RAIZ_APP, "api/chofer/distancias-cercanas/route.ts"), "utf8");

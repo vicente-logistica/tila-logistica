@@ -207,7 +207,13 @@ test("ningún archivo de la app escribe los montos de una carga salvo publicar (
     .sort();
   // cotizacion.ts sólo ARMA el objeto (camposEconomicosCarga); el único INSERT es publicar
   // (lib/publicarCargaServidor.ts, que usa /api/cargas/publicar).
-  assert.deepEqual(escriben, ["lib/cotizacion.ts", "lib/publicarCargaServidor.ts"]);
+  // "Vuelta a Casa" (sólo lectura): el servidor arma la RESPUESTA leyendo pago_chofer y el
+  // algoritmo sólo DECLARA el tipo. Ninguno puede escribir en la base (se verifica abajo).
+  const soloLecturaVuelta = ["lib/geo/vueltaACasa.ts", "lib/vueltaACasaServidor.ts"];
+  assert.deepEqual(escriben, ["lib/cotizacion.ts", "lib/publicarCargaServidor.ts", ...soloLecturaVuelta].sort());
+  for (const f of soloLecturaVuelta) {
+    assert.doesNotMatch(readFileSync(join(RAIZ_APP, f), "utf8"), /\.(update|insert|upsert|delete|rpc)\s*\(/, `${f} no escribe`);
+  }
 });
 
 // ═══════════════ Base falsa de configuracion_plataforma + usuarios ═══════════════

@@ -11,6 +11,7 @@ import ChatToast from "../components/ChatToast";
 import { registrarEvidenciaApi, estadoAEvento } from "../lib/evidencias";
 import { playChatSound } from "../utils/chatSound";
 import type { TramoRecorrido } from "../lib/geo/desgloseRecorrido";
+import VueltaACasaPanel from "../components/VueltaACasaPanel";
 import { actualizarEstadoChofer } from "../lib/estadoChoferCliente";
 import { hablar, detenerVoz } from "../utils/vozNavegacion";
 import { diagLog } from "../utils/diagLoggerNav";
@@ -246,6 +247,7 @@ export default function ViajeActivoPage() {
   }, []);
   const [mostrarChat, setMostrarChat]         = useState(false);
   const [mostrarDetalles, setMostrarDetalles] = useState(false);
+  const [mostrarVueltaCasa, setMostrarVueltaCasa] = useState(false);
   const [mostrarSoporte, setMostrarSoporte]   = useState(false);
   // Contadores de no leídos por canal
   const [noLeidosViaje, setNoLeidosViaje]           = useState(0);
@@ -408,6 +410,8 @@ export default function ViajeActivoPage() {
   const [recorrido, setRecorrido] = useState<EstadoRecorrido>({ estado: "calculando" });
   const ultimoGpsFrescoRef = useRef(ultimoGpsFresco);
   useEffect(() => { ultimoGpsFrescoRef.current = ultimoGpsFresco; }, [ultimoGpsFresco]);
+  // Vuelta a Casa sólo LEE el último GPS fresco (no lo modifica ni pide GPS por su cuenta).
+  const obtenerGpsVueltaCasa = useCallback(() => ultimoGpsFrescoRef.current, []);
   // Id del último pedido: descarta respuestas viejas (planilla cerrada o pedido superado).
   const recorridoReqRef = useRef(0);
   // Cambia cuando se completa una parada o cambia el estado → recálculo con las pendientes.
@@ -1470,6 +1474,12 @@ export default function ViajeActivoPage() {
           </div>
           <div className="p-4 space-y-4 text-xs">
 
+            {/* Acceso a Vuelta a Casa — módulo aislado, sólo lectura */}
+            <button type="button" onClick={() => { setMostrarDetalles(false); setMostrarVueltaCasa(true); }}
+              className="w-full py-2 rounded-xl bg-green-900/40 border border-green-700 text-green-300 font-black">
+              🏠 VUELTA A CASA
+            </button>
+
             {/* Info del viaje */}
             <div className="grid grid-cols-2 gap-2">
               <div className="bg-zinc-800 rounded-xl p-3"><p className="text-zinc-500 font-black mb-1">ORIGEN</p><p className="text-white font-black">{viaje.origen}</p></div>
@@ -1561,6 +1571,16 @@ export default function ViajeActivoPage() {
 
           </div>
         </div>
+      )}
+
+      {/* ─── VUELTA A CASA (sólo lectura, aislado del mapa/navegación) ─────── */}
+      {mostrarVueltaCasa && (
+        <VueltaACasaPanel
+          cargaId={viaje?.id}
+          usuarioId={usuarioRef.current?.id}
+          obtenerGps={obtenerGpsVueltaCasa}
+          onCerrar={() => setMostrarVueltaCasa(false)}
+        />
       )}
 
       {/* ─── MODAL SELECTOR NAVEGADOR ────────────────────────────────────── */}
