@@ -3,20 +3,45 @@
  * React, para poder testearlas con node:test.
  */
 
-// Más de ~135° entre el heading con que se pidió la ruta y el rumbo de su primer tramo
-// = la ruta arranca prácticamente en sentido contrario al que va el vehículo.
+// Más de ~135° entre el rumbo del primer tramo de la ruta y una dirección de marcha
+// = la ruta arranca prácticamente en sentido contrario a esa dirección.
 export const UMBRAL_RUTA_DIRECCIONAL_OPUESTA_GRADOS = 135;
 
+// Último fix aceptado con más antigüedad que esto → velocidad/desplazamiento viejos, no
+// representan el movimiento actual del vehículo.
+export const EDAD_MAX_FIX_HEADING_CONFIABLE_MS = 3000;
+
+const diferenciaAngular = (a: number, b: number): number =>
+  Math.abs(((a - b + 540) % 360) - 180);
+
+const esNumero = (v: number | null): v is number => v !== null && Number.isFinite(v);
+
 /**
- * Decide si una ruta direccional debe descartarse: sólo cuando se pidió con heading
- * confiable (no null), se conoce el rumbo del primer tramo, la diferencia supera el
- * umbral y todavía no se reintentó (un único reintento por ciclo).
+ * Decide si una ruta direccional debe descartarse. Criterio conservador: el heading
+ * usado para pedirla puede ser uno conservado de un fix anterior (MapaTILA y
+ * viaje-activo conservan el último válido cuando el fix trae null), así que por sí solo
+ * nunca alcanza. Se descarta SÓLO si se cumplen todas:
+ *  - no es el reintento (un único reintento por ciclo);
+ *  - el primer tramo está a más de UMBRAL_RUTA_DIRECCIONAL_OPUESTA_GRADOS del heading
+ *    con que se pidió la ruta;
+ *  - Y también a más de ese umbral del rumbo del desplazamiento real reciente;
+ *  - el vehículo se mueve a velocidadMinMps o más;
+ *  - el último fix aceptado es reciente (≤ EDAD_MAX_FIX_HEADING_CONFIABLE_MS).
+ * Cualquier dato faltante o condición que falle → false (la ruta se instala).
  */
-export function debeRechazarRutaDireccional(
-  diferenciaAngular: number | null,
-  yaReintentada: boolean
-): boolean {
-  if (yaReintentada) return false;
-  if (diferenciaAngular === null || Number.isNaN(diferenciaAngular)) return false;
-  return diferenciaAngular > UMBRAL_RUTA_DIRECCIONAL_OPUESTA_GRADOS;
+export function debeRechazarRutaDireccional(p: {
+  bearingRuta: number | null;
+  headingAlPedir: number | null;
+  bearingDesplazamiento: number | null;
+  velocidadMps: number | null;
+  velocidadMinMps: number;
+  edadUltimoFixMs: number | null;
+  yaReintentada: boolean;
+}): boolean {
+  if (p.yaReintentada) return false;
+  if (!esNumero(p.bearingRuta) || !esNumero(p.headingAlPedir) || !esNumero(p.bearingDesplazamiento)) return false;
+  if (!esNumero(p.velocidadMps) || p.velocidadMps < p.velocidadMinMps) return false;
+  if (!esNumero(p.edadUltimoFixMs) || p.edadUltimoFixMs < 0 || p.edadUltimoFixMs > EDAD_MAX_FIX_HEADING_CONFIABLE_MS) return false;
+  return diferenciaAngular(p.bearingRuta, p.headingAlPedir) > UMBRAL_RUTA_DIRECCIONAL_OPUESTA_GRADOS
+    && diferenciaAngular(p.bearingRuta, p.bearingDesplazamiento) > UMBRAL_RUTA_DIRECCIONAL_OPUESTA_GRADOS;
 }

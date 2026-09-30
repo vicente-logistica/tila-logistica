@@ -2644,10 +2644,11 @@ export default function MapaTILA({
 
         // RUTA_DIRECCIONAL: compara el heading enviado en el origen contra el rumbo del
         // primer tramo de la ruta nueva ANTES de instalarla. Si arranca prácticamente en
-        // sentido contrario (> UMBRAL_RUTA_DIRECCIONAL_OPUESTA_GRADOS) con heading
-        // confiable, la ruta NO se instala: rutaPolylineRef/indicePorStepRef/directions
-        // siguen con la ruta anterior, y se reintenta UNA sola vez sin heading desde el
-        // fix aceptado más reciente. calculandoRutaNavRef sigue en true (onSettled pasa
+        // sentido contrario (> UMBRAL_RUTA_DIRECCIONAL_OPUESTA_GRADOS) al heading Y al
+        // desplazamiento real reciente (ver debeRechazarRutaDireccional), la ruta NO se
+        // instala: rutaPolylineRef/indicePorStepRef/directions siguen con la ruta
+        // anterior, y se reintenta UNA sola vez sin heading desde el fix aceptado más
+        // reciente. calculandoRutaNavRef sigue en true (onSettled pasa
         // al reintento) — ningún otro cálculo se cruza mientras tanto.
         const gpsAlResponder = fixValidoActualRef.current ?? ultimoFixValidoRef.current;
         const bearingInicial = calcularBearing(puntosDetallados[0], puntosDetallados[1]);
@@ -2655,12 +2656,41 @@ export default function MapaTILA({
           ? diferenciaAngularGrados(headingAlPedir, bearingInicial)
           : null;
         const recorridoDuranteRequestM = gpsAlResponder ? distanciaMetros(fixOrigen, gpsAlResponder) : null;
-        const rechazarPorSentido = debeRechazarRutaDireccional(diferenciaAngularInicial, reintentoDireccional);
+        // headingAlPedir puede ser uno conservado de un fix anterior, así que por sí solo
+        // nunca alcanza para rechazar: la ruta también tiene que estar opuesta al rumbo
+        // del desplazamiento real, con movimiento y fix recientes. Se evalúa con lo que ya
+        // existe, medido al llegar la respuesta: rumbo del desplazamiento entre los dos
+        // últimos fixes aceptados (historialPosicionRef, ≥3m como headingCalculadoDiag),
+        // velocidad (velocidadMPorMsRef, mismo umbral VELOCIDAD_MIN_HEADING_CONFIABLE_MPS
+        // que la selección de segmento) y edad del último fix aceptado (ultimoTickTsRef).
+        // No cambia qué heading se le mandó a Google.
+        const { previa: fixPrevioDesp, actual: fixActualDesp } = historialPosicionRef.current;
+        const bearingDesplazamiento = fixPrevioDesp && fixActualDesp && distanciaMetros(fixPrevioDesp, fixActualDesp) >= 3
+          ? calcularBearing(fixPrevioDesp, fixActualDesp)
+          : null;
+        const diferenciaRutaDesplazamiento = bearingDesplazamiento !== null
+          ? diferenciaAngularGrados(bearingDesplazamiento, bearingInicial)
+          : null;
+        const velocidadActualMps = velocidadMPorMsRef.current > 0 ? velocidadMPorMsRef.current * 1000 : null;
+        const edadUltimoFixMs = ultimoTickTsRef.current !== null ? performance.now() - ultimoTickTsRef.current : null;
+        const rechazarPorSentido = debeRechazarRutaDireccional({
+          bearingRuta: bearingInicial,
+          headingAlPedir,
+          bearingDesplazamiento,
+          velocidadMps: velocidadActualMps,
+          velocidadMinMps: VELOCIDAD_MIN_HEADING_CONFIABLE_MPS,
+          edadUltimoFixMs,
+          yaReintentada: reintentoDireccional,
+        });
         diagLog(
           `[TILA_NAV_DIAG] RUTA_DIRECCIONAL requestId=${miRequestId} motivo=${motivo} `
           + `headingOrigen=${headingAlPedir ?? "n/a"} bearingInicial=${Math.round(bearingInicial)}° `
           + `diferenciaAngular=${diferenciaAngularInicial !== null ? Math.round(diferenciaAngularInicial) : "n/a"}° `
           + `recorridoDuranteRequestM=${recorridoDuranteRequestM !== null ? Math.round(recorridoDuranteRequestM) : "n/a"} `
+          + `bearingDesplazamiento=${bearingDesplazamiento !== null ? Math.round(bearingDesplazamiento) : "n/a"}° `
+          + `diferenciaRutaDesplazamiento=${diferenciaRutaDesplazamiento !== null ? Math.round(diferenciaRutaDesplazamiento) : "n/a"}° `
+          + `velocidadMps=${velocidadActualMps !== null ? velocidadActualMps.toFixed(1) : "n/a"} `
+          + `edadUltimoFixMs=${edadUltimoFixMs !== null ? Math.round(edadUltimoFixMs) : "n/a"} `
           + `reintentoDireccional=${reintentoDireccional} decision=${rechazarPorSentido ? "descartada-reintento-sin-heading" : "instalada"} `
           + `t=${Math.round(performance.now())}`
         );
