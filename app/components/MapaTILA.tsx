@@ -11,6 +11,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 // TILA_NAV_DIAG — logger temporal en memoria, ver app/utils/diagLoggerNav.ts. Borrar
 // este import junto con el resto de la instrumentación cuando se retire el diagnóstico.
 import { diagLog, diagObtenerTexto, diagContarEventos, diagLimpiar } from "../utils/diagLoggerNav";
+import { debeRechazarRutaDireccional } from "../lib/geo/validacionRutaNavegacion";
 
 // "geometry": necesaria para google.maps.geometry.encoding.decodePath — decodifica el
 // polyline codificado que devuelve Routes API (calcularRutaNavegacionDireccional), en
@@ -2529,6 +2530,20 @@ export default function MapaTILA({
   // sin tocar la otra. Comparte rutaRequestIdRef (mismo contador, misma protección
   // contra respuestas fuera de orden que ya usa calcularRuta — ver el chequeo
   // `miRequestId !== rutaRequestIdRef.current`).
+  // Referencia estable para que calcularRutaNavegacionDireccional pueda re-invocarse a
+  // sí misma (reintento de RUTA_DIRECCIONAL) sin auto-referencia directa a la const —
+  // mismo patrón que dispararCalculoNavRef.
+  const calcularRutaNavegacionDireccionalRef = useRef<(
+    motivo: string,
+    esDesvio: boolean,
+    fixOrigen: google.maps.LatLngLiteral,
+    destinationStr: string,
+    waypoints: google.maps.DirectionsWaypoint[],
+    fallbackPuntos: google.maps.LatLngLiteral[],
+    onSettled?: () => void,
+    legsActivos?: number,
+    reintentoDireccional?: boolean
+  ) => void>(() => {});
   const calcularRutaNavegacionDireccional = useCallback((
     motivo: string,
     // true únicamente cuando este cálculo fue originado por desvioConfirmado real (ver
@@ -2539,21 +2554,25 @@ export default function MapaTILA({
     waypoints: google.maps.DirectionsWaypoint[],
     fallbackPuntos: google.maps.LatLngLiteral[],
     onSettled?: () => void,
-    legsActivos?: number
+    legsActivos?: number,
+    // true = este pedido ES el único reintento tras descartar una ruta opuesta al heading
+    // (ver RUTA_DIRECCIONAL más abajo): se pide sin heading y su respuesta se instala
+    // siempre, sin volver a validar — nunca hay un segundo reintento.
+    reintentoDireccional: boolean = false
   ) => {
     const miRequestId = ++rutaRequestIdRef.current;
     if (esDesvio) recalculosPorDesvioRef.current.add(miRequestId);
     // Capturado AHORA (momento del pedido) — headingAceptadoRef.current puede cambiar
     // mientras el request está en vuelo; RUTA_DIRECCIONAL necesita el heading que
     // realmente se mandó, no el que haya en el momento de la respuesta.
-    const headingAlPedir = headingAceptadoRef.current;
+    const headingAlPedir = reintentoDireccional ? null : headingAceptadoRef.current;
     setDiagnostico(d => ({ ...d, directionsStatus: "calculando..." }));
 
     const origenDiag = `${fixOrigen.lat.toFixed(6)},${fixOrigen.lng.toFixed(6)}`;
     diagLog(
       `[TILA_NAV_DIAG] CALCULAR_RUTA_ENTRADA requestId=${miRequestId} motivo=${motivo} `
       + `origen=${origenDiag} destino=${destinationStr} legsActivos=${legsActivos ?? "n/a"} `
-      + `via=routesApi headingOrigen=${headingAlPedir ?? "n/a"} t=${Math.round(performance.now())}`
+      + `via=routesApi headingOrigen=${headingAlPedir ?? "n/a"} reintentoDireccional=${reintentoDireccional} t=${Math.round(performance.now())}`
     );
 
     const aplicarFallback = () => {
@@ -2622,6 +2641,69 @@ export default function MapaTILA({
         const habiaRutaAnterior = rutaPolylineRef.current.length >= 2;
         const { puntos: puntosDetallados, indicePorStep } = construirPolylineDetalladaDesdeRuta(result, legsActivos);
         if (puntosDetallados.length < 2) { aplicarFallback(); return; }
+
+        // RUTA_DIRECCIONAL: compara el heading enviado en el origen contra el rumbo del
+        // primer tramo de la ruta nueva ANTES de instalarla. Si arranca prácticamente en
+        // sentido contrario (> UMBRAL_RUTA_DIRECCIONAL_OPUESTA_GRADOS) al heading Y al
+        // desplazamiento real reciente (ver debeRechazarRutaDireccional), la ruta NO se
+        // instala: rutaPolylineRef/indicePorStepRef/directions siguen con la ruta
+        // anterior, y se reintenta UNA sola vez sin heading desde el fix aceptado más
+        // reciente. calculandoRutaNavRef sigue en true (onSettled pasa
+        // al reintento) — ningún otro cálculo se cruza mientras tanto.
+        const gpsAlResponder = fixValidoActualRef.current ?? ultimoFixValidoRef.current;
+        const bearingInicial = calcularBearing(puntosDetallados[0], puntosDetallados[1]);
+        const diferenciaAngularInicial = headingAlPedir !== null
+          ? diferenciaAngularGrados(headingAlPedir, bearingInicial)
+          : null;
+        const recorridoDuranteRequestM = gpsAlResponder ? distanciaMetros(fixOrigen, gpsAlResponder) : null;
+        // headingAlPedir puede ser uno conservado de un fix anterior, así que por sí solo
+        // nunca alcanza para rechazar: la ruta también tiene que estar opuesta al rumbo
+        // del desplazamiento real, con movimiento y fix recientes. Se evalúa con lo que ya
+        // existe, medido al llegar la respuesta: rumbo del desplazamiento entre los dos
+        // últimos fixes aceptados (historialPosicionRef, ≥3m como headingCalculadoDiag),
+        // velocidad (velocidadMPorMsRef, mismo umbral VELOCIDAD_MIN_HEADING_CONFIABLE_MPS
+        // que la selección de segmento) y edad del último fix aceptado (ultimoTickTsRef).
+        // No cambia qué heading se le mandó a Google.
+        const { previa: fixPrevioDesp, actual: fixActualDesp } = historialPosicionRef.current;
+        const bearingDesplazamiento = fixPrevioDesp && fixActualDesp && distanciaMetros(fixPrevioDesp, fixActualDesp) >= 3
+          ? calcularBearing(fixPrevioDesp, fixActualDesp)
+          : null;
+        const diferenciaRutaDesplazamiento = bearingDesplazamiento !== null
+          ? diferenciaAngularGrados(bearingDesplazamiento, bearingInicial)
+          : null;
+        const velocidadActualMps = velocidadMPorMsRef.current > 0 ? velocidadMPorMsRef.current * 1000 : null;
+        const edadUltimoFixMs = ultimoTickTsRef.current !== null ? performance.now() - ultimoTickTsRef.current : null;
+        const rechazarPorSentido = debeRechazarRutaDireccional({
+          bearingRuta: bearingInicial,
+          headingAlPedir,
+          bearingDesplazamiento,
+          velocidadMps: velocidadActualMps,
+          velocidadMinMps: VELOCIDAD_MIN_HEADING_CONFIABLE_MPS,
+          edadUltimoFixMs,
+          yaReintentada: reintentoDireccional,
+        });
+        diagLog(
+          `[TILA_NAV_DIAG] RUTA_DIRECCIONAL requestId=${miRequestId} motivo=${motivo} `
+          + `headingOrigen=${headingAlPedir ?? "n/a"} bearingInicial=${Math.round(bearingInicial)}° `
+          + `diferenciaAngular=${diferenciaAngularInicial !== null ? Math.round(diferenciaAngularInicial) : "n/a"}° `
+          + `recorridoDuranteRequestM=${recorridoDuranteRequestM !== null ? Math.round(recorridoDuranteRequestM) : "n/a"} `
+          + `bearingDesplazamiento=${bearingDesplazamiento !== null ? Math.round(bearingDesplazamiento) : "n/a"}° `
+          + `diferenciaRutaDesplazamiento=${diferenciaRutaDesplazamiento !== null ? Math.round(diferenciaRutaDesplazamiento) : "n/a"}° `
+          + `velocidadMps=${velocidadActualMps !== null ? velocidadActualMps.toFixed(1) : "n/a"} `
+          + `edadUltimoFixMs=${edadUltimoFixMs !== null ? Math.round(edadUltimoFixMs) : "n/a"} `
+          + `reintentoDireccional=${reintentoDireccional} decision=${rechazarPorSentido ? "descartada-reintento-sin-heading" : "instalada"} `
+          + `t=${Math.round(performance.now())}`
+        );
+        if (rechazarPorSentido) {
+          // El reintento lleva su propio requestId (y lo registra como desvío si éste lo
+          // era) — el de este pedido nunca llega a directions.
+          recalculosPorDesvioRef.current.delete(miRequestId);
+          calcularRutaNavegacionDireccionalRef.current(
+            motivo, esDesvio, gpsAlResponder ?? fixOrigen, destinationStr, waypoints, fallbackPuntos, onSettled, legsActivos, true
+          );
+          return;
+        }
+
         rutaPolylineRef.current = puntosDetallados;
         legsActivosNavRef.current = legsActivos ?? null;
         indicePorStepRef.current = indicePorStep;
@@ -2651,24 +2733,6 @@ export default function MapaTILA({
         if (habiaRutaAnterior) {
           diagLog(`[TILA_NAV_DIAG] DIRECTIONS_ANTERIOR_LIMPIADO requestId=${miRequestId} t=${Math.round(performance.now())}`);
         }
-
-        // RUTA_DIRECCIONAL: valida si el heading enviado en el origen realmente evitó
-        // un primer tramo en sentido contrario — puramente diagnóstico, no decide nada.
-        const gpsAlResponder = fixValidoActualRef.current ?? ultimoFixValidoRef.current;
-        const bearingInicial = rutaPolylineRef.current.length >= 2
-          ? calcularBearing(rutaPolylineRef.current[0], rutaPolylineRef.current[1])
-          : null;
-        const diferenciaAngularInicial = headingAlPedir !== null && bearingInicial !== null
-          ? diferenciaAngularGrados(headingAlPedir, bearingInicial)
-          : null;
-        const recorridoDuranteRequestM = gpsAlResponder ? distanciaMetros(fixOrigen, gpsAlResponder) : null;
-        diagLog(
-          `[TILA_NAV_DIAG] RUTA_DIRECCIONAL requestId=${miRequestId} motivo=${motivo} `
-          + `headingOrigen=${headingAlPedir ?? "n/a"} bearingInicial=${bearingInicial !== null ? Math.round(bearingInicial) : "n/a"}° `
-          + `diferenciaAngular=${diferenciaAngularInicial !== null ? Math.round(diferenciaAngularInicial) : "n/a"}° `
-          + `recorridoDuranteRequestM=${recorridoDuranteRequestM !== null ? Math.round(recorridoDuranteRequestM) : "n/a"} `
-          + `t=${Math.round(performance.now())}`
-        );
 
         const primerPuntoNuevo = rutaPolylineRef.current[0] ?? null;
         const diagPolyEstado = diagnosticarPolylineEstado(rutaPolylineRef.current, gpsAlResponder);
@@ -2707,6 +2771,9 @@ export default function MapaTILA({
         aplicarFallback();
       });
   }, [aplicarPolylineFallback, encuadrarDesdeRuta, sembrarProgresoRutaNueva]);
+  useEffect(() => {
+    calcularRutaNavegacionDireccionalRef.current = calcularRutaNavegacionDireccional;
+  }, [calcularRutaNavegacionDireccional]);
 
   // ─── Resumen de distancias/tiempos para mostrarRutaDesdeChofer ────────────
   const informarResumenRuta = useCallback((result: google.maps.DirectionsResult) => {
