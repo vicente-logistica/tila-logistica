@@ -10,7 +10,9 @@ const sql = leer("../migrations/20261002_programar_purga_coordenadas.sql");
 const sqlFuncion = leer("../migrations/20261001_geo_publicacion_cargas.sql");
 
 // Sin comentarios "--" (los comentarios mencionan anon/authenticated/PUBLIC a propósito).
-const sinComentarios = (s) => s.split("\n").map((l) => l.replace(/--.*$/, "")).join("\n");
+// /\r?\n/: en un checkout de Windows (core.autocrlf) el SQL llega con CRLF, y con split("\n")
+// cada línea terminaría en "\r" — que `.` no consume — y los comentarios no se quitarían.
+const sinComentarios = (s) => s.split(/\r?\n/).map((l) => l.replace(/--.*$/, "")).join("\n");
 const codigo = sinComentarios(sql);
 
 test("programa un único job con nombre fijo 'purgar-coordenadas-google', una vez por día a las 06:00 UTC", () => {
