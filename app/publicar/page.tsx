@@ -49,6 +49,9 @@ const calcularKmAutomatico = (origen: string, destino: string) => {
 
 const MAX_PARADAS = 4;
 
+// Espera tras la última tecla antes de pedir la distancia a /api/distancia (→ Google).
+const DEBOUNCE_DISTANCIA_MS = 600;
+
 export default function PublicarPage() {
   const { autorizado } = useProtegerRuta("cliente");
   const router = useRouter();
@@ -83,39 +86,31 @@ export default function PublicarPage() {
   }, [categoriaLegal]);
 
   // ─── Calcular distancia ───────────────────────────────────────────────────
+  // UNA sola llamada con todos los puntos (origen, paradas, destino) — antes era una por
+  // tramo — y sólo cuando el usuario deja de tipear DEBOUNCE_DISTANCIA_MS: antes cada tecla
+  // disparaba una llamada a Google. Un cambio posterior cancela el pedido anterior, así una
+  // respuesta vieja nunca pisa los km de las direcciones actuales.
   useEffect(() => {
-    const calcularDistancia = async () => {
-      if (!origen || !destino) return;
-      const paradasValidas = paradasIntermedias.filter(p => p.trim() !== "");
-      const puntos = [origen, ...paradasValidas, destino];
+    if (!origen || !destino) return;
+    const paradasValidas = paradasIntermedias.filter(p => p.trim() !== "");
+    const puntos = [origen, ...paradasValidas, destino];
+    // Mismo respaldo que antes si Google no responde: la tabla fija, tramo por tramo.
+    const kmRespaldo = puntos.slice(0, -1).reduce((acc, desde, i) => acc + calcularKmAutomatico(desde, puntos[i + 1]), 0);
 
-      if (puntos.length === 2) {
-        try {
-          const response = await fetch(`/api/distancia?origen=${encodeURIComponent(origen)}&destino=${encodeURIComponent(destino)}`);
-          const data = await response.json();
-          setKm(String(data.km || calcularKmAutomatico(origen, destino)));
-        } catch {
-          setKm(String(calcularKmAutomatico(origen, destino)));
-        }
-        return;
+    const control = new AbortController();
+    const t = setTimeout(async () => {
+      try {
+        const q = new URLSearchParams();
+        puntos.forEach(p => q.append("punto", p));
+        const response = await fetch(`/api/distancia?${q}`, { signal: control.signal });
+        const data = await response.json();
+        if (control.signal.aborted) return;
+        setKm(String(data.km && data.km > 0 ? data.km : kmRespaldo));
+      } catch {
+        if (!control.signal.aborted) setKm(String(kmRespaldo));
       }
-
-      const tramos = puntos.slice(0, -1).map((punto, i) => ({ desde: punto, hasta: puntos[i + 1] }));
-      const resultados = await Promise.all(
-        tramos.map(async ({ desde, hasta }) => {
-          try {
-            const response = await fetch(`/api/distancia?origen=${encodeURIComponent(desde)}&destino=${encodeURIComponent(hasta)}`);
-            const data = await response.json();
-            return data.km && data.km > 0 ? data.km : calcularKmAutomatico(desde, hasta);
-          } catch {
-            return calcularKmAutomatico(desde, hasta);
-          }
-        })
-      );
-      const totalKm = resultados.reduce((acc, k) => acc + k, 0);
-      setKm(String(totalKm > 0 ? totalKm : 0));
-    };
-    calcularDistancia();
+    }, DEBOUNCE_DISTANCIA_MS);
+    return () => { clearTimeout(t); control.abort(); };
   }, [origen, destino, paradasIntermedias]);
 
   // ─── Calcular tarifa (cotización del SERVIDOR) ─────────────────────────────

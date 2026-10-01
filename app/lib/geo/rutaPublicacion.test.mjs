@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   validarPuntosRuta, construirUrlRutaPublicacion, interpretarRutaPublicacion,
-  obtenerRutaPublicacion, coordenadasVigentes, MAXIMO_PUNTOS_RUTA,
+  obtenerRutaPublicacion, coordenadasVigentes, puntosDesdeParametros, MAXIMO_PUNTOS_RUTA,
 } from "./rutaPublicacion.ts";
 
 // ─── Fixtures con la forma real de Directions (json) ─────────────────────────
@@ -44,6 +44,28 @@ test("validarPuntosRuta: menos de 2, más del máximo, vacíos o no-string → n
 
 test("validarPuntosRuta: exactamente el máximo (origen + 4 paradas + destino) → válido", () => {
   assert.equal(validarPuntosRuta(Array.from({ length: MAXIMO_PUNTOS_RUTA }, (_, i) => `P${i}`)).length, MAXIMO_PUNTOS_RUTA);
+});
+
+// ─── puntosDesdeParametros (query de /api/distancia) ─────────────────────────
+
+const qs = (s) => new URLSearchParams(s);
+
+test("puntosDesdeParametros: ?punto= repetido → todos los puntos en orden", () => {
+  assert.deepEqual(puntosDesdeParametros(qs("punto=Rosario&punto=San%20Lorenzo&punto=C%C3%B3rdoba")), ["Rosario", "San Lorenzo", "Córdoba"]);
+});
+
+test("puntosDesdeParametros: formato simple anterior ?origen=&destino= sigue funcionando", () => {
+  assert.deepEqual(puntosDesdeParametros(qs("origen=Rosario&destino=C%C3%B3rdoba")), ["Rosario", "Córdoba"]);
+});
+
+test("puntosDesdeParametros: ?punto= tiene prioridad sobre origen/destino", () => {
+  assert.deepEqual(puntosDesdeParametros(qs("punto=A&punto=B&origen=X&destino=Y")), ["A", "B"]);
+});
+
+test("puntosDesdeParametros: sin puntos, o formato simple incompleto → lista vacía (validarPuntosRuta la rechaza)", () => {
+  assert.deepEqual(puntosDesdeParametros(qs("")), []);
+  assert.deepEqual(puntosDesdeParametros(qs("origen=Rosario")), []);
+  assert.equal(validarPuntosRuta(puntosDesdeParametros(qs("origen=Rosario"))), null);
 });
 
 // ─── construirUrlRutaPublicacion ─────────────────────────────────────────────

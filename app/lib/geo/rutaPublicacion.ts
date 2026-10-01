@@ -41,6 +41,18 @@ export function validarPuntosRuta(direcciones: unknown): string[] | null {
   return limpias.every(d => d.length > 0) ? limpias : null;
 }
 
+/**
+ * Puntos pedidos a /api/distancia: `?punto=A&punto=B&punto=C` (formato actual, todos los
+ * puntos en orden) o el formato simple anterior `?origen=A&destino=B`. Devuelve la lista
+ * cruda — validarPuntosRuta decide si es usable.
+ */
+export function puntosDesdeParametros(q: { getAll: (k: string) => string[]; get: (k: string) => string | null }): string[] {
+  const puntos = q.getAll("punto");
+  if (puntos.length > 0) return puntos;
+  const origen = q.get("origen"), destino = q.get("destino");
+  return origen !== null && destino !== null ? [origen, destino] : [];
+}
+
 /** URL de Directions con origen, paradas intermedias como waypoints (en orden, sin
  *  optimizar) y destino. */
 export function construirUrlRutaPublicacion(direcciones: string[], apiKey: string): string {

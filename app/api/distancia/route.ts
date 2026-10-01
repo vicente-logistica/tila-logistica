@@ -1,15 +1,18 @@
 import { NextResponse } from "next/server";
+import { obtenerRutaPublicacion, puntosDesdeParametros, validarPuntosRuta } from "../../lib/geo/rutaPublicacion";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+/**
+ * GET /api/distancia — km de la ruta para la vista previa de /publicar.
+ *   ?punto=A&punto=B&punto=C   origen, paradas y destino en orden (UNA llamada a Directions)
+ *   ?origen=A&destino=B        formato simple anterior (compatibilidad)
+ * Responde { km, kmPorTramo }. Sólo distancia: no devuelve ni guarda place_id/coordenadas.
+ */
 export async function GET(req: Request) {
   try {
-    const { searchParams } = new URL(req.url);
-
-    const origen = searchParams.get("origen");
-    const destino = searchParams.get("destino");
-
-    if (!origen || !destino) {
+    const puntos = validarPuntosRuta(puntosDesdeParametros(new URL(req.url).searchParams));
+    if (!puntos) {
       return NextResponse.json(
         { error: "Faltan origen o destino" },
         { status: 400 }
@@ -24,45 +27,17 @@ export async function GET(req: Request) {
       );
     }
 
-    const url = `https://maps.googleapis.com/maps/api/directions/json?origin=${encodeURIComponent(
-      `${origen}, Argentina`
-    )}&destination=${encodeURIComponent(
-      `${destino}, Argentina`
-    )}&mode=driving&language=es&region=ar&key=${key}`;
-
-    const response = await fetch(url, {
-      method: "GET",
-      cache: "no-store",
-    });
-
-    const data = await response.json();
-
-    if (data.status !== "OK") {
-      return NextResponse.json(
-        {
-          error: data.status,
-          detalle: data.error_message || data,
-        },
-        { status: 400 }
-      );
+    const ruta = await obtenerRutaPublicacion(puntos, key);
+    if (!ruta.ok) {
+      return NextResponse.json({ error: ruta.motivo }, { status: 400 });
     }
 
-    const leg = data.routes[0].legs[0];
-    const km = Math.ceil(leg.distance.value / 1000);
-
-    return NextResponse.json({
-      km,
-      texto: leg.distance.text,
-      duracion: leg.duration.text,
-      origen: leg.start_address,
-      destino: leg.end_address,
-    });
+    return NextResponse.json({ km: ruta.kmTotal, kmPorTramo: ruta.kmPorTramo });
   } catch (error: any) {
     return NextResponse.json(
       {
         error: "ERROR_INTERNO",
         detalle: error?.message || String(error),
-        causa: error?.cause || null,
       },
       { status: 500 }
     );
