@@ -23,9 +23,10 @@ test("/publicar: la distancia se pide con debounce de ~600 ms y se cancela al ca
   assert.match(pagina, /return \(\) => \{ clearTimeout\(t\); control\.abort\(\); \};\s*\}, \[origen, destino, paradasIntermedias\]\);/);
 });
 
-test("/publicar: este paso no escribe geografía ni mueve paradas_viaje al servidor", () => {
+test("/publicar: el navegador no escribe geografía ni paradas_viaje (lo hace el servidor desde el paso 4)", () => {
   assert.doesNotMatch(pagina, /place_id|geo_obtenido_at|origen_lat|destino_lat/);
-  assert.match(pagina, /from\("paradas_viaje"\)\.insert/); // sigue igual hasta el paso 4
+  assert.doesNotMatch(pagina, /paradas_viaje/);
+  assert.doesNotMatch(pagina, /from "\.\.\/lib\/supabase"/);
 });
 
 test("/api/distancia: usa el helper compartido y sólo devuelve km (sin coordenadas ni place_id)", () => {

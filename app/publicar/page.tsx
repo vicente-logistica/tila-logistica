@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { supabase } from "../lib/supabase";
 import { useProtegerRuta } from "../hooks/useProtegerRuta";
 import BotonCerrarSesion from "../components/BotonCerrarSesion";
 
@@ -219,6 +218,21 @@ export default function PublicarPage() {
       }),
     });
 
+    if (pubRes.status === 409) {
+      // La distancia que se mostraba quedó vieja: el servidor calculó la ruta definitiva y NO
+      // creó la carga. Se muestran sus km y su precio, y el cliente vuelve a publicar.
+      const err = await pubRes.json().catch(() => ({}));
+      if (Number(err?.km_estimados) > 0) setKm(String(err.km_estimados));
+      if (err?.cotizacion) {
+        setPrecioCliente(err.cotizacion.precio_cliente);
+        setPagoChofer(err.cotizacion.pago_chofer);
+        setComisionPlataforma(err.cotizacion.comision_plataforma);
+      }
+      alert(err?.error ?? "La distancia del viaje cambió. Revisá el precio y volvé a publicar.");
+      setPublicando(false);
+      return;
+    }
+
     if (!pubRes.ok) {
       const err = await pubRes.json().catch(() => ({}));
       alert("Error publicando carga: " + (err?.error ?? pubRes.status));
@@ -226,24 +240,8 @@ export default function PublicarPage() {
       return;
     }
 
+    // Las paradas (si las hay) ya las creó el servidor junto con la carga.
     const { carga: data } = await pubRes.json();
-
-    // Paradas intermedias
-    if (paradasValidas.length > 0) {
-      const paradasParaInsertar = [
-        { carga_id: Number(data.id), orden: 0, tipo: "retiro", direccion: origen.trim(), estado: "pendiente" },
-        ...paradasValidas.map((direccion, index) => ({
-          carga_id: Number(data.id),
-          orden: index + 1,
-          tipo: "parada",
-          direccion,
-          estado: "pendiente",
-        })),
-        { carga_id: Number(data.id), orden: paradasValidas.length + 1, tipo: "entrega", direccion: destino.trim(), estado: "pendiente" },
-      ];
-      const { error: errorParadas } = await supabase.from("paradas_viaje").insert(paradasParaInsertar);
-      if (errorParadas) console.error("Error insertando paradas_viaje:", errorParadas);
-    }
 
     // Viaje creado — redirigir al panel para que el cliente elija cuándo pagar
     setPublicando(false);
