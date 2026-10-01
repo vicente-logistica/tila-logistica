@@ -145,12 +145,15 @@ const carga = (id, origen, destino, extra = {}) =>
 
 function deps(tablas, opciones) {
   const llamadas = { geocode: 0, corredor: 0 };
+  // Direcciones geocodificadas, en orden. No enumerable: los tests que comparan `llamadas`
+  // completo ({ geocode, corredor }) siguen igual.
+  Object.defineProperty(llamadas, "dirs", { value: [], enumerable: false });
   const { db, escrituras } = baseFalsa(tablas, opciones);
   return {
     llamadas, escrituras,
     d: {
       db,
-      geocodificar: async (dir) => { llamadas.geocode++; return CIUDAD[dir] ?? null; },
+      geocodificar: async (dir) => { llamadas.geocode++; llamadas.dirs.push(dir); return CIUDAD[dir] ?? null; },
       obtenerCorredor: async () => { llamadas.corredor++; return CORREDOR_JUJUY_BA; },
     },
   };
@@ -307,4 +310,154 @@ test("migración: agrega vuelta_casa_habilitada y vuelta_casa_inicio_km (+ radio
   assert.match(sql, /CHECK \(radio_matching_km > 0\)/);
   assert.match(sql, /CHECK \(vuelta_casa_inicio_km > 0\)/);
   assert.doesNotMatch(sql, /comision|cargas|GRANT|POLICY/i);
+});
+
+// ═══════════════ Geografía persistida (feat/geo-publicacion) ═══════════════
+
+const AHORA_GEO = new Date("2026-10-01T12:00:00Z");
+const DIA_MS = 24 * 60 * 60 * 1000;
+const haceDias = (n) => new Date(AHORA_GEO.getTime() - n * DIA_MS).toISOString();
+/** Geografía persistida de una carga (C = origen, D = destino) con fecha de obtención. */
+const geo = (puntoC, puntoD, dias = 1) => ({
+  origen_lat: puntoC?.lat ?? null, origen_lng: puntoC?.lng ?? null,
+  destino_lat: puntoD?.lat ?? null, destino_lng: puntoD?.lng ?? null,
+  geo_obtenido_at: haceDias(dias),
+});
+// Viaje 190 (Buenos Aires → Jujuy) con su geografía persistida vigente: A y B sin geocodificar.
+const viajeConGeo = (extra = {}) => ({ id: 190, chofer_id: CHOFER, estado: "En ruta", origen: "Buenos Aires", destino: "Jujuy", lat: null, lng: null, created_at: "2026-09-29T10:00:00Z", ...geo(BA, JUJUY), ...extra });
+const tablasGeo = ({ viaje = viajeConGeo(), cargasExtra = [], paradas = [] } = {}) =>
+  ({ ...tablasBase({ cargasExtra }), cargas: [viaje, ...cargasExtra], paradas_viaje: paradas });
+const consultarGeo = (d, gps) => silenciar(() => procesarOportunidadesVuelta({ ...d, ahora: () => AHORA_GEO }, CHOFER, { cargaId: "190", lat: gps.lat, lng: gps.lng }));
+
+test("geo: 200 candidatas con geografía vigente → 0 geocodificaciones (ni A/B ni C/D) y mismas oportunidades que geocodificando", async () => {
+  // El texto NO es geocodificable (si se geocodificara, devolvería null y no habría oportunidades).
+  const conGeo = Array.from({ length: 200 }, (_, i) => carga(1000 + i, `Sin geocoder C${i}`, `Sin geocoder D${i}`, geo(CIUDAD["Tucumán"], BA)));
+  const { d, llamadas } = deps(tablasGeo({ cargasExtra: conGeo }));
+  const r = await consultarGeo(d, aKmDeJujuy(100));
+  assert.equal(llamadas.geocode, 0);
+  assert.equal(llamadas.corredor, 1);
+  assert.equal(r.body.oportunidades.length, 5);
+
+  // Mismo escenario por el camino anterior (sin geo, texto geocodificable) → mismas métricas.
+  const sinGeo = Array.from({ length: 200 }, (_, i) => carga(1000 + i, "Tucumán", "Buenos Aires"));
+  const viejo = await consultarGeo(deps(tablasGeo({ viaje: viajeConGeo(geo(null, null)), cargasExtra: sinGeo })).d, aKmDeJujuy(100));
+  const metricas = (o) => o.map(({ km_hasta_retiro, km_acerca_a_casa, km_restantes_a_casa }) => [km_hasta_retiro, km_acerca_a_casa, km_restantes_a_casa]);
+  assert.deepEqual(metricas(r.body.oportunidades), metricas(viejo.body.oportunidades));
+});
+
+test("geo: coordenadas vencidas (31 días) → se ignoran y se geocodifica el texto", async () => {
+  const { d, llamadas } = deps(tablasGeo({ cargasExtra: [carga(1, "Tucumán", "Buenos Aires", geo(CIUDAD.Mendoza, CIUDAD.Mendoza, 31))] }));
+  const r = await consultarGeo(d, aKmDeJujuy(100));
+  assert.deepEqual(llamadas.dirs, ["Tucumán", "Buenos Aires"]);
+  assert.deepEqual(r.body.oportunidades.map((o) => o.carga_id), [1]); // con las vencidas (Mendoza) no habría oportunidad
+});
+
+test("geo: faltantes, incompletas o inválidas → fallback de geocodificación", async () => {
+  const variantes = [
+    {},                                                                   // histórica: sin columnas geo
+    geo(null, null),                                                      // NULL
+    { ...geo(CIUDAD["Tucumán"], BA), origen_lng: null },                  // incompleta (sólo lat de C)
+    { ...geo({ lat: 95, lng: -65 }, BA) },                                // fuera de rango
+    { ...geo(CIUDAD["Tucumán"], BA), geo_obtenido_at: null },             // sin fecha
+    { ...geo(CIUDAD["Tucumán"], BA), geo_obtenido_at: "no-es-fecha" },    // fecha inválida
+    { ...geo(CIUDAD["Tucumán"], BA), origen_lat: "-26.8" },               // texto en vez de número
+  ];
+  for (const extra of variantes) {
+    const { d, llamadas } = deps(tablasGeo({ cargasExtra: [carga(1, "Tucumán", "Buenos Aires", extra)] }));
+    const r = await consultarGeo(d, aKmDeJujuy(100));
+    assert.ok(llamadas.dirs.includes("Tucumán"), `C geocodificado para ${JSON.stringify(extra)}`);
+    assert.deepEqual(r.body.oportunidades.map((o) => o.carga_id), [1]);
+  }
+});
+
+test("geo: sólo C vigente → se geocodifica únicamente D (y sólo si C está en el corredor)", async () => {
+  const { d, llamadas } = deps(tablasGeo({ cargasExtra: [carga(1, "Sin geocoder", "Buenos Aires", geo(CIUDAD["Tucumán"], null))] }));
+  const r = await consultarGeo(d, aKmDeJujuy(100));
+  assert.deepEqual(llamadas.dirs, ["Buenos Aires"]);
+  assert.deepEqual(r.body.oportunidades.map((o) => o.carga_id), [1]);
+
+  // C vigente FUERA del corredor (Mendoza) → D ni se busca.
+  const fuera = deps(tablasGeo({ cargasExtra: [carga(2, "Sin geocoder", "Buenos Aires", geo(CIUDAD.Mendoza, null))] }));
+  await consultarGeo(fuera.d, aKmDeJujuy(100));
+  assert.equal(fuera.llamadas.geocode, 0);
+});
+
+test("geo: sólo D vigente → se geocodifica únicamente C", async () => {
+  const { d, llamadas } = deps(tablasGeo({ cargasExtra: [carga(1, "Tucumán", "Sin geocoder", geo(null, BA))] }));
+  const r = await consultarGeo(d, aKmDeJujuy(100));
+  assert.deepEqual(llamadas.dirs, ["Tucumán"]);
+  assert.deepEqual(r.body.oportunidades.map((o) => o.carga_id), [1]);
+});
+
+test("geo: tope de 25 geocodificaciones de C/D por consulta, aunque haya 60 cargas históricas", async () => {
+  const historicas = Array.from({ length: 60 }, (_, i) => carga(2000 + i, "Tucumán", "Buenos Aires"));
+  const { d, llamadas } = deps(tablasGeo({ cargasExtra: historicas }));
+  const r = await consultarGeo(d, aKmDeJujuy(100));
+  assert.equal(r.status, 200);
+  assert.equal(llamadas.geocode, 25, "nunca más de 25 (A/B vienen de la base)");
+  assert.equal(r.body.oportunidades.length, 5, "devuelve lo que alcanzó a evaluar");
+});
+
+test("geo: mezcla — el tope se agota con históricas y las candidatas con geo vigente se evalúan TODAS igual", async () => {
+  // 40 históricas (Mendoza: se geocodifica C y queda fuera del corredor) + 3 con geo vigente sobre el corredor.
+  const historicas = Array.from({ length: 40 }, (_, i) => carga(3000 + i, "Mendoza", "Buenos Aires", { created_at: "2026-09-30T12:00:00Z" }));
+  const nuevas = [1, 2, 3].map((n) => carga(n, `Sin geocoder ${n}`, `Sin geocoder D${n}`, { ...geo(CIUDAD["Tucumán"], BA), created_at: "2026-09-01T00:00:00Z" }));
+  const { d, llamadas } = deps(tablasGeo({ cargasExtra: [...historicas, ...nuevas] }));
+  const r = await consultarGeo(d, aKmDeJujuy(100));
+  assert.equal(llamadas.geocode, 25);
+  assert.deepEqual(r.body.oportunidades.map((o) => o.carga_id).sort(), [1, 2, 3]);
+});
+
+test("geo: A/B del viaje con geografía vigente → sin geocodificar (también cuando falta mucho para B)", async () => {
+  const lejos = deps(tablasGeo());
+  const r1 = await consultarGeo(lejos.d, aKmDeJujuy(300));
+  assert.equal(r1.body.motivo, "lejos_del_destino");
+  assert.equal(lejos.llamadas.geocode, 0);
+
+  // A/B vencidos (30 días) → se geocodifican los textos, como antes.
+  const vencido = deps(tablasGeo({ viaje: viajeConGeo({ geo_obtenido_at: haceDias(30) }) }));
+  await consultarGeo(vencido.d, aKmDeJujuy(300));
+  assert.deepEqual([...vencido.llamadas.dirs].sort(), ["Buenos Aires", "Jujuy"]);
+});
+
+test("geo: viaje multietapa → A/B salen de la primera y la última parada (sus lat/lng vigentes)", async () => {
+  const paradas = [
+    { carga_id: 190, orden: 0, direccion: "Buenos Aires", lat: BA.lat, lng: BA.lng, geo_obtenido_at: haceDias(2) },
+    { carga_id: 190, orden: 1, direccion: "Córdoba", lat: null, lng: null, geo_obtenido_at: null },
+    { carga_id: 190, orden: 2, direccion: "Jujuy", lat: JUJUY.lat, lng: JUJUY.lng, geo_obtenido_at: haceDias(2) },
+  ];
+  // La carga misma no tiene geo: si se usara en lugar de las paradas, habría geocodificación.
+  const { d, llamadas } = deps(tablasGeo({ viaje: viajeConGeo(geo(null, null)), paradas, cargasExtra: [carga(1, "x", "y", geo(CIUDAD["Tucumán"], BA))] }));
+  const r = await consultarGeo(d, aKmDeJujuy(100));
+  assert.equal(llamadas.geocode, 0);
+  assert.equal(r.body.destino_regreso, "Buenos Aires");
+  assert.deepEqual(r.body.oportunidades.map((o) => o.carga_id), [1]);
+
+  // Paradas sin geo → se geocodifican sus direcciones (primera y última), como antes.
+  const sinGeo = paradas.map((p) => ({ ...p, lat: null, lng: null, geo_obtenido_at: null }));
+  const fb = deps(tablasGeo({ viaje: viajeConGeo(geo(null, null)), paradas: sinGeo }));
+  await consultarGeo(fb.d, aKmDeJujuy(300));
+  assert.deepEqual([...fb.llamadas.dirs].sort(), ["Buenos Aires", "Jujuy"]);
+});
+
+test("geo: cargas.lat/lng (GPS del chofer) JAMÁS se usan como A, B, C ni D", async () => {
+  // Viaje sin geo con GPS guardado en Mendoza; candidata con lat/lng sobre Tucumán pero texto "Mendoza".
+  const viaje = viajeConGeo({ ...geo(null, null), lat: CIUDAD.Mendoza.lat, lng: CIUDAD.Mendoza.lng });
+  const { d, llamadas } = deps(tablasGeo({ viaje, cargasExtra: [carga(1, "Mendoza", "Buenos Aires", { lat: CIUDAD["Tucumán"].lat, lng: CIUDAD["Tucumán"].lng })] }));
+  const r = await consultarGeo(d, aKmDeJujuy(100));
+  assert.ok(llamadas.dirs.includes("Buenos Aires") && llamadas.dirs.includes("Jujuy"), "A/B por geocodificación, no por el GPS");
+  assert.ok(llamadas.dirs.includes("Mendoza"), "C por geocodificación, no por cargas.lat/lng");
+  assert.deepEqual(r.body.oportunidades, [], "Mendoza queda fuera del corredor");
+
+  const src = leer("lib/vueltaACasaServidor.ts");
+  assert.doesNotMatch(src, /\bc\.(lat|lng)\b/, "nunca lee c.lat/c.lng de una candidata");
+  assert.equal((src.match(/\bviaje\.(lat|lng)\b/g) ?? []).length, 4, "viaje.lat/lng sólo en el respaldo del GPS");
+});
+
+test("geo: sigue siendo SÓLO LECTURA — nada de lo geocodificado se guarda", async () => {
+  const historicas = Array.from({ length: 30 }, (_, i) => carga(4000 + i, "Tucumán", "Buenos Aires"));
+  const { d, escrituras } = deps(tablasGeo({ cargasExtra: historicas }));
+  await consultarGeo(d, aKmDeJujuy(100)); // la base falsa lanza ante cualquier update/insert/upsert/delete/rpc
+  assert.deepEqual(escrituras, []);
+  assert.doesNotMatch(leer("lib/vueltaACasaServidor.ts"), /\.(update|insert|upsert|delete|rpc)\s*\(/);
 });
