@@ -16,8 +16,9 @@
 -- posición GPS del chofer (las escribe /api/cargas/gps). Las coordenadas de la carga van en
 -- columnas nuevas con prefijo origen_ / destino_.
 --
--- Sin backfill: las cargas y paradas existentes quedan en NULL; los lectores hacen
--- fallback (geocodificar el texto) cuando no hay coordenadas vigentes.
+-- Sin backfill: las cargas y paradas existentes quedan en NULL (las paradas legacy que ya
+-- tenían lat/lng las conservan, con geo_obtenido_at NULL); los lectores hacen fallback
+-- (geocodificar el texto) cuando no hay coordenadas vigentes.
 -- Todas las columnas son nullable: aplicar esta migración no cambia el comportamiento del
 -- código actual (que no las lee ni las escribe).
 
@@ -65,18 +66,22 @@ ALTER TABLE public.paradas_viaje
   ADD COLUMN IF NOT EXISTS geo_obtenido_at timestamptz NULL;
 
 COMMENT ON COLUMN public.paradas_viaje.place_id        IS 'place_id de Google de la parada (se conserva indefinidamente).';
-COMMENT ON COLUMN public.paradas_viaje.geo_obtenido_at IS 'Cuándo se obtuvieron lat/lng de Google. Se borran a los 30 días (purgar_coordenadas_google_vencidas).';
+COMMENT ON COLUMN public.paradas_viaje.geo_obtenido_at IS 'Cuándo se obtuvieron lat/lng de Google. Se borran a los 30 días (purgar_coordenadas_google_vencidas). NULL con lat/lng = coordenadas legacy sin fecha: no se purgan y no se consideran vigentes.';
 
 -- ── 4. paradas_viaje: validaciones de lat/lng ───────────────────────────────────────────
--- Misma regla que en cargas. NOT VALID: lat/lng ya existían en esta tabla, así que la
--- restricción se aplica a toda fila nueva o modificada desde ahora, sin revalidar filas
--- históricas (la migración no puede fallar por datos viejos).
+-- Par completo y rango válido, como en cargas. A diferencia de cargas, NO exige
+-- geo_obtenido_at: lat/lng ya existían en esta tabla y hay filas legacy con coordenadas y
+-- sin fecha (no se inventa ni se borra nada). Como un CHECK — aun NOT VALID — se evalúa en
+-- todo UPDATE de la fila, exigir la fecha impediría actualizar esas paradas (p. ej. marcarlas
+-- completadas). Las legacy sin fecha no se purgan (la purga exige geo_obtenido_at) y los
+-- lectores no las consideran vigentes (coordenadasVigentes exige fecha): van por fallback.
+-- NOT VALID: no revalida filas históricas al crear la restricción (la migración no puede
+-- fallar por datos viejos); se aplica a toda fila nueva o modificada desde ahora.
 ALTER TABLE public.paradas_viaje DROP CONSTRAINT IF EXISTS paradas_viaje_coords_validas;
 ALTER TABLE public.paradas_viaje ADD CONSTRAINT paradas_viaje_coords_validas CHECK (
   (lat IS NULL AND lng IS NULL)
   OR (lat IS NOT NULL AND lng IS NOT NULL
-      AND lat BETWEEN -90 AND 90 AND lng BETWEEN -180 AND 180
-      AND geo_obtenido_at IS NOT NULL)
+      AND lat BETWEEN -90 AND 90 AND lng BETWEEN -180 AND 180)
 ) NOT VALID;
 
 -- ── 5. Purga de coordenadas de Google con 30 días o más ─────────────────────────────────
