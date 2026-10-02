@@ -440,6 +440,20 @@ test("geo: viaje multietapa → A/B salen de la primera y la última parada (sus
   assert.deepEqual([...fb.llamadas.dirs].sort(), ["Buenos Aires", "Jujuy"]);
 });
 
+test("geo: paradas legacy con lat/lng y SIN geo_obtenido_at → no se usan como A/B (fallback de geocodificación)", async () => {
+  // Coordenadas legacy en Mendoza: si se usaran como B, los km restantes no serían ~300.
+  const legacy = [
+    { carga_id: 190, orden: 0, direccion: "Buenos Aires", lat: CIUDAD.Mendoza.lat, lng: CIUDAD.Mendoza.lng, geo_obtenido_at: null },
+    { carga_id: 190, orden: 1, direccion: "Jujuy", lat: CIUDAD.Mendoza.lat, lng: CIUDAD.Mendoza.lng, geo_obtenido_at: null },
+  ];
+  const { d, llamadas, escrituras } = deps(tablasGeo({ viaje: viajeConGeo(geo(null, null)), paradas: legacy }));
+  const r = await consultarGeo(d, aKmDeJujuy(300));
+  assert.deepEqual([...llamadas.dirs].sort(), ["Buenos Aires", "Jujuy"]);
+  assert.equal(r.body.motivo, "lejos_del_destino");
+  assert.ok(Math.abs(r.body.km_restantes_hasta_destino - 300) <= 2);
+  assert.deepEqual(escrituras, [], "tampoco se completa ni se corrige la fecha");
+});
+
 test("geo: cargas.lat/lng (GPS del chofer) JAMÁS se usan como A, B, C ni D", async () => {
   // Viaje sin geo con GPS guardado en Mendoza; candidata con lat/lng sobre Tucumán pero texto "Mendoza".
   const viaje = viajeConGeo({ ...geo(null, null), lat: CIUDAD.Mendoza.lat, lng: CIUDAD.Mendoza.lng });
