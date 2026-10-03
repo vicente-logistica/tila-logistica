@@ -9,6 +9,10 @@ import ChatToast from "../components/ChatToast";
 import ConfiguracionComisiones from "../components/ConfiguracionComisiones";
 import ConfiguracionRadio from "../components/ConfiguracionRadio";
 import { markChatMessagesAsKnown, notifyChatMessage } from "../utils/chatSound";
+import { iniciarPollingVisible } from "../lib/pollingVisible";
+
+const INTERVALO_POLLING_ADMIN_MS = 30 * 1000;
+const INACTIVIDAD_POLLING_ADMIN_MS = 10 * 60 * 1000;
 
 const ESTADOS_VIAJE = [
   "Chofer asignado", "En camino", "Carga retirada",
@@ -1204,6 +1208,9 @@ export default function AdminPage() {
   const alertaAdminTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // true después de la primera carga exitosa del resumen — evita sonar por mensajes ya existentes
   const resumenCargadoRef = useRef(false);
+  // false tras el desmontaje: ninguna respuesta que llegue tarde (polling, Realtime o una
+  // acción) actualiza estado. Lo maneja el efecto del canal principal.
+  const montadoRef = useRef(true);
   // Silencio por sector — refs para que el callback Realtime lea siempre el valor actual
   const [silenciarChatOperativo, setSilenciarChatOperativo]       = useState(false);
   const [silenciarSoporteCliente, setSilenciarSoporteCliente]     = useState(false);
@@ -1236,6 +1243,7 @@ export default function AdminPage() {
         return;
       }
       const { resumen, mensajes } = await res.json();
+      if (!montadoRef.current) return;
       if (resumen) setMensajesResumen(resumen);
 
       const listaMensajes = (mensajes ?? []) as {
@@ -1292,12 +1300,14 @@ export default function AdminPage() {
     const res = await fetch("/api/admin/cargas", { headers: { "x-user-id": String(adminId) } });
     if (!res.ok) return;
     const { cargas: cargasData = [] } = await res.json() as { cargas: any[] };
+    if (!montadoRef.current) return;
     setCargas(cargasData);
 
     if (cargasData.length > 0) {
       // Cargar paradas
       const ids = cargasData.map((c: any) => c.id);
       const { data: dataParadas } = await supabase.from("paradas_viaje").select("*").in("carga_id", ids).order("orden", { ascending: true });
+      if (!montadoRef.current) return;
       if (dataParadas) {
         const agrupadas: Record<string, any[]> = {};
         dataParadas.forEach((p: any) => {
@@ -1320,6 +1330,7 @@ export default function AdminPage() {
           .from("usuarios")
           .select("id, nombre, bateria_nivel, bateria_cargando, ultima_senal_at")
           .in("id", choferIds);
+        if (!montadoRef.current) return;
 
         if (errorChoferes) console.warn("Error cargando choferes:", errorChoferes);
 
@@ -1350,6 +1361,7 @@ export default function AdminPage() {
       });
       if (!res.ok) { console.error("Error cargando usuarios:", res.status); return; }
       const { usuarios: data } = await res.json();
+      if (!montadoRef.current) return;
       const todos = data || [];
       setTodosUsuarios(todos);
       setChoferes(todos.filter((u: any) => u.rol === "chofer" && !u.eliminado));
@@ -1366,13 +1378,14 @@ export default function AdminPage() {
 
   // ── Canal principal: cargas/usuarios/paradas/resumen mensajes ───────────────
   useEffect(() => {
+    montadoRef.current = true;
     const iniciar = async () => {
       setCargando(true);
       try { await Promise.all([cargarViajes(), cargarUsuarios(), cargarResumenMensajes()]); }
       catch (e) { console.error(e); }
-      finally { setCargando(false); }
+      finally { if (montadoRef.current) setCargando(false); }
     };
-    iniciar();
+    const cargaInicial = iniciar();
 
     const channel = supabase.channel("admin-realtime")
       .on("postgres_changes", { event: "*", schema: "public", table: "cargas" },        () => cargarViajes())
@@ -1381,10 +1394,22 @@ export default function AdminPage() {
       .on("postgres_changes", { event: "*", schema: "public", table: "mensajes_viaje" }, () => cargarResumenMensajes())
       .subscribe();
 
-    const intervalo = setInterval(() => {
-      cargarViajes(); cargarUsuarios(); cargarResumenMensajes();
-    }, 5000);
-    return () => { supabase.removeChannel(channel); clearInterval(intervalo); };
+    // Polling de respaldo: cada 30 s sólo con la pestaña visible y el admin activo
+    // (antes: cada 5 s siempre, también en segundo plano). Ver app/lib/pollingVisible.ts.
+    const polling = iniciarPollingVisible({
+      tanda: () => Promise.all([cargarViajes(), cargarUsuarios(), cargarResumenMensajes()]),
+      intervaloMs: INTERVALO_POLLING_ADMIN_MS,
+      inactividadMs: INACTIVIDAD_POLLING_ADMIN_MS,
+      doc: document,
+      win: window,
+      enCursoInicial: cargaInicial,
+    });
+    return () => {
+      montadoRef.current = false;
+      supabase.removeChannel(channel);
+      polling.detener();
+      if (alertaAdminTimerRef.current) clearTimeout(alertaAdminTimerRef.current);
+    };
   }, [cargarViajes, cargarUsuarios, cargarResumenMensajes]);
 
   const pendientes = useMemo(() => cargas.filter((c) => !c.estado || c.estado.toLowerCase() === "pendiente"), [cargas]);
