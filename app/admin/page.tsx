@@ -7,7 +7,7 @@ import { useProtegerRuta } from "../hooks/useProtegerRuta";
 import ChatAsistencia from "../components/ChatAsistencia";
 import ChatToast from "../components/ChatToast";
 import ConfiguracionComisiones from "../components/ConfiguracionComisiones";
-import ConfiguracionRadio from "../components/ConfiguracionRadio";
+import ConfiguracionOperativa from "../components/ConfiguracionOperativa";
 import { markChatMessagesAsKnown, notifyChatMessage } from "../utils/chatSound";
 import { iniciarPollingVisible } from "../lib/pollingVisible";
 
@@ -1657,12 +1657,12 @@ export default function AdminPage() {
       </section>
       )}
 
-      {/* Radio de matching — bloque independiente; el servidor verifica rol admin en GET y PUT */}
+      {/* Configuración operativa — bloque independiente de comisiones; el servidor verifica rol admin en GET y PUT */}
       {moduloActivo === "comisiones" && (
       <section className="bg-zinc-900 border border-blue-400 rounded-3xl p-6 mb-8">
-        <h2 className="text-3xl font-black text-blue-400 mb-2">Radio de matching</h2>
-        <p className="text-zinc-500 text-sm mb-5">Hasta qué distancia del punto de retiro se le ofrecen cargas a un chofer.</p>
-        <ConfiguracionRadio adminId={usuarioActual?.id} />
+        <h2 className="text-3xl font-black text-blue-400 mb-2">Configuración operativa</h2>
+        <p className="text-zinc-500 text-sm mb-5">Radio de cargas cercanas y Vuelta a Casa.</p>
+        <ConfiguracionOperativa adminId={usuarioActual?.id} />
       </section>
       )}
 
