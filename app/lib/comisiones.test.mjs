@@ -163,10 +163,14 @@ test("panel: sólo se aceptan cambios del admin; autocompletado o cambios sin in
 
 test("cotizar y publicar usan la MISMA configuración, la MISMA función y los MISMOS campos", () => {
   const cotizarSrc  = readFileSync(join(RAIZ_APP, "api/tarifas/cotizar/route.ts"), "utf8");
-  const publicarSrc = readFileSync(join(RAIZ_APP, "api/cargas/publicar/route.ts"), "utf8");
+  // La lógica de publicar vive en lib/publicarCargaServidor.ts (el handler sólo la conecta).
+  const publicarSrc = readFileSync(join(RAIZ_APP, "lib/publicarCargaServidor.ts"), "utf8");
+  assert.match(cotizarSrc, /leerConfiguracionComisiones\(supabaseAdmin\)/, "cotizar: lee la configuración vigente");
+  assert.match(publicarSrc, /leerConfiguracionComisiones\(db\)/, "publicar: lee la configuración vigente");
+  assert.match(cotizarSrc, /cotizarCarga\(\s*\{ kmEstimados: kmNum, tipoVehiculo: tipo_vehiculo, tipoCarga: tipo_carga, paradasIntermedias: paradas_intermedias \},\s*comisiones,?\s*\)/, "cotizar: misma llamada");
+  // publicar cotiza con los km de la RUTA DEL SERVIDOR (y las paradas ya filtradas), no con los del cliente.
+  assert.match(publicarSrc, /cotizarCarga\(\s*\{ kmEstimados: kmServidor, tipoVehiculo: tipo_vehiculo, tipoCarga: tipo_carga, paradasIntermedias: paradas \},\s*comisiones,?\s*\)/, "publicar: misma llamada");
   for (const [nombre, src] of [["cotizar", cotizarSrc], ["publicar", publicarSrc]]) {
-    assert.match(src, /leerConfiguracionComisiones\(supabaseAdmin\)/, `${nombre}: lee la configuración vigente`);
-    assert.match(src, /cotizarCarga\(\s*\{ kmEstimados: kmNum, tipoVehiculo: tipo_vehiculo, tipoCarga: tipo_carga, paradasIntermedias: paradas_intermedias \},\s*comisiones,?\s*\)/, `${nombre}: misma llamada`);
     assert.match(src, /camposEconomicosCarga\(tarifa\)/, `${nombre}: mismos campos económicos`);
     assert.doesNotMatch(src, /calcularTarifaTILA|7\.5|0\.075/, `${nombre}: sin cálculo ni porcentaje propio`);
   }
@@ -201,8 +205,9 @@ test("ningún archivo de la app escribe los montos de una carga salvo publicar (
     .filter((f) => escritura.test(readFileSync(f, "utf8")))
     .map((f) => f.slice(RAIZ_APP.length + 1).replace(/\\/g, "/"))
     .sort();
-  // cotizacion.ts sólo ARMA el objeto (camposEconomicosCarga); el único INSERT es publicar.
-  assert.deepEqual(escriben, ["api/cargas/publicar/route.ts", "lib/cotizacion.ts"]);
+  // cotizacion.ts sólo ARMA el objeto (camposEconomicosCarga); el único INSERT es publicar
+  // (lib/publicarCargaServidor.ts, que usa /api/cargas/publicar).
+  assert.deepEqual(escriben, ["lib/cotizacion.ts", "lib/publicarCargaServidor.ts"]);
 });
 
 // ═══════════════ Base falsa de configuracion_plataforma + usuarios ═══════════════
